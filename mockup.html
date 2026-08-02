@@ -1,0 +1,537 @@
+<title>Finanças da Casa — Mockup</title>
+<style>
+  :root{
+    color-scheme: light;
+    --page:#F3EDE1; --surface:#FFFFFF; --ink:#14110F; --ink-2:#5A544B; --muted:#8A8378;
+    --line:#E0D6C4; --accent:#8E2F44; --accent-soft:#FAF6EE; --accent-ink:#FFFFFF;
+    --s1:#4F1626; --s2:#8E2F44; --s3:#C67C8D;
+    --good:#14532D; --crit:#9B1C1C; --warn-bg:#FAF6EE;
+    --grid:#EAE3D6; --ring:rgba(11,11,11,.10);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:where(:not([data-theme="light"])){
+      color-scheme: dark;
+      --page:#17120F; --surface:#221A17; --ink:#F5EFE6; --ink-2:#CBBFB2; --muted:#8A8378;
+      --line:#3A2C27; --accent:#C67C8D; --accent-soft:#2E2019; --accent-ink:#1A1110;
+      --s1:#E3BCC4; --s2:#C67C8D; --s3:#98404F;
+      --good:#5FBF7F; --crit:#E58A8A; --warn-bg:#2E2019;
+      --grid:#3A2C27; --ring:rgba(255,255,255,.10);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --page:#17120F; --surface:#221A17; --ink:#F5EFE6; --ink-2:#CBBFB2; --muted:#8A8378;
+    --line:#3A2C27; --accent:#C67C8D; --accent-soft:#2E2019; --accent-ink:#1A1110;
+    --s1:#E3BCC4; --s2:#C67C8D; --s3:#98404F;
+    --good:#5FBF7F; --crit:#E58A8A; --warn-bg:#2E2019;
+    --grid:#3A2C27; --ring:rgba(255,255,255,.10);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);
+       font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .app{display:flex;min-height:100vh}
+  /* ---------- sidebar ---------- */
+  aside{width:232px;flex:none;background:var(--surface);border-right:1px solid var(--line);
+        padding:22px 14px;display:flex;flex-direction:column;gap:2px;position:sticky;top:0;height:100vh}
+  .brand{font-family:Charter,Georgia,serif;font-size:20px;font-weight:700;letter-spacing:.2px;
+         padding:0 10px 4px}
+  .brand small{display:block;font-family:system-ui,sans-serif;font-size:11px;font-weight:500;
+         color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin-top:2px}
+  .mock{margin:6px 10px 14px;font-size:11px;color:var(--ink-2);background:var(--warn-bg);
+        border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+  nav button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:0;
+      background:none;color:var(--ink-2);font:500 14px/1 system-ui,sans-serif;
+      padding:10px 10px;border-radius:8px;cursor:pointer}
+  nav button:hover{background:var(--accent-soft)}
+  nav button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .who{margin-top:auto;padding:10px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-2)}
+  .who b{color:var(--ink)}
+  /* ---------- main ---------- */
+  main{flex:1;min-width:0;padding:30px 34px 60px;max-width:1120px}
+  h1{font-family:Charter,Georgia,serif;font-size:27px;margin:0 0 2px;text-wrap:balance}
+  .sub{color:var(--ink-2);margin:0 0 22px;font-size:14px}
+  section{display:none}
+  section.on{display:block}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:18px}
+  .card h2{font-size:13px;font-weight:600;letter-spacing:.7px;text-transform:uppercase;
+           color:var(--ink-2);margin:0 0 14px}
+  .row{display:flex;gap:16px;flex-wrap:wrap}
+  .row>.card{flex:1 1 300px;margin-bottom:0}
+  .row{margin-bottom:18px}
+  /* stat tiles */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:18px}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .k{font-size:12px;color:var(--ink-2);letter-spacing:.4px}
+  .tile .v{font-size:25px;font-weight:650;margin-top:2px}
+  .tile .d{font-size:12px;margin-top:2px;color:var(--ink-2)}
+  .up{color:var(--good);font-weight:600} .down{color:var(--crit);font-weight:600}
+  /* pills / chips */
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:3px;
+        letter-spacing:.02em}
+  .p-andre{background:var(--s1);color:#fff}
+  .p-ro{background:var(--s2);color:#fff}
+  .p-casal{background:var(--accent);color:var(--accent-ink)}
+  .p-auto{background:var(--accent-soft);color:var(--ink-2);border:1px solid var(--line)}
+  .p-pend{background:var(--warn-bg);color:var(--ink-2);border:1px solid var(--line)}
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);
+     font-weight:600;text-align:left;padding:7px 10px;border-bottom:1px solid var(--line)}
+  td{padding:8px 10px;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tot td{font-weight:700;border-top:2px solid var(--ink);background:none}
+  .scroll{overflow-x:auto}
+  /* category bars */
+  .cb{display:grid;grid-template-columns:170px 1fr 84px;gap:10px;align-items:center;padding:5px 0}
+  .cb .lbl{font-size:13px;color:var(--ink)}
+  .cb .lbl small{display:block;font-size:11px}
+  .cb small.ok{color:var(--muted)} .cb small.ov{color:var(--crit);font-weight:600}
+  .track{position:relative;height:14px;background:none}
+  .bar{position:absolute;left:0;top:2px;height:10px;border-radius:0 4px 4px 0;background:var(--s1)}
+  .meta-tick{position:absolute;top:-2px;width:2px;height:18px;background:var(--ink);opacity:.65}
+  .cb .val{font-size:13px;font-variant-numeric:tabular-nums;text-align:right;color:var(--ink)}
+  .axis-note{font-size:11px;color:var(--muted);margin-top:8px}
+  /* grouped columns */
+  .legend{display:flex;gap:16px;font-size:12.5px;color:var(--ink-2);margin-bottom:10px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}
+  .cols{display:flex;align-items:flex-end;gap:0;height:236px;border-bottom:1px solid var(--grid);position:relative}
+  .grp{flex:1;display:flex;align-items:flex-end;justify-content:center;gap:5px;height:100%;position:relative}
+  .grp:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+  .col{width:22px;border-radius:4px 4px 0 0}
+  .c-rec{background:var(--s1)} .c-des{background:var(--s2)}
+  .xlab{display:flex;margin-top:6px}
+  .xlab span{flex:1;text-align:center;font-size:12px;color:var(--muted)}
+  .grp .tip{display:none;position:absolute;bottom:calc(100% - 30px);left:50%;transform:translateX(-50%);
+      background:var(--surface);border:1px solid var(--line);box-shadow:0 4px 14px var(--ring);
+      border-radius:8px;padding:7px 10px;font-size:12px;white-space:nowrap;z-index:5;color:var(--ink)}
+  .grp:hover .tip{display:block}
+  .tip b{font-variant-numeric:tabular-nums}
+  /* forms */
+  select,input[type=text],input[type=number]{background:var(--page);color:var(--ink);
+      border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:13.5px system-ui,sans-serif}
+  select:focus-visible,input:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;
+       padding:9px 18px;font:600 14px system-ui,sans-serif;cursor:pointer}
+  .btn.ghost{background:none;color:var(--accent);border:1px solid var(--accent)}
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:34px;text-align:center;color:var(--ink-2)}
+  .drop b{color:var(--ink)}
+  /* budget rows */
+  .brow{display:grid;grid-template-columns:190px 70px 110px 1fr 110px;gap:12px;align-items:center;
+        padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .brow:last-child{border-bottom:0}
+  .brow input{width:62px;text-align:right}
+  .ptrack{height:8px;background:var(--line);border-radius:99px;overflow:hidden}
+  .pfill{height:100%;border-radius:99px;background:var(--accent)}
+  .pfill.ov{background:var(--crit)}
+  .pct-note{font-size:12px;color:var(--ink-2);text-align:right;font-variant-numeric:tabular-nums}
+  /* plano de contas */
+  .pc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .pc{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .pc h3{margin:0 0 8px;font-size:14.5px}
+  .pc .subs{display:flex;flex-wrap:wrap;gap:6px}
+  .pc .subs span{font-size:12px;border:1px solid var(--line);background:var(--page);
+                 border-radius:99px;padding:3px 10px;color:var(--ink-2)}
+  .ia p{max-width:66ch}
+  .ia .hl{background:var(--accent-soft);border-radius:4px;padding:0 3px}
+  footer{margin-top:34px;font-size:12px;color:var(--muted)}
+  @media (max-width:760px){
+    .app{flex-direction:column} aside{width:100%;height:auto;position:static;flex-direction:row;
+      flex-wrap:wrap;align-items:center} .who{margin:0;border:0} main{padding:20px 16px}
+    .cb{grid-template-columns:130px 1fr 78px}
+    .brow{grid-template-columns:1fr 60px 90px;grid-auto-rows:auto}
+    .brow .ptrack,.brow .pct-note{grid-column:1/-1}
+  }
+  @media (prefers-reduced-motion: no-preference){ nav button,.btn{transition:background .15s} }
+</style>
+
+<div class="app">
+<aside>
+  <div class="brand">Finanças da Casa<small>André &amp; Rô</small></div>
+  <div class="mock">MOCKUP para aprovação — todos os dados são fictícios</div>
+  <nav id="nav">
+    <button class="on" data-t="dash">📊 Visão Geral</button>
+    <button data-t="up">📥 Upload de Extratos</button>
+    <button data-t="cls">🏷️ Classificação <span class="pill p-pend">7</span></button>
+    <button data-t="rec">💼 Receitas</button>
+    <button data-t="orc">🎯 Orçamento &amp; Metas</button>
+    <button data-t="ia">✨ Análise IA</button>
+    <button data-t="pc">📚 Plano de Contas</button>
+  </nav>
+  <div class="who">Logado como: <b>André</b> · <a href="#" style="color:var(--accent)">sair</a><br>
+    <span style="font-size:11px;color:var(--muted)">Acesso restrito: só André e Rô, com senha individual</span></div>
+</aside>
+
+<main>
+
+<!-- ================= DASHBOARD ================= -->
+<section id="dash" class="on">
+  <h1>Visão Geral — Julho 2026</h1>
+  <p class="sub">Mês fechado em 31/07 · 6 contas conectadas · última importação há 2 dias</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Receitas do mês</div><div class="v">R$ 46.500</div>
+      <div class="d"><span class="up">▲ 1,3%</span> vs junho</div></div>
+    <div class="tile"><div class="k">Despesas do mês</div><div class="v">R$ 33.400</div>
+      <div class="d"><span class="up">▼ 4,8%</span> vs junho</div></div>
+    <div class="tile"><div class="k">Poupança do mês</div><div class="v">R$ 9.000</div>
+      <div class="d">93,8% da meta (R$ 9.600)</div></div>
+    <div class="tile"><div class="k">Orçamento usado</div><div class="v">87%</div>
+      <div class="d">2 categorias acima da meta</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Gasto por categoria em julho — barra = realizado · traço preto = meta</h2>
+    <div class="cb"><div class="lbl">Moradia<small class="ok">dentro da meta</small></div>
+      <div class="track"><div class="bar" style="width:89%"></div><div class="meta-tick" style="left:96%"></div></div>
+      <div class="val num">8.900</div></div>
+    <div class="cb"><div class="lbl">Alimentação<small class="ov">▲ 8% acima da meta</small></div>
+      <div class="track"><div class="bar" style="width:62.4%"></div><div class="meta-tick" style="left:57.6%"></div></div>
+      <div class="val num">6.240</div></div>
+    <div class="cb"><div class="lbl">Lazer &amp; Viagens<small class="ov">▲ 26% acima da meta</small></div>
+      <div class="track"><div class="bar" style="width:48.5%"></div><div class="meta-tick" style="left:38.4%"></div></div>
+      <div class="val num">4.850</div></div>
+    <div class="cb"><div class="lbl">Saúde<small class="ok">dentro da meta</small></div>
+      <div class="track"><div class="bar" style="width:34.8%"></div><div class="meta-tick" style="left:38.4%"></div></div>
+      <div class="val num">3.480</div></div>
+    <div class="cb"><div class="lbl">Transporte<small class="ok">dentro da meta</small></div>
+      <div class="track"><div class="bar" style="width:23.1%"></div><div class="meta-tick" style="left:28.8%"></div></div>
+      <div class="val num">2.310</div></div>
+    <div class="cb"><div class="lbl">Financeiras &amp; Impostos<small class="ok">dentro da meta</small></div>
+      <div class="track"><div class="bar" style="width:21.4%"></div><div class="meta-tick" style="left:24%"></div></div>
+      <div class="val num">2.140</div></div>
+    <div class="cb"><div class="lbl">Vestuário &amp; Cuidados<small class="ok">dentro da meta</small></div>
+      <div class="track"><div class="bar" style="width:19.8%"></div><div class="meta-tick" style="left:24%"></div></div>
+      <div class="val num">1.980</div></div>
+    <div class="cb"><div class="lbl">Educação<small class="ok">dentro da meta</small></div>
+      <div class="track"><div class="bar" style="width:15%"></div><div class="meta-tick" style="left:19.2%"></div></div>
+      <div class="val num">1.500</div></div>
+    <div class="cb"><div class="lbl">Demais categorias<small class="ok">4 categorias</small></div>
+      <div class="track"><div class="bar" style="width:20%"></div></div>
+      <div class="val num">2.000</div></div>
+    <div class="axis-note">Valores em R$ · passe o mouse em qualquer lançamento nas tabelas para ver detalhes</div>
+  </div>
+
+  <div class="card">
+    <h2>Evolução mensal 2026 — Receitas × Despesas</h2>
+    <div class="legend"><span><i style="background:var(--s1)"></i>Receitas</span>
+      <span><i style="background:var(--s2)"></i>Despesas</span></div>
+    <div class="cols">
+      <div class="grp"><div class="tip">Fev · Rec <b>44,2k</b> · Desp <b>31,5k</b></div><div class="col c-rec" style="height:177px"></div><div class="col c-des" style="height:126px"></div></div>
+      <div class="grp"><div class="tip">Mar · Rec <b>45,0k</b> · Desp <b>34,2k</b></div><div class="col c-rec" style="height:180px"></div><div class="col c-des" style="height:137px"></div></div>
+      <div class="grp"><div class="tip">Abr · Rec <b>52,8k</b> · Desp <b>36,9k</b></div><div class="col c-rec" style="height:211px"></div><div class="col c-des" style="height:148px"></div></div>
+      <div class="grp"><div class="tip">Mai · Rec <b>44,6k</b> · Desp <b>32,8k</b></div><div class="col c-rec" style="height:178px"></div><div class="col c-des" style="height:131px"></div></div>
+      <div class="grp"><div class="tip">Jun · Rec <b>45,9k</b> · Desp <b>35,1k</b></div><div class="col c-rec" style="height:184px"></div><div class="col c-des" style="height:140px"></div></div>
+      <div class="grp"><div class="tip">Jul · Rec <b>46,5k</b> · Desp <b>33,4k</b></div><div class="col c-rec" style="height:186px"></div><div class="col c-des" style="height:134px"></div></div>
+    </div>
+    <div class="xlab"><span>Fev</span><span>Mar</span><span>Abr</span><span>Mai</span><span>Jun</span><span>Jul</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Tabela mês a mês (R$ mil) · acumulado 2026 · comparativo 2025</h2>
+    <div class="scroll"><table>
+      <tr><th>Categoria</th><th class="num">Fev</th><th class="num">Mar</th><th class="num">Abr</th>
+          <th class="num">Mai</th><th class="num">Jun</th><th class="num">Jul</th>
+          <th class="num">Acum. 2026</th><th class="num">Média/mês</th><th class="num">Total 2025</th></tr>
+      <tr><td>Moradia</td><td class="num">8,7</td><td class="num">8,8</td><td class="num">9,1</td><td class="num">8,8</td><td class="num">8,9</td><td class="num">8,9</td><td class="num">53,2</td><td class="num">8,9</td><td class="num">102,4</td></tr>
+      <tr><td>Alimentação</td><td class="num">5,4</td><td class="num">5,9</td><td class="num">6,1</td><td class="num">5,7</td><td class="num">6,0</td><td class="num">6,2</td><td class="num">35,3</td><td class="num">5,9</td><td class="num">64,8</td></tr>
+      <tr><td>Lazer &amp; Viagens</td><td class="num">2,1</td><td class="num">3,4</td><td class="num">6,8</td><td class="num">2,9</td><td class="num">4,2</td><td class="num">4,9</td><td class="num">24,3</td><td class="num">4,1</td><td class="num">41,7</td></tr>
+      <tr><td>Saúde</td><td class="num">3,3</td><td class="num">3,4</td><td class="num">3,6</td><td class="num">3,5</td><td class="num">3,5</td><td class="num">3,5</td><td class="num">20,8</td><td class="num">3,5</td><td class="num">38,9</td></tr>
+      <tr><td>Transporte</td><td class="num">2,4</td><td class="num">2,2</td><td class="num">2,6</td><td class="num">2,3</td><td class="num">2,5</td><td class="num">2,3</td><td class="num">14,3</td><td class="num">2,4</td><td class="num">27,2</td></tr>
+      <tr><td>Demais categorias</td><td class="num">9,6</td><td class="num">10,5</td><td class="num">8,7</td><td class="num">9,6</td><td class="num">10,0</td><td class="num">7,6</td><td class="num">56,0</td><td class="num">9,3</td><td class="num">108,1</td></tr>
+      <tr class="tot"><td>Total de despesas</td><td class="num">31,5</td><td class="num">34,2</td><td class="num">36,9</td><td class="num">32,8</td><td class="num">35,1</td><td class="num">33,4</td><td class="num">203,9</td><td class="num">34,0</td><td class="num">383,1</td></tr>
+      <tr class="tot"><td>Poupança realizada</td><td class="num">9,0</td><td class="num">8,5</td><td class="num">12,0</td><td class="num">9,0</td><td class="num">8,0</td><td class="num">9,0</td><td class="num">55,5</td><td class="num">9,3</td><td class="num">96,0</td></tr>
+    </table></div>
+    <div class="axis-note">Na versão final: todas as 13 categorias, expansão para subcategorias, filtro por pessoa (André / Rô / Casal) e por conta.</div>
+  </div>
+</section>
+
+<!-- ================= UPLOAD ================= -->
+<section id="up">
+  <h1>Upload de Extratos</h1>
+  <p class="sub">Envie a fatura do cartão ou o extrato da conta — PDF, CSV ou Excel · carga inicial pela planilha da Rô</p>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:14px">
+      <div><label style="font-size:12.5px;color:var(--ink-2)">Conta / cartão<br>
+        <select><option>Visa XP (André)</option><option>BTG Mastercard (André)</option>
+        <option>Nubank Mastercard</option><option>Bradesco C/C (André)</option>
+        <option>Itaú C/C (Rô)</option><option>Conjunta (Rô)</option></select></label></div>
+      <div><label style="font-size:12.5px;color:var(--ink-2)">Competência<br>
+        <select><option>Julho 2026</option><option>Junho 2026</option></select></label></div>
+    </div>
+    <div class="drop"><b>Arraste o arquivo aqui</b> ou clique para escolher<br>
+      <span style="font-size:12.5px">PDF · CSV · XLSX — o sistema detecta o layout de cada banco</span></div>
+    <div style="margin-top:14px"><button class="btn">Processar arquivo</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Duplicidades aguardando confirmação — nada é excluído sem o seu OK</h2>
+    <div class="scroll"><table>
+      <tr><th>Tipo</th><th>Lançamento</th><th>Conta</th><th class="num">Valor</th><th>Origens</th><th></th></tr>
+      <tr><td><span class="pill p-pend">exata</span></td><td>21/07 · SUPERM PAO DE ACUCAR</td><td>Visa XP</td>
+          <td class="num">312,40</td><td>fatura_jul.pdf × fatura_jul(1).pdf</td>
+          <td style="white-space:nowrap"><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Excluir duplicado</button>
+              <button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Manter os dois</button></td></tr>
+      <tr><td><span class="pill p-pend">exata</span></td><td>19/07 · POSTO IPIRANGA 0442</td><td>Visa XP</td>
+          <td class="num">280,00</td><td>fatura_jul.pdf × fatura_jul(1).pdf</td>
+          <td style="white-space:nowrap"><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Excluir duplicado</button>
+              <button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Manter os dois</button></td></tr>
+      <tr><td><span class="pill p-pend">provável</span></td><td>15/07 · CAFE DO PONTO (2×, mesmo dia)</td><td>Nubank</td>
+          <td class="num">18,90</td><td>mesmo arquivo</td>
+          <td style="white-space:nowrap"><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Excluir duplicado</button>
+              <button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Manter os dois</button></td></tr>
+    </table></div>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn">Confirmar exclusão das duplicatas exatas (2)</button>
+      <span class="axis-note" style="margin:0">Duplicata exata = mesma conta, data, valor e descrição.
+      "Provável" nunca é excluída automaticamente — pode ser compra legítima repetida.</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Crítica: planilha da Rô × extratos importados</h2>
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="k">Conferidos</div><div class="v">1.412</div><div class="d">planilha = extrato ✔</div></div>
+      <div class="tile"><div class="k">Faltantes na planilha</div><div class="v">38</div><div class="d">entraram pelo extrato, já classificados</div></div>
+      <div class="tile"><div class="k">Só na planilha</div><div class="v">11</div><div class="d">sem extrato — dinheiro? revisar</div></div>
+      <div class="tile"><div class="k">Divergências</div><div class="v">5</div><div class="d">valor ou data diferente — decidir</div></div>
+    </div>
+    <div class="axis-note">A planilha é a carga inicial do histórico. Quando o extrato do mesmo período entra,
+    o sistema confronta os dois: o lançamento do extrato prevalece e herda a categoria que a Rô já tinha dado.
+    "Só na planilha" e "divergências" ficam numa fila de revisão como esta acima.</div>
+  </div>
+
+  <div class="card">
+    <h2>Gerenciar contas e cartões</h2>
+    <div class="scroll"><table>
+      <tr><th>Nome</th><th>Tipo</th><th>Titular</th><th>Instituição</th><th>Status</th><th></th></tr>
+      <tr><td>Visa XP</td><td>Cartão de crédito</td><td><span class="pill p-andre">André</span></td><td>XP</td>
+          <td><span class="pill p-auto">ativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Desativar</button></td></tr>
+      <tr><td>BTG Mastercard</td><td>Cartão de crédito</td><td><span class="pill p-andre">André</span></td><td>BTG</td>
+          <td><span class="pill p-auto">ativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Desativar</button></td></tr>
+      <tr><td>Nubank Mastercard</td><td>Cartão de crédito</td><td><span class="pill p-casal">Casal</span></td><td>Nubank</td>
+          <td><span class="pill p-auto">ativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Desativar</button></td></tr>
+      <tr><td>Bradesco C/C</td><td>Conta corrente</td><td><span class="pill p-andre">André</span></td><td>Bradesco</td>
+          <td><span class="pill p-auto">ativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Desativar</button></td></tr>
+      <tr><td>Itaú C/C</td><td>Conta corrente</td><td><span class="pill p-ro">Rô</span></td><td>Itaú</td>
+          <td><span class="pill p-auto">ativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Desativar</button></td></tr>
+      <tr><td>Conjunta C/C</td><td>Conta corrente</td><td><span class="pill p-casal">Casal</span></td><td>Itaú</td>
+          <td><span class="pill p-auto">ativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Desativar</button></td></tr>
+      <tr><td>Cartão Santander (antigo)</td><td>Cartão de crédito</td><td><span class="pill p-ro">Rô</span></td><td>Santander</td>
+          <td><span class="pill p-pend">inativa</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Reativar</button></td></tr>
+    </table></div>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn">+ Incluir conta ou cartão</button>
+      <span class="axis-note" style="margin:0">Conta desativada some do upload, mas o histórico continua nos relatórios.
+      Instituição nova sem leitor próprio usa o leitor genérico de CSV/XLSX.</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Últimas importações</h2>
+    <div class="scroll"><table>
+      <tr><th>Arquivo</th><th>Conta</th><th>Enviado por</th><th class="num">Lançamentos</th>
+          <th class="num">Auto</th><th class="num">Pendentes</th><th class="num">Duplicados ignorados</th></tr>
+      <tr><td>fatura_visa_jul26.pdf</td><td>Visa XP</td><td><span class="pill p-andre">André</span></td>
+          <td class="num">84</td><td class="num">79</td><td class="num">3</td><td class="num">2</td></tr>
+      <tr><td>nubank-2026-07.csv</td><td>Nubank</td><td><span class="pill p-ro">Rô</span></td>
+          <td class="num">51</td><td class="num">49</td><td class="num">2</td><td class="num">0</td></tr>
+      <tr><td>Extrato Conta Corrente.xlsx</td><td>Itaú C/C</td><td><span class="pill p-ro">Rô</span></td>
+          <td class="num">37</td><td class="num">33</td><td class="num">2</td><td class="num">2</td></tr>
+      <tr><td>extrato_bradesco_jul.pdf</td><td>Bradesco C/C</td><td><span class="pill p-andre">André</span></td>
+          <td class="num">29</td><td class="num">29</td><td class="num">0</td><td class="num">0</td></tr>
+    </table></div>
+  </div>
+</section>
+
+<!-- ================= CLASSIFICAÇÃO ================= -->
+<section id="cls">
+  <h1>Classificação Manual</h1>
+  <p class="sub">7 lançamentos aguardando — e busque aqui qualquer lançamento para reclassificar</p>
+
+  <div class="card">
+    <h2>Fila de pendências</h2>
+    <div class="scroll"><table>
+      <tr><th>Data</th><th>Descrição no extrato</th><th>Conta</th><th class="num">Valor</th>
+          <th>Categoria</th><th>Subcategoria</th><th>Pessoa</th></tr>
+      <tr><td>28/07</td><td>PIX TRANSF JOSE M S*</td><td>Conjunta</td><td class="num">450,00</td>
+        <td><select><option>Selecionar…</option><option>Moradia</option><option>Outros</option></select></td>
+        <td><select><option>—</option></select></td>
+        <td><select><option>Casal</option><option>André</option><option>Rô</option></select></td></tr>
+      <tr><td>26/07</td><td>MERCPAGO*LOJADASROSAS</td><td>Nubank</td><td class="num">189,90</td>
+        <td><select><option>Sugestão IA: Presentes</option><option>Vestuário</option></select></td>
+        <td><select><option>Presentes</option></select></td>
+        <td><select><option>Rô</option></select></td></tr>
+      <tr><td>25/07</td><td>PAG*ClinicaVertex</td><td>Visa XP</td><td class="num">620,00</td>
+        <td><select><option>Sugestão IA: Saúde</option></select></td>
+        <td><select><option>Médicos &amp; Dentistas</option><option>Exames</option></select></td>
+        <td><select><option>André</option></select></td></tr>
+      <tr><td>22/07</td><td>EC *SERVICOS 3390</td><td>BTG Master</td><td class="num">96,50</td>
+        <td><select><option>Selecionar…</option></select></td>
+        <td><select><option>—</option></select></td>
+        <td><select><option>André</option></select></td></tr>
+    </table></div>
+    <div style="margin-top:14px;display:flex;gap:10px">
+      <button class="btn">Salvar classificações</button>
+      <button class="btn ghost">Criar regra a partir das correções</button>
+    </div>
+    <div class="axis-note">Toda correção vira memória: na próxima fatura, o mesmo estabelecimento é classificado automaticamente.</div>
+  </div>
+
+  <div class="card">
+    <h2>Reclassificar lançamento já processado</h2>
+    <input type="text" placeholder="Buscar por descrição, valor ou data… ex.: 'iFood junho'" style="width:min(420px,100%)">
+    <div class="scroll" style="margin-top:10px"><table>
+      <tr><th>Data</th><th>Descrição</th><th class="num">Valor</th><th>Classificação atual</th><th>Origem</th><th></th></tr>
+      <tr><td>14/07</td><td>IFOOD *RESTAURANTE</td><td class="num">86,40</td>
+          <td>Alimentação › Fora do Domicílio</td><td><span class="pill p-auto">auto · regra</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Editar</button></td></tr>
+      <tr><td>08/07</td><td>SUPERM PAO DE ACUCAR</td><td class="num">742,18</td>
+          <td>Alimentação › No Domicílio</td><td><span class="pill p-auto">auto · memória</span></td>
+          <td><button class="btn ghost" style="padding:4px 12px;font-size:12.5px">Editar</button></td></tr>
+    </table></div>
+  </div>
+</section>
+
+<!-- ================= RECEITAS ================= -->
+<section id="rec">
+  <h1>Receitas — Julho 2026</h1>
+  <p class="sub">Sempre separadas por pessoa · pró-labore, bônus e prestação de serviços</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Total do casal</div><div class="v">R$ 46.500</div>
+      <div class="d">Acumulado 2026: R$ 277,0 mil</div></div>
+    <div class="tile"><div class="k"><span class="pill p-andre">André</span></div><div class="v">R$ 29.800</div>
+      <div class="d">64% do total</div></div>
+    <div class="tile"><div class="k"><span class="pill p-ro">Rô</span></div><div class="v">R$ 16.700</div>
+      <div class="d">36% do total</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Lançamentos de receita no mês</h2>
+    <div class="scroll"><table>
+      <tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Pessoa</th><th>Conta</th><th class="num">Valor</th></tr>
+      <tr><td>05/07</td><td>Pró-labore Empresa A</td><td>Trabalho › Pró-labore</td>
+          <td><span class="pill p-andre">André</span></td><td>Bradesco</td><td class="num">27.000,00</td></tr>
+      <tr><td>05/07</td><td>Salário Empresa B</td><td>Trabalho › Salário</td>
+          <td><span class="pill p-ro">Rô</span></td><td>Itaú</td><td class="num">14.500,00</td></tr>
+      <tr><td>12/07</td><td>NF Serviço consultoria</td><td>Trabalho › Prest. Serviços</td>
+          <td><span class="pill p-ro">Rô</span></td><td>Itaú</td><td class="num">2.200,00</td></tr>
+      <tr><td>18/07</td><td>Resgate rendimento CDB</td><td>Rendimentos › Aplicações</td>
+          <td><span class="pill p-andre">André</span></td><td>Bradesco</td><td class="num">2.800,00</td></tr>
+      <tr class="tot"><td colspan="5">Total</td><td class="num">46.500,00</td></tr>
+    </table></div>
+    <div class="axis-note">Bônus e PLR aparecem aqui no mês em que caem na conta, com comparativo ano a ano no dashboard.</div>
+  </div>
+</section>
+
+<!-- ================= ORÇAMENTO ================= -->
+<section id="orc">
+  <h1>Orçamento &amp; Metas 2026</h1>
+  <p class="sub">Defina o % da renda para cada categoria — a Poupança entra como meta, não como sobra</p>
+
+  <div class="card">
+    <h2>% da renda mensal por categoria · renda média considerada: R$ 48.000</h2>
+    <div class="brow" style="font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--line)">
+      <span>Categoria</span><span>% meta</span><span>Meta R$</span><span>Realizado em julho</span><span style="text-align:right">Uso da meta</span></div>
+    <div class="brow"><span>Poupança &amp; Investimentos</span><input type="number" value="20"><span class="num">9.600</span>
+      <div class="ptrack"><div class="pfill" style="width:94%"></div></div><span class="pct-note">94% · R$ 9.000</span></div>
+    <div class="brow"><span>Moradia</span><input type="number" value="20"><span class="num">9.600</span>
+      <div class="ptrack"><div class="pfill" style="width:93%"></div></div><span class="pct-note">93% · R$ 8.900</span></div>
+    <div class="brow"><span>Alimentação</span><input type="number" value="12"><span class="num">5.760</span>
+      <div class="ptrack"><div class="pfill ov" style="width:100%"></div></div><span class="pct-note" style="color:var(--crit);font-weight:600">108% · R$ 6.240</span></div>
+    <div class="brow"><span>Lazer &amp; Viagens</span><input type="number" value="8"><span class="num">3.840</span>
+      <div class="ptrack"><div class="pfill ov" style="width:100%"></div></div><span class="pct-note" style="color:var(--crit);font-weight:600">126% · R$ 4.850</span></div>
+    <div class="brow"><span>Saúde</span><input type="number" value="8"><span class="num">3.840</span>
+      <div class="ptrack"><div class="pfill" style="width:91%"></div></div><span class="pct-note">91% · R$ 3.480</span></div>
+    <div class="brow"><span>Transporte</span><input type="number" value="6"><span class="num">2.880</span>
+      <div class="ptrack"><div class="pfill" style="width:80%"></div></div><span class="pct-note">80% · R$ 2.310</span></div>
+    <div class="brow"><span>Demais categorias</span><input type="number" value="26"><span class="num">12.480</span>
+      <div class="ptrack"><div class="pfill" style="width:66%"></div></div><span class="pct-note">66% · R$ 8.260</span></div>
+    <div style="margin-top:14px;display:flex;gap:12px;align-items:center">
+      <button class="btn">Salvar metas</button>
+      <span style="font-size:13px;color:var(--good);font-weight:600">✔ Total alocado: 100% da renda</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ANÁLISE IA ================= -->
+<section id="ia">
+  <h1>Análise IA — Julho 2026</h1>
+  <p class="sub">Gerada pela Claude API sobre os dados classificados do mês · exemplo ilustrativo</p>
+
+  <div class="card ia">
+    <h2>Onde o dinheiro está indo</h2>
+    <p>Julho fechou com <b>R$ 33,4 mil de despesas</b> — 4,8% abaixo de junho e o segundo
+    melhor mês do ano. A poupança de R$ 9,0 mil ficou <span class="hl">a R$ 600 da meta
+    de 20%</span>; teria sido batida sem o estouro em Lazer.</p>
+    <p><b>Alimentação fora do domicílio</b> segue sendo o ponto de atenção: R$ 2,9 mil
+    (46% da categoria), puxada por delivery — <span class="hl">18 pedidos de iFood no
+    mês, média de R$ 82</span>. Reduzir para 10 pedidos liberaria ~R$ 650/mês, quase
+    fechando o gap da poupança sozinho.</p>
+    <p><b>Lazer &amp; Viagens</b> estourou a meta em 26%, mas o acumulado do ano (R$ 24,3 mil)
+    ainda está 3% abaixo do mesmo período de 2025 — o estouro é concentrado, não uma
+    tendência.</p>
+    <p><b>Assinaturas:</b> detectei 2 cobranças recorrentes sem uso aparente nos últimos
+    3 meses (streaming + app de treino), somando R$ 74/mês.</p>
+    <h2 style="margin-top:20px">Sugestões do mês</h2>
+    <p>1. Teto de delivery em R$ 800/mês · 2. Cancelar as 2 assinaturas ociosas ·
+    3. Antecipar a compra das passagens de outubro — em 2025 a compra de última hora
+    custou ~R$ 1,1 mil a mais.</p>
+  </div>
+</section>
+
+<!-- ================= PLANO DE CONTAS ================= -->
+<section id="pc">
+  <h1>Plano de Contas</h1>
+  <p class="sub">Editável pelo app — todo lançamento carrega também a Pessoa: André, Rô ou Casal</p>
+
+  <h2 style="font-size:13px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink-2)">Receitas</h2>
+  <div class="pc-grid" style="margin-bottom:22px">
+    <div class="pc"><h3>1. Trabalho</h3><div class="subs"><span>Pró-labore / Salário</span><span>Bônus / PLR</span><span>Prest. de Serviços</span><span>13º / Férias</span></div></div>
+    <div class="pc"><h3>2. Rendimentos</h3><div class="subs"><span>Aplicações</span><span>Dividendos / JCP</span><span>Aluguéis</span></div></div>
+    <div class="pc"><h3>3. Outras Receitas</h3><div class="subs"><span>Reembolsos</span><span>Venda de Bens</span><span>Transf. Recebidas</span></div></div>
+  </div>
+
+  <h2 style="font-size:13px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink-2)">Despesas</h2>
+  <div class="pc-grid">
+    <div class="pc"><h3>1. Moradia</h3><div class="subs"><span>Condomínio</span><span>IPTU</span><span>Energia</span><span>Água / Gás</span><span>Internet / TV / Tel</span><span>Manutenção &amp; Reforma</span><span>Empregados</span><span>Móveis &amp; Decoração</span></div></div>
+    <div class="pc"><h3>2. Alimentação</h3><div class="subs"><span>No Domicílio</span><span>Fora do Domicílio</span></div></div>
+    <div class="pc"><h3>3. Transporte</h3><div class="subs"><span>Combustível</span><span>Apps (Uber/99)</span><span>Estacionam. &amp; Pedágio</span><span>Manutenção Veículo</span><span>Seguro / IPVA</span></div></div>
+    <div class="pc"><h3>4. Saúde</h3><div class="subs"><span>Plano de Saúde</span><span>Médicos &amp; Dentistas</span><span>Farmácia</span><span>Exames</span><span>Terapias</span><span>Academia</span></div></div>
+    <div class="pc"><h3>5. Educação</h3><div class="subs"><span>Mensalidades &amp; Cursos</span><span>Livros &amp; Materiais</span><span>Idiomas</span></div></div>
+    <div class="pc"><h3>6. Lazer &amp; Viagens</h3><div class="subs"><span>Viagens</span><span>Passeios &amp; Eventos</span><span>Hobbies</span><span>Clube</span></div></div>
+    <div class="pc"><h3>7. Assinaturas &amp; Tecnologia</h3><div class="subs"><span>Streaming</span><span>Apps &amp; Software</span><span>Eletrônicos</span></div></div>
+    <div class="pc"><h3>8. Vestuário &amp; Cuidados</h3><div class="subs"><span>Roupas &amp; Calçados</span><span>Cabeleireiro &amp; Estética</span><span>Perfumaria</span></div></div>
+    <div class="pc"><h3>9. Pets</h3><div class="subs"><span>Alimentação</span><span>Veterinário</span><span>Banho &amp; Tosa</span></div></div>
+    <div class="pc"><h3>10. Presentes &amp; Doações</h3><div class="subs"><span>Presentes</span><span>Doações</span></div></div>
+    <div class="pc"><h3>11. Financeiras &amp; Impostos</h3><div class="subs"><span>Tarifas Bancárias</span><span>Anuidade Cartão</span><span>Juros &amp; Multas</span><span>Imposto de Renda</span><span>Seguros</span></div></div>
+    <div class="pc"><h3>12. Poupança &amp; Investimentos</h3><div class="subs"><span>Aporte Mensal</span><span>Previdência</span><span>Reserva de Emergência</span></div></div>
+    <div class="pc"><h3>13. Outros</h3><div class="subs"><span>Saques</span><span>Transf. a Identificar</span><span>A Classificar</span></div></div>
+  </div>
+</section>
+
+<footer>Mockup de aprovação — Controle de Finanças Domésticas · André &amp; Rô · dados 100% fictícios</footer>
+</main>
+</div>
+
+<script>
+  const nav = document.getElementById('nav');
+  nav.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    nav.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    document.querySelectorAll('main > section').forEach(s =>
+      s.classList.toggle('on', s.id === b.dataset.t));
+    window.scrollTo({top:0});
+  });
+</script>

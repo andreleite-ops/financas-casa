@@ -1,0 +1,9 @@
+streamlit>=1.50
+pandas>=2.0
+SQLAlchemy>=2.0
+openpyxl>=3.1
+pdfplumber>=0.11
+python-dateutil>=2.9
+bcrypt>=4.1
+anthropic>=0.40
+psycopg2-binary>=2.9

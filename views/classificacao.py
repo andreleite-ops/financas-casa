@@ -1,0 +1,137 @@
+"""Fila de pendências e reclassificação de qualquer lançamento."""
+
+from __future__ import annotations
+
+import streamlit as st
+
+from core import classify, db, repo
+from core.money import fmt_brl
+
+SEM_SUB = "— sem subcategoria —"
+ESCOLHER = {"id": None, "nome": "— escolher categoria —", "subcategorias": []}
+
+
+def _opcoes(plano, natureza: str):
+    return [cat for cat in plano if cat["natureza"] == natureza and cat["ativa"]]
+
+
+def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> None:
+    """Bloco de edição de um lançamento. Usado na fila e na busca."""
+    natureza = "receita" if item["valor_centavos"] > 0 else "despesa"
+    categorias = _opcoes(plano, natureza)
+    if not categorias:
+        st.error("Nenhuma categoria cadastrada para esta natureza.")
+        return
+    # sem categoria ainda: exige escolha explícita, para ninguém salvar sem
+    # querer a primeira categoria da lista
+    if not item.get("categoria_id"):
+        categorias = [ESCOLHER, *categorias]
+
+    with st.container(border=True):
+        cabecalho, corpo = st.columns([1.5, 2.6])
+        cabecalho.markdown(
+            f"**{item['data']:%d/%m/%Y}**<br>{item['descricao']}<br>"
+            f"<span class='nota'>{item.get('conta', '')} · "
+            f"{'entrada' if natureza == 'receita' else 'saída'} de "
+            f"{fmt_brl(abs(item['valor_centavos']))}"
+            + (f"<br>{sugestao}" if sugestao else "")
+            + "</span>",
+            unsafe_allow_html=True,
+        )
+        with corpo:
+            c1, c2, c3 = st.columns([1.3, 1.3, 0.8])
+            atual = item.get("categoria_id")
+            indice = next((i for i, c in enumerate(categorias) if c["id"] == atual), 0)
+            categoria = c1.selectbox(
+                "Categoria", categorias, index=indice,
+                format_func=lambda c: c["nome"], key=f"{prefixo}cat{item['id']}",
+            )
+            subs = [s for s in categoria["subcategorias"] if s["ativa"]]
+            opcoes_sub = [SEM_SUB, *[s["nome"] for s in subs]]
+            atual_sub = next(
+                (s["nome"] for s in subs if s["id"] == item.get("subcategoria_id")), SEM_SUB
+            )
+            sub_nome = c2.selectbox(
+                "Subcategoria", opcoes_sub, index=opcoes_sub.index(atual_sub),
+                key=f"{prefixo}sub{item['id']}",
+            )
+            pessoa = c3.selectbox(
+                "Pessoa", db.PESSOAS,
+                index=db.PESSOAS.index(item["pessoa"]) if item.get("pessoa") in db.PESSOAS else 2,
+                key=f"{prefixo}pes{item['id']}",
+            )
+            b1, b2 = st.columns([1, 2.4])
+            if b1.button("Salvar", key=f"{prefixo}ok{item['id']}", type="primary",
+                         width="stretch"):
+                if categoria["id"] is None:
+                    st.warning("Escolha uma categoria antes de salvar.")
+                    return
+                sub_id = next((s["id"] for s in subs if s["nome"] == sub_nome), None)
+                repo.reclassificar(
+                    engine, item["id"], categoria_id=categoria["id"], subcategoria_id=sub_id,
+                    pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
+                )
+                st.session_state["msg_classificacao"] = (
+                    f"Salvo. O sistema vai reconhecer “{item['descricao'][:40]}” sozinho "
+                    "na próxima importação."
+                )
+                st.rerun()
+            b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")
+
+
+def render(engine, usuario: dict) -> None:
+    if st.session_state.pop("msg_classificacao", None):
+        st.success(st.session_state.get("msg_classificacao", "Salvo."), icon="🧠")
+
+    with engine.connect() as conn:
+        plano = repo.plano_de_contas(conn)
+        fila = repo.fila_pendentes(conn)
+
+    aba_fila, aba_busca = st.tabs([
+        f"📌 Fila de pendências ({len(fila)})", "🔎 Reclassificar qualquer lançamento"
+    ])
+
+    with aba_fila:
+        if not fila:
+            st.success("Nada pendente — tudo classificado.", icon="✅")
+            st.caption(
+                "Lançamentos com descrição genérica (PIX, transferência, código sem nome) "
+                "caem aqui quando as regras e a IA não têm certeza."
+            )
+        else:
+            c1, c2 = st.columns([3, 1])
+            c1.caption(
+                f"{len(fila)} lançamentos aguardando. Cada correção vira memória e reduz a "
+                "fila das próximas importações."
+            )
+            if c2.button("Reaplicar regras na fila", width="stretch"):
+                with engine.begin() as conn:
+                    resolvidas = classify.reclassificar_pendentes(conn)
+                st.success(f"{resolvidas} lançamento(s) resolvido(s) pelas regras atuais.")
+                st.rerun()
+            for item in fila[:40]:
+                sugestao = item.get("observacao") or ""
+                _editor(engine, usuario, item, plano, "f", sugestao)
+            if len(fila) > 40:
+                st.caption(f"Mostrando 40 de {len(fila)}. Salve estes para ver os próximos.")
+
+    with aba_busca:
+        termo = st.text_input(
+            "Buscar", placeholder="Ex.: iFood, Uber, mercado…",
+            help="Busca na descrição do extrato.",
+        )
+        with engine.connect() as conn:
+            achados = repo.buscar_transacoes(conn, termo, limite=40)
+        if not achados:
+            st.caption("Nenhum lançamento encontrado.")
+        else:
+            st.caption(f"{len(achados)} lançamento(s). Qualquer um pode ser reclassificado.")
+            for item in achados:
+                atual = (
+                    f"hoje: {item['categoria']}"
+                    + (f" › {item['subcategoria']}" if item["subcategoria"] else "")
+                    + f" ({item['status'].replace('_', ' ')})"
+                    if item["categoria"]
+                    else "ainda sem categoria"
+                )
+                _editor(engine, usuario, item, plano, "b", atual)
