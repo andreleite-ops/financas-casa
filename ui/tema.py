@@ -1,11 +1,13 @@
 """Identidade visual do app.
 
-Paleta: barras em vinho, fundo areia com cartões brancos, letras pretas e o
-verde/vermelho reservados para o significado do número (bom / atenção).
+Barra lateral em vinho sólido, miolo branco com os blocos em areia, barras em
+vinho, letras pretas e o verde/vermelho reservados para o significado do
+número (bom / atenção).
 
-A rampa de vinho foi verificada: passa monotonicidade de luminosidade, gap
-mínimo entre passos e contraste do tom mais claro contra o branco (3,15:1) e
-contra a areia (2,70:1). Todas as cores de texto passam 4,5:1 nos dois fundos.
+Contrastes conferidos: branco sobre o vinho da lateral dá 14,2:1 e a areia
+12,2:1; no miolo, preto sobre branco 18,8:1 e sobre areia 16,1:1. O bloco de
+areia contra o branco é sutil de propósito (1,17:1), por isso sempre leva uma
+borda fina — a separação vem dela, não da cor.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import streamlit as st
 VINHO_ESCURO = "#4F1626"
 VINHO = "#8E2F44"
 VINHO_CLARO = "#C67C8D"
+VINHO_LATERAL = "#4A1423"   # fundo da barra lateral
 
 # séries dos gráficos (mesma rampa, separadas por luminosidade — legíveis
 # inclusive para daltonismo e em preto e branco)
@@ -24,9 +27,9 @@ SERIE_DESPESA = VINHO
 SERIE_POUPANCA = VINHO_CLARO
 
 # --- fundos ---------------------------------------------------------------
+BRANCO = "#FFFFFF"
 AREIA = "#F3EDE1"
 AREIA_CLARA = "#FAF6EE"
-BRANCO = "#FFFFFF"
 LINHA = "#E0D6C4"
 
 # --- letras ---------------------------------------------------------------
@@ -37,29 +40,76 @@ BOM = "#14532D"       # verde
 CRITICO = "#9B1C1C"   # vermelho
 ACENTO = VINHO
 
+# letras sobre o vinho da lateral
+LATERAL_TEXTO = "#F6EFE6"
+LATERAL_SUAVE = "#D9BEC5"
+
 CORES_PESSOA = {"André": VINHO_ESCURO, "Rô": VINHO, "Casal": "#6B6255"}
 
 CSS = f"""
 <style>
-  .stApp {{ background: {AREIA}; }}
-  section[data-testid="stSidebar"] {{ background: {BRANCO}; border-right: 1px solid {LINHA}; }}
+  /* ==================== miolo: branco com areia ==================== */
+  .stApp {{ background: {BRANCO}; }}
   h1, h2, h3 {{ font-family: Charter, Georgia, serif; letter-spacing: .2px; color: {PRETO}; }}
   h1 {{ font-size: 1.7rem !important; }}
-  .marca {{ font-family: Charter, Georgia, serif; font-size: 1.25rem; font-weight: 700;
-           color: {VINHO_ESCURO}; line-height: 1.1; }}
-  .marca small {{ display: block; font-family: system-ui, sans-serif; font-size: .68rem;
-           font-weight: 500; color: {CINZA_CLARO}; letter-spacing: .09em;
-           text-transform: uppercase; margin-top: .2rem; }}
   .sub {{ color: {CINZA}; font-size: .92rem; margin-top: -.5rem; margin-bottom: 1.1rem; }}
 
-  /* cartoes de numero */
-  div[data-testid="stMetric"] {{ background: {BRANCO}; border: 1px solid {LINHA};
+  /* cartoes de numero: areia com borda fina */
+  div[data-testid="stMetric"] {{ background: {AREIA}; border: 1px solid {LINHA};
        border-radius: 10px; padding: .85rem 1rem; }}
   div[data-testid="stMetricLabel"] {{ color: {CINZA}; font-size: .8rem !important; }}
   div[data-testid="stMetricValue"] {{ font-size: 1.5rem !important; font-weight: 650;
        color: {PRETO}; }}
 
-  /* barra categoria x meta */
+  /* blocos com borda: fila de classificacao, duplicidades, contas */
+  div[data-testid="stVerticalBlockBorderWrapper"] {{ background: {AREIA_CLARA};
+       border-radius: 10px; }}
+  div[data-testid="stForm"] {{ border: 1px solid {LINHA}; border-radius: 10px;
+        background: {AREIA_CLARA}; padding: 1.2rem; }}
+  div[data-testid="stExpander"] details {{ background: {AREIA_CLARA};
+        border: 1px solid {LINHA}; border-radius: 10px; }}
+  div[data-testid="stDataFrame"] {{ border: 1px solid {LINHA}; border-radius: 8px; }}
+
+  /* ==================== barra lateral: vinho ==================== */
+  section[data-testid="stSidebar"] {{ background: {VINHO_LATERAL}; border-right: none; }}
+  section[data-testid="stSidebar"] * {{ color: {LATERAL_TEXTO}; }}
+  section[data-testid="stSidebar"] > div {{ padding-top: 1.3rem; }}
+
+  /* respiro pedido: 1 linha entre o titulo e "ANDRE & RO", 3 linhas ate o menu */
+  .marca {{ font-family: Charter, Georgia, serif; font-size: 1.3rem; font-weight: 700;
+           color: {BRANCO} !important; line-height: 1.15; margin-bottom: 3.9rem; }}
+  .marca small {{ display: block; font-family: system-ui, sans-serif; font-size: .68rem;
+           font-weight: 500; color: {LATERAL_SUAVE} !important; letter-spacing: .11em;
+           text-transform: uppercase; margin-top: 1.3rem; }}
+
+  /* navegacao: uma linha de respiro entre os itens */
+  section[data-testid="stSidebar"] div[role="radiogroup"] {{ gap: 0; }}
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label {{
+       margin-bottom: .6rem; padding: .32rem .5rem; border-radius: 6px; }}
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
+       background: rgba(255,255,255,.10); }}
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label p {{ font-size: .93rem; }}
+  section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {{
+       border-color: {LATERAL_SUAVE} !important; }}
+
+  section[data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,.18);
+       margin: 1.4rem 0; }}
+  section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] p {{
+       color: {LATERAL_SUAVE} !important; }}
+  section[data-testid="stSidebar"] button {{ background: transparent;
+       border: 1px solid rgba(255,255,255,.42); color: {LATERAL_TEXTO}; }}
+  section[data-testid="stSidebar"] button:hover {{ background: rgba(255,255,255,.13);
+       border-color: {BRANCO}; }}
+  section[data-testid="stSidebar"] code {{ background: rgba(255,255,255,.15);
+       color: {BRANCO} !important; }}
+
+  .aviso-dev {{ font-size: .76rem; color: {LATERAL_SUAVE} !important;
+       background: rgba(0,0,0,.24); border: 1px solid rgba(255,255,255,.16);
+       border-left: 3px solid {VINHO_CLARO}; border-radius: 4px;
+       padding: .5rem .6rem; margin-bottom: .9rem; line-height: 1.45; }}
+  .aviso-dev b {{ color: {BRANCO} !important; }}
+
+  /* ==================== barras e etiquetas ==================== */
   .cb {{ display: grid; grid-template-columns: 190px 1fr 110px; gap: .7rem;
         align-items: center; padding: .28rem 0; }}
   .cb .lbl {{ font-size: .87rem; color: {PRETO}; }}
@@ -71,7 +121,7 @@ CSS = f"""
   .bar {{ position: absolute; left: 0; top: 2px; height: 11px; border-radius: 0 3px 3px 0; }}
   /* trecho que passou da meta: hachura em vez de outra cor */
   .bar.excesso {{ background: repeating-linear-gradient(
-        135deg, {VINHO} 0 3px, {AREIA_CLARA} 3px 6px);
+        135deg, {VINHO} 0 3px, {AREIA} 3px 6px);
       border-top: 1px solid {VINHO}; border-bottom: 1px solid {VINHO}; }}
   .meta-tick {{ position: absolute; top: -2px; width: 2px; height: 19px;
                background: {PRETO}; opacity: .7; }}
@@ -83,26 +133,16 @@ CSS = f"""
   .p-andre {{ background: {VINHO_ESCURO}; }}
   .p-ro {{ background: {VINHO}; }}
   .p-casal {{ background: #6B6255; }}
-  .p-neutro {{ background: {AREIA_CLARA}; color: {CINZA}; border: 1px solid {LINHA}; }}
+  .p-neutro {{ background: {AREIA}; color: {CINZA}; border: 1px solid {LINHA}; }}
   .p-alerta {{ background: {AREIA}; color: {VINHO_ESCURO}; border: 1px solid {VINHO_CLARO};
               font-weight: 700; }}
 
-  .aviso-dev {{ font-size: .78rem; color: {CINZA}; background: {AREIA_CLARA};
-               border: 1px solid {LINHA}; border-left: 3px solid {VINHO};
-               border-radius: 4px; padding: .45rem .6rem; margin-bottom: .6rem; }}
+  /* ==================== login ==================== */
   .login-topo {{ text-align: center; margin: 2.5rem 0 1rem; }}
   .login-topo h1 {{ font-size: 2rem !important; margin-bottom: .1rem; color: {VINHO_ESCURO}; }}
   .login-topo p {{ color: {CINZA}; }}
-  div[data-testid="stForm"] {{ border: 1px solid {LINHA}; border-radius: 10px;
-        background: {BRANCO}; padding: 1.2rem; }}
 
-  /* tabelas e blocos */
-  div[data-testid="stDataFrame"] {{ border: 1px solid {LINHA}; border-radius: 8px; }}
-  div[data-testid="stExpander"], div[data-testid="stVerticalBlockBorderWrapper"] > div
-    {{ border-radius: 8px; }}
   .nota {{ font-size: .78rem; color: {CINZA_CLARO}; margin-top: .4rem; }}
-
-  /* abas: sublinhado vinho no ativo */
   button[data-testid="stTab"][aria-selected="true"] {{ color: {VINHO} !important; }}
 </style>
 """
