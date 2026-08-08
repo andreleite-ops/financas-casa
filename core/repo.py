@@ -509,6 +509,11 @@ def cobertura(conn, competencias: list[str]) -> dict[tuple[int, str], dict]:
     É o que alimenta o mapa de carregamento: responde, para cada conta e cada
     mês, se o extrato já entrou. Conta lançamentos inativos também — se o mês
     foi importado e caiu tudo em duplicidade, ele já foi carregado.
+
+    Ignora o que veio da planilha. A planilha é importada dentro de alguma
+    conta, e sem esse filtro os lançamentos dela apareceriam como se o extrato
+    daquela conta tivesse sido carregado — bem no painel que existe justamente
+    para dizer o contrário.
     """
     if not competencias:
         return {}
@@ -521,7 +526,10 @@ def cobertura(conn, competencias: list[str]) -> dict[tuple[int, str], dict]:
                 sa.case((db.transacoes.c.ativo == sa.true(), 1), else_=0)
             ).label("ativos"),
         )
-        .where(db.transacoes.c.competencia.in_(competencias))
+        .where(
+            db.transacoes.c.competencia.in_(competencias),
+            db.transacoes.c.origem != "planilha",
+        )
         .group_by(db.transacoes.c.conta_id, db.transacoes.c.competencia)
     )
     return {
