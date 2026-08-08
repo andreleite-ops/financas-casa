@@ -328,14 +328,51 @@ def resolver_em_lote(conn, tipo: str, decisao: str, usuario: str) -> int:
     Revisar centenas de suspeitas uma a uma nao e trabalho que alguem faca; sem
     uma decisao em lote, elas ficariam paradas para sempre — e cada uma delas e
     dinheiro fora dos relatorios.
+
+    Resolve em cinco consultas, nao uma por pendencia: chamar `resolver` em
+    laco custaria tres viagens de rede por item, e com algumas centenas a tela
+    fica travada por mais de um minuto.
     """
-    consulta = sa.select(db.duplicidades.c.id).where(db.duplicidades.c.resolvida == sa.false())
+    consulta = sa.select(db.duplicidades.c.id, db.duplicidades.c.transacao_nova_id).where(
+        db.duplicidades.c.resolvida == sa.false()
+    )
     if tipo:
         consulta = consulta.where(db.duplicidades.c.tipo == tipo)
-    ids = [linha.id for linha in conn.execute(consulta)]
-    for dup_id in ids:
-        resolver(conn, dup_id, decisao, usuario)
-    return len(ids)
+    linhas = conn.execute(consulta).fetchall()
+    if not linhas:
+        return 0
+
+    dup_ids = [linha.id for linha in linhas]
+    transacao_ids = [linha.transacao_nova_id for linha in linhas if linha.transacao_nova_id]
+
+    if decisao == "excluir":
+        if transacao_ids:
+            # zera a referencia antes de apagar: com a FK ativa nao da para
+            # remover uma transacao ainda apontada por uma linha de duplicidade
+            conn.execute(
+                sa.update(db.duplicidades)
+                .where(db.duplicidades.c.id.in_(dup_ids))
+                .values(transacao_nova_id=None)
+            )
+            conn.execute(
+                sa.delete(db.transacoes).where(db.transacoes.c.id.in_(transacao_ids))
+            )
+        marca = "excluida"
+    else:
+        if transacao_ids:
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(transacao_ids))
+                .values(ativo=True)
+            )
+        marca = "mantida"
+
+    conn.execute(
+        sa.update(db.duplicidades)
+        .where(db.duplicidades.c.id.in_(dup_ids))
+        .values(resolvida=True, decisao=marca, decidida_por=usuario)
+    )
+    return len(dup_ids)
 
 
 def resolver_todas_exatas(conn, usuario: str) -> int:
