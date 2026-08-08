@@ -79,6 +79,18 @@ verem os mesmos dados de computadores diferentes.
    DATABASE_URL = "postgresql://postgres.abcdefghijkl:SUASENHA@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
    ```
 
+   > **Se a senha do banco tiver `@`, `#`, `/`, `:` ou `?`**, esses caracteres
+   > quebram o endereço. Em vez da linha acima, use os campos separados — aí a
+   > senha vai exatamente como veio do Supabase, sem precisar escapar nada:
+   >
+   > ```toml
+   > DB_HOST = "aws-0-sa-east-1.pooler.supabase.com"
+   > DB_USER = "postgres.SEUPROJETO"
+   > DB_PASSWORD = "sua senha, colada como está"
+   > DB_PORT = "5432"
+   > DB_NAME = "postgres"
+   > ```
+
 7. Clique em **Save** e depois em **Deploy**.
 
 A primeira publicação leva de 3 a 5 minutos (ele instala as bibliotecas). Se

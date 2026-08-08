@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 import sqlalchemy as sa
+from urllib.parse import quote_plus
 
 metadata = sa.MetaData()
 
@@ -140,16 +141,44 @@ duplicidades = sa.Table(
 _engine = None
 
 
-def url_do_banco() -> str:
-    """Prioridade: st.secrets -> variavel de ambiente -> SQLite local."""
-    url = os.environ.get("DATABASE_URL")
-    if not url:
-        try:
-            import streamlit as st
+def _segredo(chave: str) -> str | None:
+    valor = os.environ.get(chave)
+    if valor:
+        return valor
+    try:
+        import streamlit as st
 
-            url = st.secrets.get("DATABASE_URL")  # type: ignore[assignment]
-        except Exception:
-            url = None
+        return st.secrets.get(chave)
+    except Exception:
+        return None
+
+
+def _url_por_partes() -> str | None:
+    """Monta a URL a partir de campos separados, escapando a senha.
+
+    Existe para o caso comum de a senha do banco ter @, #, / ou : — dentro de
+    uma URL esses caracteres têm significado próprio e quebram a conexão de um
+    jeito difícil de diagnosticar. Informando os campos em separado, a senha
+    pode ser colada como veio do Supabase.
+    """
+    senha = _segredo("DB_PASSWORD")
+    host = _segredo("DB_HOST")
+    usuario = _segredo("DB_USER")
+    if not (senha and host and usuario):
+        return None
+    porta = _segredo("DB_PORT") or "5432"
+    banco = _segredo("DB_NAME") or "postgres"
+    return (
+        f"postgresql://{quote_plus(usuario)}:{quote_plus(senha)}"
+        f"@{host}:{porta}/{banco}"
+    )
+
+
+def url_do_banco() -> str:
+    """Prioridade: DATABASE_URL -> campos separados -> SQLite local."""
+    url = _segredo("DATABASE_URL")
+    if not url:
+        url = _url_por_partes()
     if not url:
         destino = Path(__file__).resolve().parent.parent / "dados" / "financas.db"
         destino.parent.mkdir(parents=True, exist_ok=True)
