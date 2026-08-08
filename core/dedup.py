@@ -169,6 +169,23 @@ class Indice:
             return Decisao("duplicata_exata", linha["id"],
                            "mesma conta, data, valor e descrição")
 
+        # Planilha x extrato no mesmo dia e valor: e o mesmo lancamento, ainda
+        # que escrito de outro jeito. A descricao digitada a mao ("Mercado do
+        # bairro") nunca casa com a do banco ("SUPERM PAO DE ACUCAR 1234"), e
+        # exigir isso faria o extrato duplicar todo o historico da planilha.
+        # Conta, dia e centavo exatos ja identificam o lancamento com folga.
+        for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
+            if viz["id"] in self._usados or not viz["ativo"]:
+                continue
+            if viz["conta_id"] != conta_id or viz["data"] != dia:
+                continue
+            if origem == "extrato" and viz["origem"] == "planilha":
+                return Decisao("confere_planilha", viz["id"],
+                               "mesmo dia e valor de um lançamento da planilha")
+            if origem == "planilha" and viz["origem"] == "extrato":
+                return Decisao("duplicata_provavel", viz["id"],
+                               "mesmo dia e valor de um lançamento do extrato")
+
         chave = chave_estabelecimento(descricao)
         if chave:
             for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
