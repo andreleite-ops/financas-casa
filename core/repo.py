@@ -11,6 +11,29 @@ from .texto import normalizar
 
 PESSOA_PADRAO = "Casal"
 
+# A carga inicial nao pertence a nenhum banco: a planilha da casa anota gastos
+# de todas as contas e cartoes juntos, sem dizer de qual saiu cada um.
+# Registra-la dentro de uma conta real faria aquela conta parecer dona de todo
+# o historico. Por isso ela tem uma conta propria, que nao aparece na lista de
+# extratos.
+CONTA_PLANILHA = "Planilha (carga inicial)"
+
+
+def conta_da_planilha(engine) -> int:
+    """Devolve a conta reservada da carga inicial, criando-a se preciso."""
+    with engine.begin() as conn:
+        existente = conn.execute(
+            sa.select(db.contas.c.id).where(db.contas.c.nome == CONTA_PLANILHA)
+        ).scalar()
+        if existente:
+            return existente
+        return conn.execute(
+            sa.insert(db.contas).values(
+                nome=CONTA_PLANILHA, tipo="corrente", titular="Casal",
+                instituicao="—", parser="generico", ativa=True,
+            )
+        ).inserted_primary_key[0]
+
 
 # --------------------------------------------------------------------------
 # leituras de apoio

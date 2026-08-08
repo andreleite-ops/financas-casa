@@ -49,13 +49,26 @@ def _aba_enviar(engine, usuario: dict) -> None:
         horizontal=True,
     )
     e_planilha = origem.startswith("Planilha")
+    contas = [c for c in contas if c["nome"] != repo.CONTA_PLANILHA]
 
     c1, c2 = st.columns(2)
-    conta = c1.selectbox(
-        "Conta / cartão",
-        contas,
-        format_func=lambda c: f"{c['nome']} — {c['titular']}",
-    )
+    if e_planilha:
+        # a planilha da casa mistura todas as contas e cartões, sem dizer de
+        # qual saiu cada gasto; forçar a escolha de uma conta faria aquela
+        # conta parecer dona de todo o histórico
+        with engine.connect() as conn:
+            conta = repo.conta_por_id(conn, repo.conta_da_planilha(engine))
+        c1.info(
+            "A carga inicial vai para uma conta própria — ela reúne todos os cartões e "
+            "contas, e casa com os extratos por data e valor.",
+            icon="📚",
+        )
+    else:
+        conta = c1.selectbox(
+            "Conta / cartão",
+            contas,
+            format_func=lambda c: f"{c['nome']} — {c['titular']}",
+        )
     competencia = c2.selectbox(
         "Competência", _competencias_sugeridas(),
         help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a própria data.",
@@ -221,7 +234,8 @@ def _aba_mapa(engine) -> None:
     atual = f"{hoje.year:04d}-{hoje.month:02d}"
 
     with engine.connect() as conn:
-        contas = repo.listar_contas(conn, so_ativas=not incluir_inativas)
+        contas = [c for c in repo.listar_contas(conn, so_ativas=not incluir_inativas)
+                  if c['nome'] != repo.CONTA_PLANILHA]
         mapa = repo.cobertura(conn, competencias)
         mapa_planilha = repo.cobertura_planilha(conn, competencias)
 
