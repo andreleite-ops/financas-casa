@@ -132,8 +132,54 @@ def _aba_enviar(engine, usuario: dict) -> None:
         inverter = st.checkbox(
             "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",
             value=False,
-            help="Marque se, na prévia acima, as compras aparecem com valor positivo.",
+            help="Marque se, na prévia abaixo, as compras aparecerem como ENTRADA.",
         )
+
+        # prévia do resultado, não do arquivo: mostra como cada linha vai ficar
+        # depois de lida. É o único jeito de ver um erro de sinal ou de coluna
+        # antes de gravar milhares de lançamentos e ter de desfazer tudo.
+        try:
+            previa, _ = tabular.extrair(
+                df.head(8), mapa,
+                origem="planilha" if e_planilha else "extrato",
+                competencia=None if conta["tipo"] == "corrente" else competencia,
+                ano_referencia=int(competencia[:4]),
+                inverter_sinal=inverter,
+            )
+        except ErroDeLeitura as exc:
+            st.error(f"Com esse mapeamento não dá para ler: {exc}")
+            return
+
+        st.markdown("#### Como vai ficar")
+        if not previa:
+            st.error("Nenhuma linha foi reconhecida. Revise as colunas de data e valor.")
+            return
+
+        entradas = sum(1 for lan in previa if lan.valor_centavos > 0)
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Data": f"{lan.data:%d/%m/%Y}",
+                    "Descrição": lan.descricao,
+                    "Entra ou sai": "↑ ENTRADA" if lan.valor_centavos > 0 else "↓ SAÍDA",
+                    "Valor": fmt_brl(abs(lan.valor_centavos)),
+                    "Categoria da origem": lan.categoria_hint or "—",
+                }
+                for lan in previa
+            ]),
+            width="stretch", hide_index=True,
+        )
+        if entradas == len(previa):
+            st.warning(
+                "**Todas as linhas da amostra estão como ENTRADA.** Numa planilha de gastos "
+                "isso quase nunca está certo — confira a coluna **Tipo (D/C)**.",
+                icon="⚠️",
+            )
+        else:
+            st.caption(
+                "Confira a coluna **Entra ou sai** antes de processar: é ela que decide se o "
+                "lançamento soma nas receitas ou nas despesas."
+            )
 
         if st.button("Processar arquivo", type="primary"):
             try:
