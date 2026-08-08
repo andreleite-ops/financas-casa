@@ -114,6 +114,113 @@ def avaliar(
     return Decisao("novo")
 
 
+class Indice:
+    """Espelho em memoria do que ja existe, para decidir sem ir ao banco.
+
+    Importar um arquivo grande consultando o banco a cada lancamento custa duas
+    ou tres viagens de rede por linha — com 2 mil lancamentos contra um banco na
+    nuvem, isso vira mais de dez minutos. Aqui o trecho relevante do historico e
+    lido de uma vez e as decisoes saem da memoria.
+
+    Lancamentos do proprio lote entram no indice conforme sao decididos, com id
+    negativo provisorio, para que linha repetida dentro do mesmo arquivo
+    continue sendo detectada.
+    """
+
+    def __init__(self, registros: list[dict]):
+        self._por_hash: dict[str, list[dict]] = {}
+        self._por_valor: dict[int, list[dict]] = {}
+        self._por_id: dict[int, dict] = {}
+        self._usados: set[int] = set()
+        for registro in registros:
+            self.adicionar(registro)
+
+    def adicionar(self, registro: dict) -> None:
+        self._por_hash.setdefault(registro["hash_dedup"], []).append(registro)
+        self._por_valor.setdefault(registro["valor_centavos"], []).append(registro)
+        self._por_id[registro["id"]] = registro
+
+    def registro(self, registro_id: int | None) -> dict | None:
+        return self._por_id.get(registro_id) if registro_id is not None else None
+
+    def marcar_usado(self, registro_id: int) -> None:
+        self._usados.add(registro_id)
+
+    def avaliar(
+        self, *, conta_id: int, dia: date, valor_centavos: int, descricao: str,
+        descricao_norm: str, origem: str, upload_id: int | None,
+    ) -> Decisao:
+        h = hash_lancamento(conta_id, dia, valor_centavos, descricao_norm)
+
+        for linha in sorted(self._por_hash.get(h, []), key=lambda r: r["id"]):
+            if linha["id"] in self._usados or not linha["ativo"]:
+                continue
+            # planilha da Ro x extrato: nao e duplicidade, e conferencia.
+            # O do extrato prevalece e herda a classificacao que ela ja tinha dado.
+            if origem == "extrato" and linha["origem"] == "planilha":
+                return Decisao("confere_planilha", linha["id"],
+                               "mesmo lançamento já estava na planilha")
+            if origem == "planilha" and linha["origem"] == "extrato":
+                return Decisao("duplicata_exata", linha["id"], "já importado do extrato")
+            # mesmo arquivo repetindo a linha pode ser compra legitima repetida
+            if upload_id is not None and linha["upload_id"] == upload_id:
+                return Decisao("duplicata_provavel", linha["id"],
+                               "linha repetida no mesmo arquivo")
+            return Decisao("duplicata_exata", linha["id"],
+                           "mesma conta, data, valor e descrição")
+
+        chave = chave_estabelecimento(descricao)
+        if chave:
+            for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
+                if viz["id"] in self._usados or not viz["ativo"]:
+                    continue
+                if viz["conta_id"] != conta_id or viz["hash_dedup"] == h:
+                    continue
+                if abs((viz["data"] - dia).days) > JANELA_PROVAVEL.days:
+                    continue
+                # datas proximas mas em meses diferentes = cobranca recorrente na
+                # virada do mes (Netflix dia 31 e dia 1), nao duplicata.
+                if (viz["data"].year, viz["data"].month) != (dia.year, dia.month):
+                    continue
+                if chave_estabelecimento(viz["descricao"]) == chave:
+                    dias = abs((viz["data"] - dia).days)
+                    return Decisao("duplicata_provavel", viz["id"],
+                                   f"mesmo valor e estabelecimento, {dias} dia(s) de diferença")
+        return Decisao("novo")
+
+
+def carregar_indice(conn, conta_id: int, datas: list[date]) -> Indice:
+    """Le de uma vez o historico que pode conflitar com o lote que esta entrando.
+
+    Basta a janela de datas do proprio lote, alargada pelos dias da regra de
+    duplicata provavel: fora dela nada pode casar, nem por hash (que inclui a
+    data) nem por proximidade.
+    """
+    if not datas:
+        return Indice([])
+    consulta = sa.select(
+        db.transacoes.c.id,
+        db.transacoes.c.hash_dedup,
+        db.transacoes.c.origem,
+        db.transacoes.c.upload_id,
+        db.transacoes.c.ativo,
+        db.transacoes.c.data,
+        db.transacoes.c.descricao,
+        db.transacoes.c.valor_centavos,
+        db.transacoes.c.conta_id,
+        db.transacoes.c.categoria_id,
+        db.transacoes.c.subcategoria_id,
+        db.transacoes.c.pessoa,
+        db.transacoes.c.status,
+    ).where(
+        db.transacoes.c.conta_id == conta_id,
+        db.transacoes.c.ativo == sa.true(),
+        db.transacoes.c.data >= min(datas) - JANELA_PROVAVEL,
+        db.transacoes.c.data <= max(datas) + JANELA_PROVAVEL,
+    )
+    return Indice([dict(linha._mapping) for linha in conn.execute(consulta)])
+
+
 def registrar_duplicidade(conn, nova_id: int, decisao: Decisao) -> None:
     conn.execute(
         sa.insert(db.duplicidades).values(

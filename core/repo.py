@@ -95,6 +95,38 @@ def _pessoa_valida(valor: str | None, padrao: str) -> str:
 # --------------------------------------------------------------------------
 # importacao
 # --------------------------------------------------------------------------
+LOTE_INSERCAO = 500
+
+
+def _inserir_transacoes(conn, linhas: list[dict], upload_id: int) -> list[int]:
+    """Insere tudo em poucas idas ao banco e devolve os ids na mesma ordem.
+
+    Nao usa RETURNING ordenado de proposito: o SQLAlchemy so garante a ordem em
+    parte dos bancos e, onde nao garante, volta a inserir linha a linha — que e
+    exatamente o custo que se quer evitar. Como todas as linhas do lote
+    compartilham o mesmo upload_id e a chave e sequencial, reler os ids em
+    ordem crescente devolve a mesma ordem da insercao, em qualquer banco.
+    """
+    if not linhas:
+        return []
+    for inicio in range(0, len(linhas), LOTE_INSERCAO):
+        conn.execute(sa.insert(db.transacoes), linhas[inicio : inicio + LOTE_INSERCAO])
+
+    ids = [
+        linha.id
+        for linha in conn.execute(
+            sa.select(db.transacoes.c.id)
+            .where(db.transacoes.c.upload_id == upload_id)
+            .order_by(db.transacoes.c.id)
+        )
+    ]
+    if len(ids) != len(linhas):
+        raise RuntimeError(
+            f"esperava {len(linhas)} lançamentos gravados, encontrei {len(ids)}"
+        )
+    return ids
+
+
 def importar(
     engine,
     *,
@@ -144,13 +176,21 @@ def importar(
         regras = classify.carregar_regras(conn)
         naturezas = classify._natureza_por_categoria(conn)
         cats_idx, subs_idx = _indice_categorias(conn)
-        ja_casados: set[int] = set()
-        pendentes: list[tuple[int, str, int]] = []  # (id, descricao, valor)
+
+        # todo o histórico que pode conflitar vem numa consulta só; as decisões
+        # saem da memória. Ir ao banco por lançamento custaria duas ou três
+        # viagens de rede por linha — inviável num arquivo de milhares.
+        indice = dedup.carregar_indice(conn, conta_id, [lan.data for lan in lancamentos])
+
+        linhas: list[dict] = []          # o que será inserido, na ordem
+        duplicatas: list[tuple[int, dedup.Decisao]] = []   # (posição na lista, decisão)
+        substituir: list[int] = []       # linhas da planilha que o extrato aposenta
+        pendentes_pos: list[int] = []    # posições que ficaram sem categoria
+        proximo_temp = -1
 
         for lan in lancamentos:
             descricao_norm = normalizar(lan.descricao)
-            decisao = dedup.avaliar(
-                conn,
+            decisao = indice.avaliar(
                 conta_id=conta_id,
                 dia=lan.data,
                 valor_centavos=lan.valor_centavos,
@@ -158,10 +198,9 @@ def importar(
                 descricao_norm=descricao_norm,
                 origem=lan.origem or origem,
                 upload_id=upload_id,
-                ja_casados=ja_casados,
             )
             if decisao.existente_id:
-                ja_casados.add(decisao.existente_id)
+                indice.marcar_usado(decisao.existente_id)
 
             # classificacao: dica da planilha primeiro, senao regras
             categoria_id = subcategoria_id = None
@@ -184,81 +223,92 @@ def importar(
                     status, confianca = achado.status, achado.confianca
 
             pessoa = _pessoa_valida(lan.pessoa_hint, pessoa_padrao)
-
-            nova_id = conn.execute(
-                sa.insert(db.transacoes).values(
-                    data=lan.data,
-                    competencia=lan.competencia or (competencia or lan.data.strftime("%Y-%m")),
-                    descricao=lan.descricao,
-                    descricao_norm=descricao_norm,
-                    valor_centavos=lan.valor_centavos,
-                    conta_id=conta_id,
-                    categoria_id=categoria_id,
-                    subcategoria_id=subcategoria_id,
-                    pessoa=pessoa,
-                    status=status,
-                    confianca=confianca,
-                    origem=lan.origem or origem,
-                    hash_dedup=dedup.hash_lancamento(
-                        conta_id, lan.data, lan.valor_centavos, descricao_norm
-                    ),
-                    upload_id=upload_id,
-                    ativo=decisao.entra_ativo,
-                    observacao=decisao.motivo or None,
-                )
-            ).inserted_primary_key[0]
-
-            if decisao.e_duplicata:
-                dedup.registrar_duplicidade(conn, nova_id, decisao)
-                chave = (
-                    "duplicados_exatos"
-                    if decisao.situacao == "duplicata_exata"
-                    else "duplicados_provaveis"
-                )
-                resumo[chave] += 1
-                continue
+            observacao = decisao.motivo or None
 
             if decisao.situacao == "confere_planilha":
                 # o do extrato prevalece e herda a classificacao da planilha
-                antigo = conn.execute(
-                    sa.select(
-                        db.transacoes.c.categoria_id,
-                        db.transacoes.c.subcategoria_id,
-                        db.transacoes.c.pessoa,
-                        db.transacoes.c.status,
-                    ).where(db.transacoes.c.id == decisao.existente_id)
-                ).fetchone()
-                if antigo and antigo.categoria_id and categoria_id is None:
-                    conn.execute(
-                        sa.update(db.transacoes)
-                        .where(db.transacoes.c.id == nova_id)
-                        .values(
-                            categoria_id=antigo.categoria_id,
-                            subcategoria_id=antigo.subcategoria_id,
-                            pessoa=antigo.pessoa,
-                            status="manual" if antigo.status == "manual" else "auto_regra",
-                            confianca=1.0,
-                        )
-                    )
-                    categoria_id = antigo.categoria_id
-                    status = "manual"
-                conn.execute(
-                    sa.update(db.transacoes)
-                    .where(db.transacoes.c.id == decisao.existente_id)
-                    .values(ativo=False, observacao="substituído pelo lançamento do extrato")
-                )
-                conn.execute(
-                    sa.update(db.transacoes)
-                    .where(db.transacoes.c.id == nova_id)
-                    .values(observacao="conferido com a planilha")
-                )
+                antigo = indice.registro(decisao.existente_id)
+                if antigo and antigo["categoria_id"] and categoria_id is None:
+                    categoria_id = antigo["categoria_id"]
+                    subcategoria_id = antigo["subcategoria_id"]
+                    pessoa = antigo["pessoa"]
+                    status = "manual" if antigo["status"] == "manual" else "auto_regra"
+                    confianca = 1.0
+                observacao = "conferido com a planilha"
+                substituir.append(decisao.existente_id)
                 resumo["conferidos_planilha"] += 1
+
+            registro = {
+                "data": lan.data,
+                "competencia": lan.competencia or (competencia or lan.data.strftime("%Y-%m")),
+                "descricao": lan.descricao,
+                "descricao_norm": descricao_norm,
+                "valor_centavos": lan.valor_centavos,
+                "conta_id": conta_id,
+                "categoria_id": categoria_id,
+                "subcategoria_id": subcategoria_id,
+                "pessoa": pessoa,
+                "status": status,
+                "confianca": confianca,
+                "origem": lan.origem or origem,
+                "hash_dedup": dedup.hash_lancamento(
+                    conta_id, lan.data, lan.valor_centavos, descricao_norm
+                ),
+                "upload_id": upload_id,
+                "ativo": decisao.entra_ativo,
+                "observacao": observacao,
+                "classificado_por": None,
+            }
+            posicao = len(linhas)
+            linhas.append(registro)
+
+            # entra no índice com id provisório, para pegar linha repetida
+            # dentro do próprio arquivo
+            indice.adicionar({**registro, "id": proximo_temp})
+            proximo_temp -= 1
+
+            if decisao.e_duplicata:
+                duplicatas.append((posicao, decisao))
+                chave = ("duplicados_exatos" if decisao.situacao == "duplicata_exata"
+                         else "duplicados_provaveis")
+                resumo[chave] += 1
+                continue
 
             resumo["importados"] += 1
             if categoria_id is None:
-                pendentes.append((nova_id, lan.descricao, lan.valor_centavos))
+                pendentes_pos.append(posicao)
             else:
                 resumo["auto"] += 1
+
+        ids = _inserir_transacoes(conn, linhas, upload_id)
+        temp_para_real = {-(i + 1): ids[i] for i in range(len(ids))}
+
+        if substituir:
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(substituir))
+                .values(ativo=False, observacao="substituído pelo lançamento do extrato")
+            )
+        if duplicatas:
+            conn.execute(
+                sa.insert(db.duplicidades),
+                [
+                    {
+                        "transacao_nova_id": ids[posicao],
+                        "transacao_existente_id": temp_para_real.get(
+                            decisao.existente_id, decisao.existente_id
+                        ),
+                        "tipo": "exata" if decisao.situacao == "duplicata_exata" else "provavel",
+                        "motivo": decisao.motivo,
+                    }
+                    for posicao, decisao in duplicatas
+                ],
+            )
+
+        pendentes = [
+            (ids[posicao], linhas[posicao]["descricao"], linhas[posicao]["valor_centavos"])
+            for posicao in pendentes_pos
+        ]
 
         # camada 3: IA so no que sobrou
         if pendentes and usar_ia and ai.disponivel():
