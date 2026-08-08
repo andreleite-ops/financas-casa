@@ -6,6 +6,7 @@ classificação manual que ensina o sistema, e apresenta gastos em tabelas,
 gráficos e uma análise escrita por IA.
 
 O plano completo e o mockup aprovado estão em `PLANEJAMENTO.md` e `mockup.html`.
+O que está feito e o que vem a seguir: **`ROTEIRO.md`**.
 
 ## Como rodar na sua máquina
 
