@@ -24,22 +24,33 @@ verem os mesmos dados de computadores diferentes.
      vocês para entrar no app, é a senha do banco.
    - **Region:** `South America (São Paulo)`
 4. Clique em **Create new project** e espere uns 2 minutos.
-5. Com o projeto criado, clique na engrenagem **Project Settings** (canto
-   inferior esquerdo) › **Database** › role até **Connection string** ›
-   aba **URI**.
+5. Com o projeto criado, clique no botão **Connect** (no topo da tela).
 
-   Vai aparecer algo assim:
+6. **Escolha a opção "Session pooler"** — não a "Direct connection".
+
+   > **Isto é o que mais dá errado.** A "Direct connection"
+   > (`db.SEUPROJETO.supabase.co`) só responde por IPv6, e o Streamlit Cloud
+   > sai por IPv4: a conexão simplesmente não fecha, com um erro que não
+   > explica a causa. O próprio Supabase costuma marcar essa opção como *"Not
+   > IPv4 compatible"*. O **Session pooler** funciona nos dois e é o certo
+   > para um app que fica ligado, como este.
+
+   O endereço do Session pooler tem esta cara — repare que o host é
+   `pooler.supabase.com` e o usuário vem com um ponto e o código do projeto:
 
    ```
-   postgresql://postgres:[YOUR-PASSWORD]@db.abcdefgh.supabase.co:5432/postgres
+   postgresql://postgres.abcdefghijkl:[YOUR-PASSWORD]@aws-0-sa-east-1.pooler.supabase.com:5432/postgres
    ```
 
-6. Copie essa linha, troque `[YOUR-PASSWORD]` (incluindo os colchetes) pela
-   senha que você guardou no passo 3, e cole num bloco de notas. **Essa linha
-   inteira é o seu `DATABASE_URL`.**
+7. Copie essa linha e troque `[YOUR-PASSWORD]` (incluindo os colchetes) pela
+   senha que você guardou no passo 3. **Essa linha inteira é o seu
+   `DATABASE_URL`.**
 
 > As tabelas são criadas sozinhas na primeira vez que o app abrir. Você não
 > precisa rodar nenhum comando de SQL.
+
+> **Onde colar:** direto na caixa de Secrets do Streamlit (Etapa 2). Essa linha
+> contém a senha do banco — não precisa passar por e-mail, mensagem ou chat.
 
 ---
 
@@ -65,7 +76,7 @@ verem os mesmos dados de computadores diferentes.
    Etapa 1:
 
    ```toml
-   DATABASE_URL = "postgresql://postgres:SUASENHA@db.abcdefgh.supabase.co:5432/postgres"
+   DATABASE_URL = "postgresql://postgres.abcdefghijkl:SUASENHA@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
    ```
 
 7. Clique em **Save** e depois em **Deploy**.
@@ -154,7 +165,7 @@ No Streamlit: **⋮** › **Settings** › **Secrets**. O conteúdo final deve f
 assim (as três partes juntas):
 
 ```toml
-DATABASE_URL = "postgresql://postgres:SUASENHA@db.abcdefgh.supabase.co:5432/postgres"
+DATABASE_URL = "postgresql://postgres.abcdefghijkl:SUASENHA@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
 ANTHROPIC_API_KEY = "sk-ant-..."
 
 [usuarios.andre]
@@ -196,6 +207,13 @@ senha dela, e vocês veem exatamente os mesmos dados.
 ---
 
 ## Coisas que podem dar errado
+
+**Erro de conexão com o banco / o app insiste em "Base local (SQLite)"** — o
+suspeito número um é ter copiado a **Direct connection** em vez do **Session
+pooler**. Confira o endereço no Secrets: tem que ter `pooler.supabase.com`, e o
+usuário tem que ser `postgres.SEUPROJETO` (com ponto), não só `postgres`. Se
+estiver com `db.SEUPROJETO.supabase.co`, é esse o problema — volte no Supabase,
+botão **Connect**, e pegue o Session pooler.
 
 **"Error installing requirements"** na publicação — quase sempre é a versão do
 Python. Vá em **Settings › Advanced** e confirme **3.11**, depois **Reboot app**.
