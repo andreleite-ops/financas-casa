@@ -173,11 +173,14 @@ class Indice:
         # que escrito de outro jeito. A descricao digitada a mao ("Mercado do
         # bairro") nunca casa com a do banco ("SUPERM PAO DE ACUCAR 1234"), e
         # exigir isso faria o extrato duplicar todo o historico da planilha.
-        # Conta, dia e centavo exatos ja identificam o lancamento com folga.
+        #
+        # A conta tambem e ignorada: uma planilha de familia costuma anotar o
+        # gasto sem dizer de qual cartao saiu, entao tudo dela cai numa conta
+        # so. Exigir a mesma conta faria a fatura do Nubank duplicar o que ja
+        # estava anotado. Dia e centavo exatos identificam o lancamento com
+        # folga, e o pareamento continua um-para-um.
         for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
-            if viz["id"] in self._usados or not viz["ativo"]:
-                continue
-            if viz["conta_id"] != conta_id or viz["data"] != dia:
+            if viz["id"] in self._usados or not viz["ativo"] or viz["data"] != dia:
                 continue
             if origem == "extrato" and viz["origem"] == "planilha":
                 return Decisao("confere_planilha", viz["id"],
@@ -230,10 +233,15 @@ def carregar_indice(conn, conta_id: int, datas: list[date]) -> Indice:
         db.transacoes.c.pessoa,
         db.transacoes.c.status,
     ).where(
-        db.transacoes.c.conta_id == conta_id,
         db.transacoes.c.ativo == sa.true(),
         db.transacoes.c.data >= min(datas) - JANELA_PROVAVEL,
         db.transacoes.c.data <= max(datas) + JANELA_PROVAVEL,
+        # a conta filtra o historico da propria conta, mas a planilha entra de
+        # qualquer conta: ela anota o gasto sem dizer de qual cartao saiu
+        sa.or_(
+            db.transacoes.c.conta_id == conta_id,
+            db.transacoes.c.origem == "planilha",
+        ),
     )
     return Indice([dict(linha._mapping) for linha in conn.execute(consulta)])
 
@@ -314,16 +322,22 @@ def resolver(conn, dup_id: int, decisao: str, usuario: str) -> None:
     )
 
 
+def resolver_em_lote(conn, tipo: str, decisao: str, usuario: str) -> int:
+    """Resolve de uma vez todas as pendencias de um tipo ('exata' ou 'provavel').
+
+    Revisar centenas de suspeitas uma a uma nao e trabalho que alguem faca; sem
+    uma decisao em lote, elas ficariam paradas para sempre — e cada uma delas e
+    dinheiro fora dos relatorios.
+    """
+    consulta = sa.select(db.duplicidades.c.id).where(db.duplicidades.c.resolvida == sa.false())
+    if tipo:
+        consulta = consulta.where(db.duplicidades.c.tipo == tipo)
+    ids = [linha.id for linha in conn.execute(consulta)]
+    for dup_id in ids:
+        resolver(conn, dup_id, decisao, usuario)
+    return len(ids)
+
+
 def resolver_todas_exatas(conn, usuario: str) -> int:
     """Botao 'confirmar exclusao das duplicatas exatas'."""
-    ids = [
-        linha.id
-        for linha in conn.execute(
-            sa.select(db.duplicidades.c.id).where(
-                db.duplicidades.c.resolvida == sa.false(), db.duplicidades.c.tipo == "exata"
-            )
-        )
-    ]
-    for dup_id in ids:
-        resolver(conn, dup_id, "excluir", usuario)
-    return len(ids)
+    return resolver_em_lote(conn, "exata", "excluir", usuario)

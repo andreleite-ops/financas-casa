@@ -83,7 +83,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
         except Exception as exc:
             st.error(f"Não consegui abrir o arquivo: {exc}")
             return
-        sugestao = st.session_state.get(chave_estado) or tabular.sugerir_mapeamento(df.columns)
+        sugestao = st.session_state.get(chave_estado) or tabular.sugerir_mapeamento(df.columns, df)
 
         st.markdown("#### Confira as colunas")
         st.caption(
@@ -309,14 +309,30 @@ def _aba_duplicidades(engine, usuario: dict) -> None:
         f"**{len(fila)} lançamento(s) aguardando decisão** — nenhum deles está entrando nos "
         "relatórios enquanto isso."
     )
-    if exatas:
-        if st.button(f"Confirmar exclusão das {len(exatas)} duplicatas exatas", type="primary"):
-            with engine.begin() as conn:
-                total = dedup.resolver_todas_exatas(conn, usuario["nome"])
-            st.success(f"{total} duplicata(s) excluída(s).")
-            st.rerun()
+    provaveis = [linha for linha in fila if linha["tipo"] != "exata"]
+    b1, b2, _ = st.columns([1.5, 1.5, 1])
+    if exatas and b1.button(f"Excluir as {len(exatas)} duplicatas exatas", type="primary",
+                            width="stretch"):
+        with engine.begin() as conn:
+            total = dedup.resolver_em_lote(conn, "exata", "excluir", usuario["nome"])
+        st.success(f"{total} duplicata(s) excluída(s).")
+        st.rerun()
+    if provaveis and b2.button(f"Manter as {len(provaveis)} prováveis (são gastos distintos)",
+                               width="stretch"):
+        with engine.begin() as conn:
+            total = dedup.resolver_em_lote(conn, "provavel", "manter", usuario["nome"])
+        st.success(f"{total} lançamento(s) devolvido(s) aos relatórios.")
+        st.rerun()
 
-    for linha in fila:
+    if provaveis:
+        st.caption(
+            "As **prováveis** costumam ser gastos legítimos parecidos — dois cafés iguais no "
+            "mesmo dia, duas idas à padaria. Numa planilha de família, em que a descrição é "
+            "curta e digitada à mão, elas aparecem bastante. Revise algumas abaixo; se o padrão "
+            "se confirmar, use o botão para devolver todas de uma vez."
+        )
+
+    for linha in fila[:60]:
         marca = "exata" if linha["tipo"] == "exata" else "provável"
         with st.container(border=True):
             c1, c2 = st.columns([3, 1.1])
@@ -337,6 +353,12 @@ def _aba_duplicidades(engine, usuario: dict) -> None:
                 with engine.begin() as conn:
                     dedup.resolver(conn, linha["dup_id"], "manter", usuario["nome"])
                 st.rerun()
+
+    if len(fila) > 60:
+        st.caption(
+            f"Mostrando 60 de {len(fila)}. Resolva estes ou use os botões acima para decidir "
+            "todos de uma vez."
+        )
 
 
 def _aba_critica(engine, usuario: dict) -> None:

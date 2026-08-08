@@ -25,8 +25,9 @@ SINONIMOS = {
              "data movimento", "dt", "data transacao", "data de lancamento", "date",
              "data pagamento", "data efetivacao", "dia"],
     "descricao": ["descricao", "historico", "lancamento", "estabelecimento", "titulo",
-                  "detalhe", "movimentacao", "descricao lancamento", "memo", "title",
-                  "description", "local", "onde", "item", "transacao"],
+                  "beneficiario", "favorecido", "detalhe", "movimentacao",
+                  "descricao lancamento", "memo", "title", "description", "local",
+                  "onde", "item", "transacao"],
     "valor": ["valor", "valor r", "valor brl", "montante", "amount", "vlr", "valor lancamento",
               "valor da compra", "quantia", "total", "valor (r$)", "preco"],
     "entrada": ["entrada", "credito", "receita", "recebimento", "entradas", "credit",
@@ -47,8 +48,37 @@ def _chave(texto) -> str:
     return re.sub(r"\s+", " ", txt).strip()
 
 
-def sugerir_mapeamento(colunas) -> dict[str, str | None]:
-    """Casa cada papel com a coluna mais parecida do arquivo."""
+def _parece_coluna_de_sinal(valores) -> bool:
+    """A coluna guarda DESP/REC (ou D/C) em vez de nomes de categoria?
+
+    Planilha caseira costuma ter uma coluna "CATEGORIA" que na verdade diz se
+    a linha é despesa ou receita. Pelo nome ela seria lida como categoria, e aí
+    todo gasto entraria como receita — por isso vale olhar o conteúdo.
+    """
+    amostra = [str(v).strip() for v in valores if str(v).strip()][:60]
+    if len(amostra) < 3:
+        return False
+    reconhecidos = sum(1 for v in amostra if marca_de_sinal(v) is not None)
+    return reconhecidos / len(amostra) >= 0.8
+
+
+def sugerir_mapeamento(colunas, amostra=None) -> dict[str, str | None]:
+    """Casa cada papel com a coluna mais parecida do arquivo.
+
+    Recebendo `amostra` (o próprio DataFrame), também olha o conteúdo para
+    corrigir o caso da coluna de categoria que guarda DESP/REC.
+    """
+    if amostra is not None:
+        colunas_de_sinal = [
+            c for c in colunas
+            if c in getattr(amostra, "columns", []) and _parece_coluna_de_sinal(amostra[c])
+        ]
+        if colunas_de_sinal:
+            restantes = [c for c in colunas if c not in colunas_de_sinal]
+            mapa = sugerir_mapeamento(restantes)
+            mapa["tipo"] = colunas_de_sinal[0]
+            return mapa
+
     normalizadas = {c: _chave(c) for c in colunas}
     mapa: dict[str, str | None] = {}
     usadas: set[str] = set()
@@ -127,18 +157,31 @@ def carregar_tabela(conteudo: bytes, nome_arquivo: str = "") -> pd.DataFrame:
     return _achar_cabecalho(df)
 
 
-_NEGATIVO = re.compile(r"^\s*[-(]|\bD\b|DEBITO|SAIDA|PAGAMENTO", re.IGNORECASE)
+# marcas de entrada e saida usadas por bancos e por planilhas caseiras.
+# "DESP"/"REC" sao o jeito mais comum de abreviar em planilha de familia.
+MARCAS_ENTRADA = {"C", "CREDITO", "ENTRADA", "RECEITA", "REC", "R", "RECEITAS",
+                  "RECEBIMENTO", "RECEB", "+"}
+MARCAS_SAIDA = {"D", "DEBITO", "DEB", "SAIDA", "DESPESA", "DESP", "DESPESAS",
+                "GASTO", "PAGAMENTO", "PGTO", "-"}
+
+
+def marca_de_sinal(valor) -> int | None:
+    """+1 para entrada, -1 para saida, None quando a marca nao diz nada."""
+    marca = sem_acento(str(valor)).upper().strip().rstrip(".")
+    if marca in MARCAS_ENTRADA:
+        return 1
+    if marca in MARCAS_SAIDA:
+        return -1
+    return None
 
 
 def _sinal_da_linha(linha, mapa, centavos: int) -> int:
     """Decide entrada/saida quando o valor vem sem sinal."""
     col_tipo = mapa.get("tipo")
     if col_tipo and str(linha.get(col_tipo, "")).strip():
-        marca = sem_acento(str(linha[col_tipo])).upper().strip()
-        if marca in ("C", "CREDITO", "CRÉDITO", "ENTRADA", "RECEITA", "R"):
-            return abs(centavos)
-        if marca in ("D", "DEBITO", "SAIDA", "DESPESA", "DEB"):
-            return -abs(centavos)
+        sinal = marca_de_sinal(linha[col_tipo])
+        if sinal is not None:
+            return sinal * abs(centavos)
     return centavos
 
 
@@ -228,5 +271,5 @@ def extrair(
 def ler(conteudo: bytes, nome_arquivo: str = "", **kwargs) -> list[Lancamento]:
     """Caminho automatico: detecta colunas e extrai."""
     df = carregar_tabela(conteudo, nome_arquivo)
-    mapa = kwargs.pop("mapa", None) or sugerir_mapeamento(df.columns)
+    mapa = kwargs.pop("mapa", None) or sugerir_mapeamento(df.columns, df)
     return extrair(df, mapa, **kwargs)[0]
