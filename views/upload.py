@@ -11,6 +11,7 @@ from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
 from parsers import instituicoes, tabular
 from parsers.base import ErroDeLeitura
+from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
 
 PAPEIS = ["data", "descricao", "valor", "entrada", "saida", "categoria", "subcategoria",
@@ -187,6 +188,108 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
         )
     for aviso in avisos[:5]:
         st.caption(f"⚠️ {aviso}")
+
+
+def _aba_mapa(engine) -> None:
+    """Painel do que já foi carregado e do que falta, conta por mês."""
+    c1, c2, _ = st.columns([1, 1.4, 2])
+    meses = c1.selectbox("Período", [6, 12, 24], index=1,
+                         format_func=lambda n: f"últimos {n} meses")
+    incluir_inativas = c2.checkbox("Mostrar contas desativadas", value=False)
+
+    hoje = date.today()
+    competencias, ano, mes = [], hoje.year, hoje.month
+    for _ in range(meses):
+        competencias.append(f"{ano:04d}-{mes:02d}")
+        mes -= 1
+        if mes == 0:
+            ano, mes = ano - 1, 12
+    competencias.reverse()  # mais antigo à esquerda, como num calendário
+    atual = f"{hoje.year:04d}-{hoje.month:02d}"
+
+    with engine.connect() as conn:
+        contas = repo.listar_contas(conn, so_ativas=not incluir_inativas)
+        mapa = repo.cobertura(conn, competencias)
+        mapa_planilha = repo.cobertura_planilha(conn, competencias)
+
+    if not contas:
+        st.warning("Nenhuma conta cadastrada.")
+        return
+
+    cabecalho = "".join(
+        f"<th>{MESES_CURTOS[c[5:7]]}<br><span style='font-weight:400'>{c[2:4]}</span></th>"
+        for c in competencias
+    )
+
+    # a planilha da carga inicial cobre o mês inteiro, de todas as contas, por
+    # isso ela é uma linha à parte e não conta como arquivo faltando
+    celulas_planilha = []
+    for competencia in competencias:
+        dados = mapa_planilha.get(competencia)
+        classe = " class='futuro'" if competencia == atual else ""
+        if dados:
+            celulas_planilha.append(
+                f"<td{classe}><span class='ok'>✓<small>{dados['total']}</small></span></td>"
+            )
+        else:
+            celulas_planilha.append(f"<td{classe}><span class='falta'>·</span></td>")
+    linha_planilha = (
+        "<tr><td class='conta'><span class='nome'>Planilha (carga inicial)</span>"
+        "<span class='tipo'>histórico da Rô</span></td>"
+        + "".join(celulas_planilha) + "</tr>"
+    )
+
+    linhas, faltando = [], 0
+    for conta in contas:
+        celulas = []
+        for competencia in competencias:
+            dados = mapa.get((conta["id"], competencia))
+            if competencia == atual:
+                # mês em curso: o extrato ainda nem fechou, não conta como falta
+                celulas.append(
+                    f"<td class='futuro'><span class='ok'>✓<small>{dados['ativos']}</small>"
+                    "</span></td>" if dados else "<td class='futuro'>em curso</td>"
+                )
+            elif not dados:
+                faltando += 1
+                celulas.append("<td><span class='falta'>·</span></td>")
+            elif dados["ativos"] == 0:
+                celulas.append("<td><span class='dup'>!<small>duplicado</small></span></td>")
+            else:
+                celulas.append(
+                    f"<td><span class='ok'>✓<small>{dados['ativos']}</small></span></td>"
+                )
+        tipo = "cartão" if conta["tipo"] == "cartao" else "conta corrente"
+        marca = "" if conta["ativa"] else " (inativa)"
+        linhas.append(
+            f"<tr><td class='conta'><span class='nome'>{conta['nome']}{marca}</span>"
+            f"<span class='tipo'>{tipo} · {conta['titular']}</span></td>"
+            + "".join(celulas) + "</tr>"
+        )
+
+    st.markdown(
+        f"<div class='mapa'><table><tr><th class='conta'>Origem</th>{cabecalho}</tr>"
+        + linha_planilha + "".join(linhas) + "</table></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<span class='nota'><b style='color:#14532D'>✓</b> carregado, com o número de "
+        "lançamentos &nbsp;·&nbsp; <b>·</b> ainda não carregado &nbsp;·&nbsp; "
+        "<b style='color:#9B1C1C'>!</b> importado, mas tudo caiu em duplicidade "
+        "&nbsp;·&nbsp; hachurado = mês em curso, ainda não fechou<br>"
+        "A planilha de carga inicial cobre todas as contas de uma vez, por isso fica "
+        "numa linha só e não entra na conta do que falta.</span>",
+        unsafe_allow_html=True,
+    )
+
+    if faltando:
+        st.warning(
+            f"Faltam **{faltando}** arquivos nos últimos {meses} meses, "
+            "sem contar o mês em curso.",
+            icon="📋",
+        )
+    else:
+        st.success(f"Nada faltando nos últimos {meses} meses.", icon="✅")
 
 
 def _aba_duplicidades(engine, usuario: dict) -> None:
@@ -413,6 +516,7 @@ def render(engine, usuario: dict) -> None:
 
     abas = st.tabs([
         "📤 Enviar arquivo",
+        "🗓️ O que falta carregar",
         f"🔁 Duplicidades ({pendentes_dup})" if pendentes_dup else "🔁 Duplicidades",
         "🔍 Crítica planilha × extratos",
         "🏦 Contas e cartões",
@@ -421,10 +525,12 @@ def render(engine, usuario: dict) -> None:
     with abas[0]:
         _aba_enviar(engine, usuario)
     with abas[1]:
-        _aba_duplicidades(engine, usuario)
+        _aba_mapa(engine)
     with abas[2]:
-        _aba_critica(engine, usuario)
+        _aba_duplicidades(engine, usuario)
     with abas[3]:
-        _aba_contas(engine)
+        _aba_critica(engine, usuario)
     with abas[4]:
+        _aba_contas(engine)
+    with abas[5]:
         _aba_historico(engine)

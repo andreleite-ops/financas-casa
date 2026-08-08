@@ -453,6 +453,66 @@ def salvar_categoria(engine, *, categoria_id=None, nome, natureza, ativa=True):
         ).inserted_primary_key[0]
 
 
+def cobertura(conn, competencias: list[str]) -> dict[tuple[int, str], dict]:
+    """Quantos lançamentos cada conta tem em cada competência.
+
+    É o que alimenta o mapa de carregamento: responde, para cada conta e cada
+    mês, se o extrato já entrou. Conta lançamentos inativos também — se o mês
+    foi importado e caiu tudo em duplicidade, ele já foi carregado.
+    """
+    if not competencias:
+        return {}
+    consulta = (
+        sa.select(
+            db.transacoes.c.conta_id,
+            db.transacoes.c.competencia,
+            sa.func.count(db.transacoes.c.id).label("total"),
+            sa.func.sum(
+                sa.case((db.transacoes.c.ativo == sa.true(), 1), else_=0)
+            ).label("ativos"),
+        )
+        .where(db.transacoes.c.competencia.in_(competencias))
+        .group_by(db.transacoes.c.conta_id, db.transacoes.c.competencia)
+    )
+    return {
+        (linha.conta_id, linha.competencia): {
+            "total": int(linha.total or 0),
+            "ativos": int(linha.ativos or 0),
+        }
+        for linha in conn.execute(consulta)
+    }
+
+
+def cobertura_planilha(conn, competencias: list[str]) -> dict[str, dict]:
+    """O mesmo mapa, para a planilha de carga inicial.
+
+    Não separa por conta: a planilha cobre um mês inteiro, de todas as contas.
+    Conta os lançamentos independentemente de estarem ativos, porque a linha da
+    planilha é desativada quando o extrato do mesmo período a substitui — e
+    isso não significa que aquele mês deixou de ter sido carregado.
+    """
+    if not competencias:
+        return {}
+    consulta = (
+        sa.select(
+            db.transacoes.c.competencia,
+            sa.func.count(db.transacoes.c.id).label("total"),
+            sa.func.sum(
+                sa.case((db.transacoes.c.ativo == sa.true(), 1), else_=0)
+            ).label("ativos"),
+        )
+        .where(
+            db.transacoes.c.competencia.in_(competencias),
+            db.transacoes.c.origem == "planilha",
+        )
+        .group_by(db.transacoes.c.competencia)
+    )
+    return {
+        linha.competencia: {"total": int(linha.total or 0), "ativos": int(linha.ativos or 0)}
+        for linha in conn.execute(consulta)
+    }
+
+
 def salvar_subcategoria(engine, *, categoria_id: int, nome: str):
     with engine.begin() as conn:
         ordem = (conn.execute(

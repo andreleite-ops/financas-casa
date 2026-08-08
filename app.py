@@ -89,6 +89,13 @@ def main() -> None:
                 "seção entre colchetes.</div>",
                 unsafe_allow_html=True,
             )
+        elif estado["motivo"] == "sqlite_local":
+            st.markdown(
+                "<div class='aviso-dev'><b>Base local (SQLite)</b><br>"
+                "Rodando num arquivo local. Serve para testar, mas cada computador "
+                "teria a sua própria base.</div>",
+                unsafe_allow_html=True,
+            )
         elif estado["motivo"] == "falha_conexao":
             st.markdown(
                 "<div class='aviso-dev'><b>Não consegui conectar ao Supabase</b><br>"

@@ -174,11 +174,14 @@ def _url_por_partes() -> str | None:
     )
 
 
+def url_configurada() -> str | None:
+    """A URL que veio dos segredos, ou None se nada foi configurado."""
+    return _segredo("DATABASE_URL") or _url_por_partes()
+
+
 def url_do_banco() -> str:
     """Prioridade: DATABASE_URL -> campos separados -> SQLite local."""
-    url = _segredo("DATABASE_URL")
-    if not url:
-        url = _url_por_partes()
+    url = url_configurada()
     if not url:
         destino = Path(__file__).resolve().parent.parent / "dados" / "financas.db"
         destino.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +200,10 @@ def diagnostico() -> dict:
     """
     url = url_do_banco()
     if url.startswith("sqlite"):
-        return {"ok": False, "motivo": "sem_url", "detalhe": ""}
+        # SQLite pode ser o fallback (nada configurado) ou uma escolha
+        # explicita de quem roda local; sao situacoes diferentes
+        motivo = "sqlite_local" if url_configurada() else "sem_url"
+        return {"ok": False, "motivo": motivo, "detalhe": ""}
     try:
         with get_engine().connect() as conn:
             conn.execute(sa.text("select 1"))

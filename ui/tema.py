@@ -137,6 +137,29 @@ CSS = f"""
   .p-alerta {{ background: {AREIA}; color: {VINHO_ESCURO}; border: 1px solid {VINHO_CLARO};
               font-weight: 700; }}
 
+  /* ==================== mapa de carregamento ==================== */
+  .mapa {{ overflow-x: auto; border: 1px solid {LINHA}; border-radius: 10px;
+          background: {BRANCO}; }}
+  .mapa table {{ border-collapse: collapse; font-size: .82rem; width: 100%; }}
+  .mapa th {{ font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+             color: {CINZA_CLARO}; font-weight: 600; padding: .5rem .45rem;
+             border-bottom: 1px solid {LINHA}; white-space: nowrap; text-align: center; }}
+  .mapa th.conta, .mapa td.conta {{ text-align: left; position: sticky; left: 0;
+             background: {BRANCO}; min-width: 190px; padding-left: .8rem;
+             border-right: 1px solid {LINHA}; }}
+  .mapa td {{ padding: .45rem; text-align: center; border-bottom: 1px solid {AREIA};
+             white-space: nowrap; }}
+  .mapa tr:last-child td {{ border-bottom: 0; }}
+  .mapa .ok {{ color: {BOM}; font-weight: 700; }}
+  .mapa .ok small {{ display: block; color: {CINZA_CLARO}; font-weight: 400;
+             font-size: .66rem; }}
+  .mapa .falta {{ color: {CINZA_CLARO}; }}
+  .mapa .dup {{ color: {CRITICO}; font-weight: 700; }}
+  .mapa td.futuro {{ background: repeating-linear-gradient(
+             135deg, {AREIA_CLARA} 0 4px, {BRANCO} 4px 8px); color: {CINZA_CLARO}; }}
+  .mapa .nome {{ color: {PRETO}; }}
+  .mapa .tipo {{ display: block; font-size: .66rem; color: {CINZA_CLARO}; }}
+
   /* ==================== login ==================== */
   .login-topo {{ text-align: center; margin: 2.5rem 0 1rem; }}
   .login-topo h1 {{ font-size: 2rem !important; margin-bottom: .1rem; color: {VINHO_ESCURO}; }}
