@@ -160,6 +160,24 @@ def url_do_banco() -> str:
     return url
 
 
+def diagnostico() -> dict:
+    """Em que estado esta a conexao — para a barra lateral explicar o problema.
+
+    Separa os dois casos que, vistos de fora, pareciam a mesma coisa: o segredo
+    nao chegou ao app, ou chegou e a conexao falhou.
+    """
+    url = url_do_banco()
+    if url.startswith("sqlite"):
+        return {"ok": False, "motivo": "sem_url", "detalhe": ""}
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(sa.text("select 1"))
+        return {"ok": True, "motivo": "conectado", "detalhe": ""}
+    except Exception as exc:  # senha errada, host errado, rede
+        return {"ok": False, "motivo": "falha_conexao",
+                "detalhe": f"{type(exc).__name__}: {exc}"[:300]}
+
+
 def get_engine():
     global _engine
     if _engine is None:

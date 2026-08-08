@@ -80,13 +80,24 @@ def main() -> None:
         indice = rotulos.index(escolha)
 
         st.divider()
-        if db.url_do_banco().startswith("sqlite"):
+        estado = db.diagnostico()
+        if estado["motivo"] == "sem_url":
             st.markdown(
-                "<div class='aviso-dev'><b>Base local (SQLite)</b><br>Para André e Rô usarem "
-                "de computadores diferentes, configure <code>DATABASE_URL</code> do Supabase "
-                "em <code>.streamlit/secrets.toml</code>.</div>",
+                "<div class='aviso-dev'><b>Base local (SQLite)</b><br>"
+                "O app não recebeu nenhum <code>DATABASE_URL</code>. Confira se o segredo "
+                "foi salvo <b>neste</b> app e se a linha está no topo, antes de qualquer "
+                "seção entre colchetes.</div>",
                 unsafe_allow_html=True,
             )
+        elif estado["motivo"] == "falha_conexao":
+            st.markdown(
+                "<div class='aviso-dev'><b>Não consegui conectar ao Supabase</b><br>"
+                "O <code>DATABASE_URL</code> chegou, mas a conexão falhou — normalmente é "
+                "a senha do banco. Detalhe abaixo.</div>",
+                unsafe_allow_html=True,
+            )
+            with st.expander("Ver o erro"):
+                st.code(estado["detalhe"], language="text")
         st.caption(f"Logado como **{usuario['nome']}**")
         if st.button("Sair", width="stretch"):
             auth.sair()
