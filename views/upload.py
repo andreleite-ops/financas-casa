@@ -129,11 +129,23 @@ def _aba_enviar(engine, usuario: dict) -> None:
                 icon="⚠️",
             )
 
+        # a inversão só faz sentido quando nada no arquivo diz o sinal. Com uma
+        # coluna de tipo mapeada, os dois controles disputam a mesma decisão e
+        # a inversão desfaz o que a coluna acabou de definir
+        tem_coluna_de_sinal = bool(mapa.get("tipo") or mapa.get("entrada") or mapa.get("saida"))
         inverter = st.checkbox(
             "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",
             value=False,
-            help="Marque se, na prévia abaixo, as compras aparecerem como ENTRADA.",
+            disabled=tem_coluna_de_sinal,
+            help=(
+                "Desativado porque o próprio arquivo já diz o que é despesa e o que é receita, "
+                "na coluna mapeada acima — inverter aqui desfaria isso."
+                if tem_coluna_de_sinal
+                else "Marque se, na prévia abaixo, as compras aparecerem como ENTRADA."
+            ),
         )
+        if tem_coluna_de_sinal:
+            inverter = False
 
         # prévia do resultado, não do arquivo: mostra como cada linha vai ficar
         # depois de lida. É o único jeito de ver um erro de sinal ou de coluna
