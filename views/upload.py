@@ -98,10 +98,23 @@ def _aba_enviar(engine, usuario: dict) -> None:
         for i, papel in enumerate(PAPEIS):
             atual = sugestao.get(papel)
             indice = opcoes.index(atual) if atual in opcoes else 0
+            # a sugestão entra na chave do campo de propósito: sem isso o
+            # Streamlit restaura a escolha da vez anterior para o mesmo arquivo
+            # e a detecção nova é silenciosamente ignorada — foi assim que uma
+            # planilha voltou a ser lida sem a coluna de despesa/receita
             escolha = colunas_ui[i % 3].selectbox(
-                ROTULOS_PAPEL[papel], opcoes, index=indice, key=f"{chave_estado}:{papel}"
+                ROTULOS_PAPEL[papel], opcoes, index=indice,
+                key=f"{chave_estado}:{papel}:{atual}",
             )
             mapa[papel] = None if escolha == "— nenhuma —" else escolha
+
+        if not mapa.get("tipo") and not mapa.get("entrada") and not mapa.get("saida"):
+            st.warning(
+                "Nenhuma coluna indica se a linha é **despesa ou receita**. Se a planilha "
+                "tiver uma coluna com DESP/REC (ou D/C), escolha-a em **Tipo (D/C)** — sem "
+                "isso tudo entra com o mesmo sinal e os totais saem errados.",
+                icon="⚠️",
+            )
 
         inverter = st.checkbox(
             "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",

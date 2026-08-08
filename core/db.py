@@ -73,6 +73,10 @@ transacoes = sa.Table(
     sa.Column("ativo", sa.Boolean, nullable=False, server_default=sa.true()),
     sa.Column("observacao", sa.Text),
     sa.Column("classificado_por", sa.String(20)),
+    # como a origem classificou, no vocabulario dela ("CONTRIBUICAO MENSAL").
+    # Guardado mesmo quando nao casa com o plano de contas: e o que permite o
+    # de-para depois, sem precisar reimportar o arquivo.
+    sa.Column("classificacao_origem", sa.String(120)),
     sa.Column("criado_em", sa.DateTime, server_default=sa.func.now()),
 )
 
@@ -98,6 +102,20 @@ metas = sa.Table(
     sa.Column("categoria_id", sa.Integer, sa.ForeignKey("categorias.id"), nullable=False),
     sa.Column("percentual", sa.Float, nullable=False),
     sa.UniqueConstraint("ano", "categoria_id", name="uq_meta_ano_categoria"),
+)
+
+# traducao do vocabulario da origem para o plano de contas: a planilha da casa
+# usa rotulos proprios ("INFRA", "CONTRIBUICAO MENSAL") que nao existem no
+# plano. Mapeados uma vez aqui, valem para o historico ja importado e para as
+# proximas importacoes.
+de_para = sa.Table(
+    "de_para", metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("rotulo", sa.String(120), nullable=False, unique=True),
+    sa.Column("categoria_id", sa.Integer, sa.ForeignKey("categorias.id"), nullable=False),
+    sa.Column("subcategoria_id", sa.Integer, sa.ForeignKey("subcategorias.id")),
+    sa.Column("criado_por", sa.String(20)),
+    sa.Column("criado_em", sa.DateTime, server_default=sa.func.now()),
 )
 
 config = sa.Table(
@@ -241,5 +259,33 @@ def resetar_engine() -> None:
     _engine = None
 
 
+def _migrar_colunas(engine) -> list[str]:
+    """Acrescenta colunas novas em tabelas que ja existem.
+
+    `create_all` so cria tabelas que faltam; ele nao altera as existentes. Sem
+    isso, uma coluna nova quebraria a base ja em uso — e recriar a base nao e
+    opcao quando ela guarda o historico da familia. So adiciona colunas
+    opcionais, que e a mudanca segura de fazer sozinho.
+    """
+    inspetor = sa.inspect(engine)
+    aplicadas = []
+    for tabela in metadata.sorted_tables:
+        if not inspetor.has_table(tabela.name):
+            continue
+        existentes = {c["name"] for c in inspetor.get_columns(tabela.name)}
+        for coluna in tabela.columns:
+            if coluna.name in existentes or not coluna.nullable:
+                continue
+            tipo = coluna.type.compile(engine.dialect)
+            with engine.begin() as conn:
+                conn.execute(
+                    sa.text(f'ALTER TABLE {tabela.name} ADD COLUMN "{coluna.name}" {tipo}')
+                )
+            aplicadas.append(f"{tabela.name}.{coluna.name}")
+    return aplicadas
+
+
 def criar_schema(engine=None) -> None:
-    metadata.create_all(engine or get_engine())
+    engine = engine or get_engine()
+    metadata.create_all(engine)
+    _migrar_colunas(engine)

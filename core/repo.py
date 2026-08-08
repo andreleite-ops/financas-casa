@@ -207,6 +207,13 @@ def importar(
             status, confianca = "pendente", None
             if lan.categoria_hint:
                 categoria_id = cats_idx.get(str(lan.categoria_hint).strip().casefold())
+                # a mesma guarda de natureza que vale para as regras: dinheiro
+                # que entrou não pode cair numa categoria de despesa só porque
+                # a origem rotulou assim. Sem isso, um erro de sinal na leitura
+                # vira um total de despesas negativo, sem nada apontar a causa.
+                natureza_esperada = "receita" if lan.valor_centavos > 0 else "despesa"
+                if categoria_id and naturezas.get(categoria_id) != natureza_esperada:
+                    categoria_id = None
                 if categoria_id and lan.subcategoria_hint:
                     subcategoria_id = subs_idx.get(
                         (categoria_id, str(lan.subcategoria_hint).strip().casefold())
@@ -258,6 +265,8 @@ def importar(
                 "ativo": decisao.entra_ativo,
                 "observacao": observacao,
                 "classificado_por": None,
+                "classificacao_origem": (str(lan.categoria_hint).strip()
+                                         if lan.categoria_hint else None),
             }
             posicao = len(linhas)
             linhas.append(registro)
