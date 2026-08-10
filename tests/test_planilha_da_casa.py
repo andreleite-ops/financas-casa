@@ -11,6 +11,7 @@ trava o resultado.
 from __future__ import annotations
 
 import io
+from datetime import date
 
 import pandas as pd
 
@@ -238,3 +239,73 @@ def test_a_venda_do_apartamento_e_do_andre(engine):
         }
 
     assert por_pessoa["André"] == 2_000_000 + 52_000_000
+
+
+# ---------------------------------------------------------------------------
+# data do Excel lida como texto: "2026-01-05 00:00:00"
+# ---------------------------------------------------------------------------
+def test_data_do_excel_com_hora_nao_troca_dia_por_mes():
+    """Sem a coluna MÊS/ANO, errar a data é errar o mês do relatório inteiro."""
+    from parsers.base import ler_data
+
+    # 05/01: dia e mês ambos <= 12, o caso em que a inversão passa despercebida
+    assert ler_data("2026-01-05 00:00:00") == date(2026, 1, 5)
+    assert ler_data("2026-12-05 00:00:00") == date(2026, 12, 5)
+    assert ler_data("2026-11-05T00:00:00") == date(2026, 11, 5)
+    assert ler_data("2026-01-20 00:00:00") == date(2026, 1, 20)
+    # e o formato brasileiro continua sendo dia primeiro
+    assert ler_data("05/01/2026") == date(2026, 1, 5)
+
+
+def test_planilha_sem_coluna_de_competencia_usa_a_data(engine):
+    """O arquivo novo tem só DATA: o mês do relatório sai dela."""
+    lancamentos = pd.DataFrame(
+        [
+            ("2026-01-05 00:00:00", "DESP", "PADARIA", "1000", "ALIMENTAÇÃO"),
+            ("2026-12-05 00:00:00", "REC", "SALARIO", "20000", "TAG"),
+        ],
+        columns=["DATA", "CATEGORIA", "BENEFICIÁRIO", "VALOR", "CLASSIFICAÇÃO"],
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as escritor:
+        lancamentos.to_excel(escritor, sheet_name="Lançamento Despesas e Receitas", index=False)
+
+    df = tabular.carregar_tabela(buffer.getvalue(), "planilha.xlsx")
+    lidos, _ = tabular.extrair(df, tabular.sugerir_mapeamento(df.columns, df), origem="planilha")
+
+    assert {lan.competencia for lan in lidos} == {"2026-01", "2026-12"}
+
+
+def test_descricao_manda_no_que_foi_o_rotulo_manda_em_de_quem_e(engine):
+    """A venda do apto vinha rotulada TAG: o rótulo não pode virá-la em salário."""
+    lancamentos = pd.DataFrame(
+        [
+            ("2026-04-05 00:00:00", "REC", "VENDA APTO RIO ANDRÉ", "520000", "TAG"),
+            ("2026-04-28 00:00:00", "REC", "SALARIO", "20596.21", "TAG"),
+        ],
+        columns=["DATA", "CATEGORIA", "BENEFICIÁRIO", "VALOR", "CLASSIFICAÇÃO"],
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as escritor:
+        lancamentos.to_excel(escritor, sheet_name="Lançamento Despesas e Receitas", index=False)
+    df = tabular.carregar_tabela(buffer.getvalue(), "planilha.xlsx")
+    lidos, _ = tabular.extrair(df, tabular.sugerir_mapeamento(df.columns, df), origem="planilha")
+    repo.importar(
+        engine, lancamentos=lidos, conta_id=repo.conta_da_planilha(engine),
+        arquivo="planilha.xlsx", origem="planilha", usuario="andre",
+        pessoa_padrao="Rô", usar_ia=False,
+    )
+
+    with engine.connect() as conn:
+        resumo = analytics.resumo(conn, ano=2026)
+        matriz = analytics.receitas_por_pessoa_e_tipo(conn, 2026)
+
+    por_tipo = {linha["tipo"]: linha for linha in matriz["linhas"]}
+    # a descrição diz o que foi: venda de bem, não pró-labore
+    assert por_tipo["Venda de Bens"]["total"] == 52_000_000
+    assert por_tipo["Pró-labore / Salário"]["total"] == 2_059_621
+    # o rótulo diz de quem é: as duas são do André
+    assert {linha["pessoa"] for linha in matriz["linhas"]} == {"André"}
+    # e só o salário vira base do orçamento
+    assert resumo["renda_recorrente"] == 2_059_621
+    assert resumo["receitas_nao_recorrentes"] == 52_000_000

@@ -26,8 +26,8 @@ def render(engine, usuario: dict) -> None:
         metas = repo.listar_metas(conn, ano)
         media = analytics.resumo(conn, ano=ano)
         meses_com_dado = len({c for c in competencias if c.startswith(str(ano))}) or 1
-        # venda de bem fica de fora: um apartamento vendido uma vez não é renda
-        # mensal, e se entrasse aqui deixaria as metas em % frouxas o ano inteiro
+        # venda de bem fica de fora por não se repetir, não por valer menos:
+        # meia dúzia de meses de meta em % não pode se apoiar num ganho único
         renda_media = media["renda_recorrente"] // meses_com_dado
 
     base = c3.number_input(
@@ -41,8 +41,8 @@ def render(engine, usuario: dict) -> None:
     if media["receitas_nao_recorrentes"]:
         st.caption(
             f"Fora da base: {fmt_brl(media['receitas_nao_recorrentes'])} de **venda de bens** "
-            f"em {ano}. O dinheiro entrou e aparece nas Receitas, mas não é renda mensal — "
-            "usá-lo aqui afrouxaria as metas do ano inteiro."
+            f"em {ano} — ganho de verdade, e está lá nas Receitas. Fica fora daqui só por "
+            "não se repetir: uma entrada única não pode definir a meta de todo mês."
         )
 
     st.caption(

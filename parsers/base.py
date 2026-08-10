@@ -53,7 +53,11 @@ class ErroDeLeitura(Exception):
 
 
 _DATA_BR = re.compile(r"^\s*(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\s*$")
-_DATA_ISO = re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$")
+# A hora no fim vem do Excel: uma coluna de data lida como texto sai
+# "2026-01-05 00:00:00". Sem aceitar esse rabicho, a linha caia no dateparser
+# generico, que com dayfirst=True le "2026-01-05" como 1o de maio — e o mes do
+# relatorio inteiro sai trocado sempre que dia e mes sao ambos <= 12.
+_DATA_ISO = re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)?\s*$")
 _MESES = {
     "JAN": 1, "FEV": 2, "MAR": 3, "ABR": 4, "MAI": 5, "JUN": 6,
     "JUL": 7, "AGO": 8, "SET": 9, "OUT": 10, "NOV": 11, "DEZ": 12,

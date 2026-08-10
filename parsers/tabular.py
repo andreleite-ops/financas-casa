@@ -60,7 +60,9 @@ def _parece_coluna_de_sinal(valores) -> bool:
     todo gasto entraria como receita — por isso vale olhar o conteúdo.
     """
     amostra = [str(v).strip() for v in valores if str(v).strip()][:60]
-    if len(amostra) < 3:
+    # duas linhas ja bastam: numa planilha curta, exigir tres fazia a coluna
+    # "CATEGORIA" ser lida pelo nome e todo gasto entrar como receita
+    if len(amostra) < 2:
         return False
     reconhecidos = sum(1 for v in amostra if marca_de_sinal(v) is not None)
     return reconhecidos / len(amostra) >= 0.8

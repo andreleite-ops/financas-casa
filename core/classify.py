@@ -92,35 +92,52 @@ def classificar_local(
     "BIOS", "ALUGUEL"). Na planilha da casa a fonte de renda mora ali, nao na
     descricao: a linha diz "SALARIO" e so o rotulo conta que e da TAG, do
     Andre. Sem olhar o rotulo, toda receita ficaria com o dono da conta.
+
+    A descricao e olhada primeiro, e o rotulo so depois que nenhuma regra casou
+    com ela. O rotulo e uma gaveta larga — a venda do apartamento esta marcada
+    como "TAG" porque foi dinheiro do Andre, mas a descricao diz "VENDA APTO".
+    Deixar o rotulo ganhar transformaria meio milhao de uma vez em salario.
     """
     descricao_norm = normalizar(descricao)
     chave = chave_estabelecimento(descricao)
     rotulo_norm = normalizar(rotulo_origem) if rotulo_origem else ""
     natureza_esperada = natureza_hint or ("receita" if valor_centavos > 0 else "despesa")
 
-    for regra in regras:
-        onde = None
-        if _casa(regra, descricao_norm, chave):
-            onde = "descrição"
-        elif rotulo_norm and _casa(regra, rotulo_norm, rotulo_norm):
-            onde = "rótulo da origem"
-        if onde is None:
-            continue
-        if naturezas.get(regra["categoria_id"]) != natureza_esperada:
-            continue  # guarda de natureza
-        status = "auto_memoria" if regra["origem"] == "aprendida" else "auto_regra"
-        return Resultado(
-            categoria_id=regra["categoria_id"],
-            subcategoria_id=regra["subcategoria_id"],
-            pessoa=regra["pessoa"],
-            status=status,
-            confianca=1.0 if status == "auto_memoria" else 0.9,
-            explicacao=(
-                ("memória: " if status == "auto_memoria" else "regra: ")
-                + f"{regra['padrao']} ({onde})"
-            ),
-        )
-    return Resultado()
+    def _procurar(texto: str, chave_busca: str, onde: str) -> Resultado | None:
+        for regra in regras:
+            if not _casa(regra, texto, chave_busca):
+                continue
+            if naturezas.get(regra["categoria_id"]) != natureza_esperada:
+                continue  # guarda de natureza
+            status = "auto_memoria" if regra["origem"] == "aprendida" else "auto_regra"
+            return Resultado(
+                categoria_id=regra["categoria_id"],
+                subcategoria_id=regra["subcategoria_id"],
+                pessoa=regra["pessoa"],
+                status=status,
+                confianca=1.0 if status == "auto_memoria" else 0.9,
+                explicacao=(
+                    ("memória: " if status == "auto_memoria" else "regra: ")
+                    + f"{regra['padrao']} ({onde})"
+                ),
+            )
+        return None
+
+    por_descricao = _procurar(descricao_norm, chave, "descrição")
+    por_rotulo = _procurar(rotulo_norm, rotulo_norm, "rótulo da origem") if rotulo_norm else None
+
+    achado = por_descricao or por_rotulo
+    if achado is None:
+        return Resultado()
+
+    # a descricao diz o que foi; o rotulo, de quem e. "SALARIO" com rotulo
+    # "TAG" entra em Pro-labore pela descricao e como do Andre pelo rotulo —
+    # e a regra do salario, sozinha, nao teria dono nenhum.
+    if achado.pessoa is None:
+        outro = por_rotulo if achado is por_descricao else por_descricao
+        if outro is not None and outro.pessoa:
+            achado.pessoa = outro.pessoa
+    return achado
 
 
 def classificar(conn, descricao: str, valor_centavos: int) -> Resultado:

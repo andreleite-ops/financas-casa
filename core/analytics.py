@@ -18,11 +18,12 @@ from . import db
 
 CATEGORIA_POUPANCA = "Poupança & Investimentos"
 
-# Vender um bem nao e ganhar dinheiro, e trocar patrimonio por saldo: o
-# apartamento virou dinheiro, e a casa continua com o mesmo tanto. Entra nos
-# totais, porque o dinheiro entrou mesmo, mas fica de fora da renda que serve
-# de base para o orcamento — senao um apartamento vendido uma vez viraria
-# "renda mensal" e todas as metas em % ficariam frouxas o ano inteiro.
+# O apartamento veio de heranca: e ganho de verdade, patrimonio que a casa nao
+# tinha e passou a ter. Entra nas receitas, com todas as letras. O que ele nao
+# e: mensal. Por isso fica de fora da renda que serve de base para o orcamento
+# — meio milhao que acontece uma vez nao pode virar "renda do mes" e afrouxar
+# todas as metas em % pelo ano inteiro. O criterio aqui e recorrencia, nao
+# merito: o dinheiro e tao ganho quanto o salario, so nao se repete.
 SUBCATEGORIAS_NAO_RECORRENTES = ("Venda de Bens",)
 
 
