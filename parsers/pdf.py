@@ -135,3 +135,42 @@ def ler(conteudo: bytes, nome_arquivo: str = "", **kwargs) -> list[Lancamento]:
     senha = kwargs.pop("senha", None)
     texto = texto_do_pdf(conteudo, senha=senha)
     return extrair_linhas(texto, **kwargs)[0]
+
+
+# uma linha que tem data no começo e valor no fim é candidata a lançamento,
+# mesmo que o formato exato não case — serve para o diagnóstico apontar
+# "isto parecia lançamento e eu deixei passar"
+_PARECE_LANCAMENTO = re.compile(
+    rf"^\s*\d{{1,2}}[/-]\d{{1,2}}.*({_MOEDA})\s*[DC]?\s*$"
+)
+
+
+def diagnosticar(conteudo: bytes, senha: str | None = None, **kwargs) -> dict:
+    """O que eu li deste PDF, linha por linha — para quando o layout é novo.
+
+    Um leitor que devolve zero lançamentos e nada mais não deixa ninguém
+    avançar: não dá para saber se o PDF é imagem, se a senha está errada, se o
+    layout mudou ou se o banco escreve a data de outro jeito. Aqui sai o texto
+    cru, o que foi reconhecido e o que passou perto e ficou de fora — que é
+    exatamente o que preciso ver para ensinar o leitor a ler o banco novo.
+    """
+    texto = texto_do_pdf(conteudo, senha=senha)
+    linhas = [linha.strip() for linha in texto.splitlines() if linha.strip()]
+    lancamentos, ignoradas = extrair_linhas(texto, **kwargs)
+
+    reconhecidas = {  # as linhas que viraram lançamento, para saber o resto
+        f"{lan.data:%d/%m}|{lan.descricao[:20]}" for lan in lancamentos
+    }
+    quase = [
+        linha for linha in linhas
+        if _PARECE_LANCAMENTO.match(linha)
+        and not LINHA_LANCAMENTO.match(linha)
+    ]
+    return {
+        "linhas_no_pdf": len(linhas),
+        "lancamentos": lancamentos,
+        "ignoradas": ignoradas,
+        "quase": quase,
+        "amostra": linhas[:40],
+        "reconhecidas": len(reconhecidas),
+    }

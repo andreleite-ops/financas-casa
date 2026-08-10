@@ -24,6 +24,8 @@ def _e_planilha(nome: str) -> bool:
 
 def _ler_tabular_ou_pdf(conteudo: bytes, nome: str, *, tudo_despesa: bool, **kw) -> list[Lancamento]:
     if _e_planilha(nome):
+        # senha só existe para PDF; passar adiante quebraria o leitor tabular
+        kw.pop("senha", None)
         return tabular.ler(conteudo, nome, **kw)
     kw.pop("inverter_sinal", None)
     return leitor_pdf.ler(conteudo, nome, tudo_despesa=tudo_despesa, **kw)
@@ -32,6 +34,7 @@ def _ler_tabular_ou_pdf(conteudo: bytes, nome: str, *, tudo_despesa: bool, **kw)
 def nubank(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     """Cartao e conta do Nubank. No CSV da fatura o gasto vem positivo."""
     if _e_planilha(nome):
+        kw.pop("senha", None)
         df = tabular.carregar_tabela(conteudo, nome)
         colunas = set(df.columns)
         if {"date", "title", "amount"} <= colunas:

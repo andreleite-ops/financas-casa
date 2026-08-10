@@ -9,7 +9,7 @@ import streamlit as st
 
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
-from parsers import instituicoes, tabular
+from parsers import instituicoes, pdf, tabular
 from parsers.base import ErroDeLeitura
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
@@ -276,11 +276,23 @@ def _aba_enviar(engine, usuario: dict) -> None:
                       pessoa_padrao=pessoa_arquivo)
         return
 
+    # PDF de banco costuma vir com senha (CPF, data de nascimento, os quatro
+    # primeiros do CNPJ). Sem o campo, o arquivo simplesmente não abria e o
+    # erro dizia "não consegui ler o PDF" sem dizer o porquê
+    senha = None
+    if arquivo.name.lower().endswith(".pdf"):
+        senha = st.text_input(
+            "Senha do PDF (se tiver)", type="password",
+            help="Muitos bancos protegem o extrato. Costuma ser o CPF, a data de "
+                 "nascimento ou os primeiros dígitos do documento.",
+        ) or None
+        _diagnostico_pdf(conteudo, senha, competencia, conta)
+
     if st.button("Processar arquivo", type="primary"):
         try:
             lancamentos = instituicoes.ler_arquivo(
                 parser, conteudo, arquivo.name,
-                competencia=competencia, tipo_conta=conta["tipo"],
+                competencia=competencia, tipo_conta=conta["tipo"], senha=senha,
             )
         except ErroDeLeitura as exc:
             st.error(f"Não consegui ler o arquivo: {exc}")
@@ -290,6 +302,60 @@ def _aba_enviar(engine, usuario: dict) -> None:
             )
             return
         _importar(engine, conta, lancamentos, arquivo.name, usuario, "extrato", competencia, [])
+
+
+def _diagnostico_pdf(conteudo: bytes, senha, competencia, conta) -> None:
+    """Mostra o que o leitor entendeu do PDF antes de gravar qualquer coisa.
+
+    Um leitor que devolve zero lançamentos e mais nada não deixa ninguém
+    avançar: não dá para saber se o PDF é imagem, se a senha está errada, se o
+    layout é novo ou se o banco escreve a data de outro jeito. Aqui aparece o
+    texto cru e o que passou perto e ficou de fora — é o que permite ajustar o
+    leitor para um banco novo sem precisar do arquivo original em mãos.
+    """
+    try:
+        diag = pdf.diagnosticar(
+            conteudo, senha=senha, competencia=competencia,
+            tudo_despesa=conta["tipo"] == "cartao",
+        )
+    except ErroDeLeitura as exc:
+        st.error(f"**Não abri o PDF:** {exc}", icon="🔒")
+        st.caption(
+            "Se ele pede senha, preencha o campo acima. Se for digitalizado (só imagem), "
+            "não há texto para ler — baixe a versão CSV/Excel no site do banco."
+        )
+        return
+
+    lidos = len(diag["lancamentos"])
+    if lidos:
+        st.success(f"Reconheci **{lidos} lançamentos** em {diag['linhas_no_pdf']} linhas de texto.")
+    else:
+        st.error(
+            f"**Nenhum lançamento reconhecido** em {diag['linhas_no_pdf']} linhas. "
+            "O layout deste banco ainda não é conhecido.",
+            icon="🔍",
+        )
+
+    with st.expander("O que eu li deste PDF", expanded=not lidos):
+        if diag["quase"]:
+            st.markdown(
+                f"**{len(diag['quase'])} linhas pareciam lançamento e ficaram de fora.** "
+                "São elas que dizem o que falta ensinar ao leitor:"
+            )
+            st.code("\n".join(diag["quase"][:15]), language="text")
+        if diag["ignoradas"]:
+            st.markdown(
+                f"**{len(diag['ignoradas'])} linhas foram descartadas de propósito** "
+                "(total, saldo, limite, vencimento):"
+            )
+            st.code("\n".join(diag["ignoradas"][:8]), language="text")
+        st.markdown("**Texto cru do PDF, como o leitor recebe:**")
+        st.code("\n".join(diag["amostra"]), language="text")
+        st.caption(
+            "Para eu ensinar o leitor a ler este banco, copie daqui umas 10 linhas de "
+            "lançamento e o cabeçalho. **Troque os valores** antes de mandar — o "
+            "repositório é público."
+        )
 
 
 def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, competencia,

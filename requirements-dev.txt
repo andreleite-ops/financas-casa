@@ -1,0 +1,6 @@
+# Dependências só de teste. O app em produção não precisa delas — o
+# requirements.txt fica enxuto de propósito, porque é ele que o Streamlit
+# Cloud instala a cada deploy.
+-r requirements.txt
+pytest>=8.0
+reportlab>=4.0     # gera PDFs de fatura nos testes de leitura
