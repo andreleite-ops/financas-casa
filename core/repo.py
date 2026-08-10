@@ -444,6 +444,29 @@ def reclassificar(
             classify.aprender(conn, linha.descricao, categoria_id, subcategoria_id, usuario, pessoa)
 
 
+def excluir_transacao(engine, transacao_id: int) -> bool:
+    """Apaga um lancamento avulso.
+
+    Existe para o caso em que duas fontes descrevem o mesmo dinheiro com
+    valores diferentes — a anotacao da casa ficou defasada em relacao ao
+    contracheque, por exemplo. Nenhuma regra automatica deveria escolher entre
+    as duas; quem decide e quem conhece o caso.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            sa.delete(db.duplicidades).where(
+                sa.or_(
+                    db.duplicidades.c.transacao_nova_id == transacao_id,
+                    db.duplicidades.c.transacao_existente_id == transacao_id,
+                )
+            )
+        )
+        resultado = conn.execute(
+            sa.delete(db.transacoes).where(db.transacoes.c.id == transacao_id)
+        )
+    return resultado.rowcount > 0
+
+
 def fila_pendentes(conn, limite: int = 200) -> list[dict]:
     consulta = (
         sa.select(
@@ -478,6 +501,7 @@ def buscar_transacoes(conn, termo: str = "", limite: int = 100) -> list[dict]:
             db.transacoes.c.status,
             db.transacoes.c.categoria_id,
             db.transacoes.c.subcategoria_id,
+            db.transacoes.c.classificacao_origem,
             db.categorias.c.nome.label("categoria"),
             db.subcategorias.c.nome.label("subcategoria"),
             db.contas.c.nome.label("conta"),

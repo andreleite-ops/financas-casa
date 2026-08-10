@@ -60,7 +60,15 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                 index=db.PESSOAS.index(item["pessoa"]) if item.get("pessoa") in db.PESSOAS else 2,
                 key=f"{prefixo}pes{item['id']}",
             )
-            b1, b2 = st.columns([1, 2.4])
+            b1, b2, b3 = st.columns([1, 1.9, 0.8])
+            if b3.button("Excluir", key=f"{prefixo}del{item['id']}", width="stretch",
+                         help="Apaga este lançamento. Use quando duas fontes descreverem "
+                              "o mesmo dinheiro e você quiser ficar com uma só."):
+                repo.excluir_transacao(engine, item["id"])
+                st.session_state["msg_classificacao"] = (
+                    f"Lançamento de {item['data']:%d/%m/%Y} — {item['descricao'][:40]} — excluído."
+                )
+                st.rerun()
             if b1.button("Salvar", key=f"{prefixo}ok{item['id']}", type="primary",
                          width="stretch"):
                 if categoria["id"] is None:
@@ -127,8 +135,9 @@ def render(engine, usuario: dict) -> None:
         else:
             st.caption(f"{len(achados)} lançamento(s). Qualquer um pode ser reclassificado.")
             for item in achados:
-                atual = (
-                    f"hoje: {item['categoria']}"
+                marca = (f"origem: {item['classificacao_origem']} · "
+                         if item.get("classificacao_origem") else "")
+                atual = marca + (
                     + (f" › {item['subcategoria']}" if item["subcategoria"] else "")
                     + f" ({item['status'].replace('_', ' ')})"
                     if item["categoria"]
