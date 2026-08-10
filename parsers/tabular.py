@@ -119,9 +119,25 @@ _MESES_ABREV = {"jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
                 "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12}
 
 
+# o Excel guarda "jan/26" como data de verdade; ao ler vira 2026-01-01 00:00:00
+_MES_ISO = re.compile(r"^\s*(\d{4})-(\d{2})-\d{2}")
+
+
 def mes_da_coluna(nome) -> str | None:
-    """Devolve 'AAAA-MM' se o cabecalho for um mes; None caso contrario."""
+    """Devolve 'AAAA-MM' se o cabecalho for um mes; None caso contrario.
+
+    Aceita tanto o texto ("jan/26") quanto a data que o Excel guarda por tras
+    dele — na planilha aparece "jan/26", mas o valor gravado e 01/01/2026, e e
+    esse que chega aqui.
+    """
+    if hasattr(nome, "year") and hasattr(nome, "month"):
+        return f"{nome.year:04d}-{nome.month:02d}"
+
     txt = sem_acento(str(nome)).strip()
+    m = _MES_ISO.match(txt)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}"
+
     m = _MES_COLUNA.search(txt)
     if m:
         mes = _MESES_ABREV[m.group(1).lower()]
@@ -204,16 +220,27 @@ def _ler_csv(conteudo: bytes) -> pd.DataFrame:
 
 def _achar_cabecalho(df: pd.DataFrame) -> pd.DataFrame:
     """Banco costuma jogar titulo e dados do cliente antes do cabecalho real."""
-    if sugerir_mapeamento(df.columns).get("data"):
+    if sugerir_mapeamento(df.columns).get("data") or len(colunas_de_mes(df.columns)) >= 3:
         return df
     limite = min(len(df), 25)
     for i in range(limite):
-        linha = [str(v) for v in df.iloc[i].tolist()]
-        if sugerir_mapeamento(linha).get("data") and any(
+        bruta = df.iloc[i].tolist()
+        linha = [str(v) for v in bruta]
+        # cabecalho comum: tem uma coluna de data e outra de valor/descricao
+        parece_cabecalho = sugerir_mapeamento(linha).get("data") and any(
             sugerir_mapeamento(linha).get(p) for p in ("valor", "saida", "entrada", "descricao")
-        ):
+        )
+        # cabecalho de tabela cruzada: varias celulas sao meses. Aqui usamos os
+        # valores originais, nao o texto, porque o Excel guarda "jan/26" como
+        # data e converte-la para string perderia o reconhecimento
+        if not parece_cabecalho:
+            parece_cabecalho = len(colunas_de_mes(bruta)) >= 3
+        if parece_cabecalho:
             novo = df.iloc[i + 1:].copy()
-            novo.columns = [str(v).strip() or f"col_{j}" for j, v in enumerate(linha)]
+            novo.columns = [
+                (v if hasattr(v, "year") else str(v).strip()) or f"col_{j}"
+                for j, v in enumerate(bruta)
+            ]
             return novo.reset_index(drop=True)
     return df
 

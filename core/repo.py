@@ -160,6 +160,7 @@ def importar(
     origem: str = "extrato",
     competencia: str | None = None,
     usar_ia: bool = True,
+    pessoa_padrao: str | None = None,
 ) -> dict:
     """Grava um lote de lancamentos aplicando dedup e classificacao.
 
@@ -182,7 +183,9 @@ def importar(
         conta = conta_por_id(conn, conta_id)
         if conta is None:
             raise ValueError(f"conta {conta_id} não existe")
-        pessoa_padrao = conta["titular"]
+        # quem escolhe manda; senão vale o titular da conta. A planilha de
+        # carga inicial fica numa conta do casal, mas pode ser de uma pessoa só
+        pessoa_padrao = _pessoa_valida(pessoa_padrao, conta["titular"])
 
         upload_id = conn.execute(
             sa.insert(db.uploads).values(

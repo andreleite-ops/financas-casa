@@ -73,6 +73,16 @@ def _aba_enviar(engine, usuario: dict) -> None:
         "Competência", _competencias_sugeridas(),
         help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a própria data.",
     )
+    if e_planilha:
+        # planilha de receitas costuma ser de uma pessoa só; a da casa, do casal.
+        # Sem isso, tudo entraria como "Casal" e o relatório por pessoa não
+        # separaria o que é de quem
+        pessoa_arquivo = st.radio(
+            "De quem é este arquivo", db.PESSOAS, index=2, horizontal=True,
+            help="Vale para as linhas que não tiverem uma coluna de pessoa.",
+        )
+    else:
+        pessoa_arquivo = None
 
     arquivo = st.file_uploader(
         "Arquivo", type=["pdf", "csv", "xlsx", "xlsm", "xls", "txt"],
@@ -243,7 +253,8 @@ def _aba_enviar(engine, usuario: dict) -> None:
                 st.error(f"Não consegui ler: {exc}")
                 return
             _importar(engine, conta, lancamentos, arquivo.name, usuario,
-                      "planilha" if e_planilha else "extrato", competencia, avisos)
+                      "planilha" if e_planilha else "extrato", competencia, avisos,
+                      pessoa_padrao=pessoa_arquivo)
         return
 
     if st.button("Processar arquivo", type="primary"):
@@ -262,7 +273,8 @@ def _aba_enviar(engine, usuario: dict) -> None:
         _importar(engine, conta, lancamentos, arquivo.name, usuario, "extrato", competencia, [])
 
 
-def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, competencia, avisos):
+def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, competencia,
+              avisos, pessoa_padrao=None):
     if not lancamentos:
         st.error(
             "Não encontrei nenhum lançamento no arquivo. Confira se escolheu a conta certa "
@@ -279,6 +291,7 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
             usuario=usuario["nome"],
             origem=origem,
             competencia=competencia,
+            pessoa_padrao=pessoa_padrao,
         )
 
     st.success(f"Arquivo processado: {resumo['lidos']} lançamentos lidos.")
