@@ -215,6 +215,7 @@ def importar(
         regras = classify.carregar_regras(conn)
         naturezas = classify._natureza_por_categoria(conn)
         donos_de_categoria = classify.donos_por_categoria(conn)
+        traducoes = listar_de_para(conn)
         cats_idx, subs_idx = _indice_categorias(conn)
 
         # todo o histórico que pode conflitar vem numa consulta só; as decisões
@@ -246,7 +247,14 @@ def importar(
             categoria_id = subcategoria_id = None
             status, confianca = "pendente", None
             if lan.categoria_hint:
-                categoria_id = cats_idx.get(str(lan.categoria_hint).strip().casefold())
+                rotulo = str(lan.categoria_hint).strip()
+                categoria_id = cats_idx.get(rotulo.casefold())
+                # o rótulo da Rô não existe no plano de contas; o de-para é a
+                # tradução que ele já recebeu uma vez, e que vale daqui pra frente
+                if categoria_id is None and rotulo in traducoes:
+                    traducao = traducoes[rotulo]
+                    categoria_id = traducao["categoria_id"]
+                    subcategoria_id = traducao["subcategoria_id"]
                 # a mesma guarda de natureza que vale para as regras: dinheiro
                 # que entrou não pode cair numa categoria de despesa só porque
                 # a origem rotulou assim. Sem isso, um erro de sinal na leitura
@@ -257,7 +265,7 @@ def importar(
                     "receita" if lan.valor_centavos > 0 else "despesa"
                 )
                 if categoria_id and naturezas.get(categoria_id) != natureza_esperada:
-                    categoria_id = None
+                    categoria_id = subcategoria_id = None
                 if categoria_id and lan.subcategoria_hint:
                     subcategoria_id = subs_idx.get(
                         (categoria_id, str(lan.subcategoria_hint).strip().casefold())
@@ -683,6 +691,108 @@ def atribuir_ao_casal(engine) -> int:
                 .values(pessoa="Casal")
             )
     return len(ids)
+
+
+# --------------------------------------------------------------------------
+# de-para: o vocabulario da Ro traduzido para o plano de contas
+# --------------------------------------------------------------------------
+def rotulos_pendentes(conn) -> list[dict]:
+    """Os rotulos da origem que ainda tem lancamento sem categoria.
+
+    Treze rotulos cobrem os 441 pendentes da carga inicial. Decidir treze vezes
+    e um trabalho de minutos; decidir 441 vezes e um trabalho que nao acontece.
+    """
+    consulta = (
+        sa.select(
+            db.transacoes.c.classificacao_origem.label("rotulo"),
+            sa.func.count().label("quantidade"),
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+        )
+        .where(
+            db.transacoes.c.status == "pendente",
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.classificacao_origem.isnot(None),
+        )
+        .group_by(db.transacoes.c.classificacao_origem)
+        .order_by(sa.func.count().desc())
+    )
+    return [
+        {"rotulo": linha.rotulo, "quantidade": int(linha.quantidade),
+         "total": int(linha.total or 0)}
+        for linha in conn.execute(consulta)
+        if (linha.rotulo or "").strip()
+    ]
+
+
+def listar_de_para(conn) -> dict[str, dict]:
+    """rotulo -> tradução já decidida."""
+    consulta = (
+        sa.select(
+            db.de_para.c.rotulo,
+            db.de_para.c.categoria_id,
+            db.de_para.c.subcategoria_id,
+            db.categorias.c.nome.label("categoria"),
+            db.subcategorias.c.nome.label("subcategoria"),
+        )
+        .select_from(
+            db.de_para.join(db.categorias, db.de_para.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.de_para.c.subcategoria_id == db.subcategorias.c.id)
+        )
+    )
+    return {linha.rotulo: dict(linha._mapping) for linha in conn.execute(consulta)}
+
+
+def salvar_de_para(
+    engine, *, rotulo: str, categoria_id: int, subcategoria_id: int | None, usuario: str,
+) -> int:
+    """Guarda a tradução e aplica nos pendentes daquele rótulo.
+
+    Guardar sem aplicar deixaria o trabalho pela metade, e aplicar sem guardar
+    faria a próxima importação perguntar tudo de novo. Devolve quantos
+    lançamentos saíram da fila.
+    """
+    with engine.begin() as conn:
+        existente = conn.execute(
+            sa.select(db.de_para.c.id).where(db.de_para.c.rotulo == rotulo)
+        ).scalar()
+        valores = dict(
+            categoria_id=categoria_id, subcategoria_id=subcategoria_id, criado_por=usuario
+        )
+        if existente:
+            conn.execute(sa.update(db.de_para).where(db.de_para.c.id == existente).values(**valores))
+        else:
+            conn.execute(sa.insert(db.de_para).values(rotulo=rotulo, **valores))
+
+        # a guarda de natureza vale aqui como em todo o resto: um rótulo de
+        # despesa não pode levar para lá o dinheiro que entrou
+        natureza = conn.execute(
+            sa.select(db.categorias.c.natureza).where(db.categorias.c.id == categoria_id)
+        ).scalar()
+        dono = classify.donos_por_categoria(conn).get(categoria_id)
+
+        condicoes = [
+            db.transacoes.c.status == "pendente",
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.classificacao_origem == rotulo,
+            db.transacoes.c.valor_centavos > 0 if natureza == "receita"
+            else db.transacoes.c.valor_centavos < 0,
+        ]
+        atualizacao = dict(
+            categoria_id=categoria_id, subcategoria_id=subcategoria_id,
+            status="manual", confianca=1.0, classificado_por=usuario,
+        )
+        if dono:
+            atualizacao["pessoa"] = dono
+        resultado = conn.execute(
+            sa.update(db.transacoes).where(*condicoes).values(**atualizacao)
+        )
+    return resultado.rowcount
+
+
+def apagar_de_para(engine, rotulo: str) -> None:
+    """Desfaz a tradução. Não mexe no que já foi classificado por ela."""
+    with engine.begin() as conn:
+        conn.execute(sa.delete(db.de_para).where(db.de_para.c.rotulo == rotulo))
 
 
 def excluir_transacao(engine, transacao_id: int) -> bool:

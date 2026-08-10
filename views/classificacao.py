@@ -91,6 +91,85 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
             b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")
 
 
+def _aba_de_para(engine, usuario: dict, plano) -> None:
+    """Traduz o vocabulário da Rô para o plano de contas, um rótulo por vez.
+
+    Treze rótulos cobrem os 441 pendentes da carga inicial. Decidir treze vezes
+    é trabalho de minutos; decidir 441 vezes é trabalho que não acontece — e a
+    tradução fica guardada, então a próxima importação já entra classificada.
+    """
+    with engine.connect() as conn:
+        rotulos = repo.rotulos_pendentes(conn)
+        traduzidos = repo.listar_de_para(conn)
+
+    st.caption(
+        "A Rô classifica com o vocabulário dela — CUIDADOS PESSOAIS, INFRA, TAXAS. "
+        "Aqui cada rótulo é traduzido **uma vez** para o plano de contas, e a tradução "
+        "vale para todos os lançamentos dele e para as próximas importações."
+    )
+
+    if traduzidos:
+        with st.expander(f"Traduções já feitas ({len(traduzidos)})"):
+            for rotulo, traducao in sorted(traduzidos.items()):
+                linha, botao = st.columns([5, 1])
+                destino = traducao["categoria"] + (
+                    f" › {traducao['subcategoria']}" if traducao["subcategoria"] else ""
+                )
+                linha.markdown(f"**{rotulo}** → {destino}")
+                if botao.button("Desfazer", key=f"dp_del_{rotulo}"):
+                    repo.apagar_de_para(engine, rotulo)
+                    st.rerun()
+            st.caption(
+                "Desfazer só apaga a tradução: o que já foi classificado por ela continua "
+                "como está, e pode ser corrigido na fila ou na busca."
+            )
+
+    if not rotulos:
+        st.success("Nenhum rótulo pendente de tradução.", icon="✅")
+        return
+
+    st.markdown(f"### {len(rotulos)} rótulos a traduzir")
+    for item in rotulos:
+        rotulo = item["rotulo"]
+        with st.container(border=True):
+            esquerda, direita = st.columns([1.4, 2.6])
+            esquerda.markdown(
+                f"<span class='pill p-alerta'>{rotulo}</span><br>"
+                f"<span class='nota'>{item['quantidade']} lançamentos · "
+                f"{fmt_brl(abs(item['total']))}</span>",
+                unsafe_allow_html=True,
+            )
+            with direita:
+                # o sinal do total diz o lado: rótulo de saída não pode virar receita
+                natureza = "receita" if item["total"] > 0 else "despesa"
+                categorias = [c for c in plano if c["natureza"] == natureza and c["ativa"]]
+                c1, c2, c3 = st.columns([1.4, 1.4, 0.8])
+                categoria = c1.selectbox(
+                    "Vai para", [ESCOLHER, *categorias], format_func=lambda c: c["nome"],
+                    key=f"dp_cat_{rotulo}",
+                )
+                subs = (
+                    [s for s in categoria["subcategorias"] if s["ativa"]]
+                    if categoria and categoria["id"] else []
+                )
+                opcoes = [SEM_SUB, *[s["nome"] for s in subs]]
+                sub_nome = c2.selectbox("Subcategoria", opcoes, key=f"dp_sub_{rotulo}")
+                if c3.button("Aplicar", key=f"dp_ok_{rotulo}", type="primary",
+                             width="stretch"):
+                    if not categoria or categoria["id"] is None:
+                        st.warning("Escolha a categoria antes de aplicar.")
+                    else:
+                        sub_id = next((s["id"] for s in subs if s["nome"] == sub_nome), None)
+                        aplicados = repo.salvar_de_para(
+                            engine, rotulo=rotulo, categoria_id=categoria["id"],
+                            subcategoria_id=sub_id, usuario=usuario["nome"],
+                        )
+                        st.session_state["msg_classificacao"] = (
+                            f"“{rotulo}” traduzido: {aplicados} lançamento(s) classificados."
+                        )
+                        st.rerun()
+
+
 def _listar(engine, usuario, fila, plano) -> None:
     """Doze por vez, e não quarenta.
 
@@ -161,9 +240,16 @@ def render(engine, usuario: dict) -> None:
             st.rerun()
 
     total_pendente = sum(por_mes.values())
-    aba_fila, aba_busca = st.tabs([
-        f"📌 Fila de pendências ({total_pendente})", "🔎 Reclassificar qualquer lançamento"
+    with engine.connect() as conn:
+        rotulos = repo.rotulos_pendentes(conn)
+    aba_de_para, aba_fila, aba_busca = st.tabs([
+        f"🔁 De-para de rótulos ({len(rotulos)})",
+        f"📌 Fila de pendências ({total_pendente})",
+        "🔎 Reclassificar qualquer lançamento",
     ])
+
+    with aba_de_para:
+        _aba_de_para(engine, usuario, plano)
 
     with aba_fila:
         if not total_pendente:
