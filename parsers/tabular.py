@@ -106,6 +106,84 @@ def sugerir_mapeamento(colunas, amostra=None) -> dict[str, str | None]:
     return mapa
 
 
+# cabecalho de coluna que e um mes: "jan/26", "jan-26", "01/2026", "jan/2026".
+# Busca em vez de casar a string inteira, porque o cabecalho costuma trazer
+# anotacao junto — "dez/25 - (Antecip.)" e um mes tanto quanto "dez/25", e
+# perde-lo significaria perder a coluna inteira de valores.
+_MES_COLUNA = re.compile(
+    r"\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[/\-. ]?(\d{2,4})\b",
+    re.IGNORECASE,
+)
+_MES_NUMERICO = re.compile(r"^\s*(0?[1-9]|1[0-2])[/\-](\d{2,4})\s*$")
+_MESES_ABREV = {"jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+                "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12}
+
+
+def mes_da_coluna(nome) -> str | None:
+    """Devolve 'AAAA-MM' se o cabecalho for um mes; None caso contrario."""
+    txt = sem_acento(str(nome)).strip()
+    m = _MES_COLUNA.search(txt)
+    if m:
+        mes = _MESES_ABREV[m.group(1).lower()]
+        ano = int(m.group(2))
+    else:
+        m = _MES_NUMERICO.match(txt)
+        if not m:
+            return None
+        mes, ano = int(m.group(1)), int(m.group(2))
+    if ano < 100:
+        ano += 2000
+    return f"{ano:04d}-{mes:02d}"
+
+
+def colunas_de_mes(colunas) -> dict[str, str]:
+    """Mapeia as colunas que sao meses -> competencia, na ordem do arquivo."""
+    return {c: mes for c in colunas if (mes := mes_da_coluna(c))}
+
+
+def desempilhar(df: pd.DataFrame, coluna_descricao: str, dia: int = 1) -> pd.DataFrame:
+    """Vira uma tabela cruzada (meses nas colunas) em uma linha por lancamento.
+
+    Planilha de salario e bonus costuma vir assim: cada linha e um tipo de
+    receita, cada coluna um mes. Sem desempilhar, o leitor so enxergaria uma
+    linha por tipo e perderia a distribuicao ao longo do ano.
+
+    Colunas de total sao descartadas — somar de novo o que ja esta nos meses
+    dobraria tudo.
+    """
+    meses = colunas_de_mes(df.columns)
+    if not meses:
+        raise ErroDeLeitura("nenhuma coluna com nome de mês (jan/26, fev/26…)")
+
+    import calendar
+
+    linhas = []
+    for _, linha in df.iterrows():
+        descricao = str(linha.get(coluna_descricao, "") or "").strip()
+        if not descricao or descricao.upper().startswith("TOTAL"):
+            continue
+        for coluna, competencia in meses.items():
+            bruto = str(linha.get(coluna, "") or "").strip()
+            if not bruto or bruto in ("-", "—", "0", "0,00"):
+                continue
+            try:
+                centavos = para_centavos(bruto)
+            except (ValueError, ArithmeticError):
+                continue
+            if centavos == 0:
+                continue
+            ano, mes = int(competencia[:4]), int(competencia[5:7])
+            ultimo = calendar.monthrange(ano, mes)[1]
+            linhas.append({
+                "DATA": f"{min(dia, ultimo):02d}/{mes:02d}/{ano}",
+                "DESCRICAO": descricao,
+                "VALOR": bruto,
+            })
+    if not linhas:
+        raise ErroDeLeitura("nenhum valor encontrado nas colunas de mês")
+    return pd.DataFrame(linhas)
+
+
 def _ler_csv(conteudo: bytes) -> pd.DataFrame:
     for encoding in ("utf-8-sig", "latin-1"):
         try:

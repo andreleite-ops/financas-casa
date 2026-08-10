@@ -96,6 +96,43 @@ def _aba_enviar(engine, usuario: dict) -> None:
         except Exception as exc:
             st.error(f"Não consegui abrir o arquivo: {exc}")
             return
+        # tabela cruzada: meses nas colunas, um tipo de lançamento por linha —
+        # formato comum em planilha de salário e bônus
+        meses_detectados = tabular.colunas_de_mes(df.columns)
+        if meses_detectados:
+            st.info(
+                f"Reconheci **{len(meses_detectados)} colunas de mês** "
+                f"({', '.join(list(meses_detectados)[:3])}…). Este arquivo parece uma tabela "
+                "cruzada, com os meses nas colunas.",
+                icon="📅",
+            )
+            cruzada = st.checkbox(
+                "Ler como tabela cruzada (uma linha por mês de cada item)", value=True,
+                key=f"{chave_estado}:cruzada",
+            )
+            if cruzada:
+                coluna_desc = st.selectbox(
+                    "Coluna que identifica o lançamento",
+                    [c for c in df.columns if c not in meses_detectados],
+                    key=f"{chave_estado}:desc_cruzada",
+                    help="A coluna com os nomes das linhas: Salário, Bônus, etc.",
+                )
+                dia = st.number_input(
+                    "Dia do mês a usar na data", min_value=1, max_value=28, value=1,
+                    help="A tabela não diz o dia. Quando o extrato do mesmo mês entrar, "
+                         "a versão dele prevalece.",
+                    key=f"{chave_estado}:dia_cruzada",
+                )
+                try:
+                    df = tabular.desempilhar(df, coluna_desc, dia=int(dia))
+                except ErroDeLeitura as exc:
+                    st.error(f"Não consegui desempilhar: {exc}")
+                    return
+                st.caption(
+                    f"Desempilhado: **{len(df)} lançamentos** a partir de "
+                    f"{len(meses_detectados)} meses. Colunas de total foram descartadas."
+                )
+
         sugestao = st.session_state.get(chave_estado) or tabular.sugerir_mapeamento(df.columns, df)
 
         st.markdown("#### Confira as colunas")
