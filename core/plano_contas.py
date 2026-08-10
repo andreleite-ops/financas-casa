@@ -56,6 +56,8 @@ REGRAS_RECEITA: list[tuple[str, str, str, str]] = [
     ("TAG", "Trabalho", "Pró-labore / Salário", "André"),
     ("BIOS", "Trabalho", "Pró-labore / Salário", "Rô"),
     ("NUN", "Rendimentos", "Aluguéis", "Casal"),
+    # o aluguel do NUN as vezes vem so pelo rotulo, sem o nome na descricao
+    ("ALUGUEL", "Rendimentos", "Aluguéis", "Casal"),
 ]
 
 # (padrao, categoria, subcategoria) - casam por "contem" sobre a descricao

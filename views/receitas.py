@@ -58,10 +58,16 @@ def render(engine, usuario: dict) -> None:
         )
         return
 
-    # ---- a matriz: uma linha por pessoa e tipo, uma coluna por mês ----------
+    # ---- a matriz: uma linha por pessoa, fonte e tipo, uma coluna por mês ---
     st.markdown(f"### Quem trouxe o quê, mês a mês · {ano}")
+    st.caption(
+        "**TAG** é do André · **BIOS** é da Rô · **NUN** (aluguel do apartamento) é dos dois. "
+        "O dono sai da fonte, não da conta em que o dinheiro caiu — é o que impede a mesma "
+        "receita de contar duas vezes quando ela aparece na planilha e no extrato."
+    )
     colunas = {
         "Pessoa": [linha["pessoa"] for linha in matriz["linhas"]],
+        "Fonte": [linha["fonte"] for linha in matriz["linhas"]],
         "Tipo": [linha["tipo"] for linha in matriz["linhas"]],
     }
     for mes in matriz["meses"]:
@@ -75,7 +81,7 @@ def render(engine, usuario: dict) -> None:
     # uma linha de total por pessoa, para o olho fechar a conta sem somar
     for pessoa in sorted({linha["pessoa"] for linha in matriz["linhas"]}):
         da_pessoa = [linha for linha in matriz["linhas"] if linha["pessoa"] == pessoa]
-        soma = {"Pessoa": pessoa, "Tipo": "— total —"}
+        soma = {"Pessoa": pessoa, "Fonte": "", "Tipo": "— total —"}
         for mes in matriz["meses"]:
             valor = sum(linha["meses"][mes] for linha in da_pessoa)
             soma[graficos.MESES_PT.get(mes, mes)] = fmt_mil(valor) if valor else "—"
@@ -87,10 +93,21 @@ def render(engine, usuario: dict) -> None:
     ).reset_index(drop=True)
     st.dataframe(tabela, width="stretch", hide_index=True)
     st.markdown(
-        "<p class='nota'>Valores em R$ mil. Cada pessoa aparece com seus tipos de "
+        "<p class='nota'>Valores em R$ mil. Cada pessoa aparece com suas fontes de "
         "recebimento e uma linha de total.</p>",
         unsafe_allow_html=True,
     )
+
+    # receita sem fonte reconhecida caiu no titular da conta, e isso é um chute:
+    # melhor dizer quanto é do que deixar o dono errado passar por certo
+    sem_fonte = [linha for linha in matriz["linhas"] if linha["fonte"] == "—"]
+    if sem_fonte:
+        st.warning(
+            f"{fmt_brl(sum(linha['total'] for linha in sem_fonte))} de receita sem fonte "
+            "identificada — o dono aí é o titular da conta, não uma decisão. Classifique "
+            "esses lançamentos na tela **Classificação** para o rateio ficar de pé.",
+            icon="👤",
+        )
 
     # ---- participação de cada um -------------------------------------------
     esquerda, direita = st.columns([1, 1.3])

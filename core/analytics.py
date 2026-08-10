@@ -250,14 +250,17 @@ def comparativo_anual(conn, pessoa: str | None = None) -> list[dict]:
 
 
 def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
-    """Matriz de receitas: pessoa e tipo nas linhas, meses nas colunas.
+    """Matriz de receitas: pessoa, fonte e tipo nas linhas, meses nas colunas.
 
     A pergunta da tela e "quanto cada um trouxe, de onde, em cada mes" — e isso
-    nao se le numa lista de lancamentos misturados.
+    nao se le numa lista de lancamentos misturados. A fonte e o nome que a casa
+    usa (TAG, BIOS, NUN); sem ela, o pro-labore do Andre e o da Ro apareceriam
+    com o mesmo rotulo e a origem do dinheiro sumiria.
     """
     consulta = (
         sa.select(
             db.transacoes.c.pessoa,
+            db.transacoes.c.classificacao_origem.label("fonte"),
             db.subcategorias.c.nome.label("tipo"),
             db.categorias.c.nome.label("categoria"),
             db.transacoes.c.competencia,
@@ -269,16 +272,20 @@ def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
         )
         .where(*_base(ano=ano), db.categorias.c.natureza == "receita")
         .group_by(
-            db.transacoes.c.pessoa, db.subcategorias.c.nome,
-            db.categorias.c.nome, db.transacoes.c.competencia,
+            db.transacoes.c.pessoa, db.transacoes.c.classificacao_origem,
+            db.subcategorias.c.nome, db.categorias.c.nome, db.transacoes.c.competencia,
         )
     )
-    linhas: dict[tuple[str, str], dict[str, int]] = {}
+    linhas: dict[tuple[str, str, str], dict[str, int]] = {}
     meses: set[str] = set()
     for registro in conn.execute(consulta):
         mes = registro.competencia[5:7]
         meses.add(mes)
-        chave = (registro.pessoa, registro.tipo or registro.categoria)
+        chave = (
+            registro.pessoa,
+            (registro.fonte or "—").strip() or "—",
+            registro.tipo or registro.categoria,
+        )
         alvo = linhas.setdefault(chave, {})
         alvo[mes] = alvo.get(mes, 0) + int(registro.total or 0)
 
@@ -286,11 +293,12 @@ def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
     saida = [
         {
             "pessoa": pessoa,
+            "fonte": fonte,
             "tipo": tipo,
             "meses": {mes: valores.get(mes, 0) for mes in ordem},
             "total": sum(valores.values()),
         }
-        for (pessoa, tipo), valores in linhas.items()
+        for (pessoa, fonte, tipo), valores in linhas.items()
     ]
     saida.sort(key=lambda linha: (linha["pessoa"], -linha["total"]))
     return {"meses": ordem, "linhas": saida}

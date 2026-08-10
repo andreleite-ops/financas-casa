@@ -159,3 +159,24 @@ def test_a_fonte_de_renda_diz_de_quem_e_o_dinheiro(engine):
     assert por_pessoa["Rô"] == 500_000         # BIOS
     assert por_pessoa["Casal"] == -50_000      # NUN, o aluguel é dos dois
     assert sum(por_pessoa.values()) == REC_ESPERADA
+
+
+def test_a_matriz_de_receitas_mostra_a_fonte_de_cada_um(engine):
+    """Sem a fonte, o pró-labore do André e o da Rô virariam a mesma linha."""
+    df, mapa = _ler()
+    lancamentos, _ = tabular.extrair(df, mapa, origem="planilha")
+    conta_id = repo.conta_da_planilha(engine)
+    repo.importar(
+        engine, lancamentos=lancamentos, conta_id=conta_id, arquivo="planilha.xlsx",
+        origem="planilha", usuario="andre", pessoa_padrao="Rô", usar_ia=False,
+    )
+
+    with engine.connect() as conn:
+        matriz = analytics.receitas_por_pessoa_e_tipo(conn, 2026)
+
+    por_fonte = {(l["pessoa"], l["fonte"]): l["total"] for l in matriz["linhas"]}
+    assert por_fonte[("André", "TAG")] == 2_000_000
+    assert por_fonte[("Rô", "BIOS")] == 500_000
+    assert por_fonte[("Casal", "ALUGUEL")] == -50_000
+    # nenhuma receita ficou com o dono herdado do titular da conta
+    assert not [linha for linha in matriz["linhas"] if linha["fonte"] == "—"]
