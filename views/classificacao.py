@@ -91,6 +91,27 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
             b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")
 
 
+def _destinos(plano, natureza: str) -> dict[str, tuple[int, int | None] | None]:
+    """Rótulo legível -> (categoria_id, subcategoria_id), achatado num nível só.
+
+    A categoria aparece sozinha e depois cada subcategoria dela, indentada. O
+    destino inteiro vira uma escolha só: quem quer o detalhe pega a
+    subcategoria, quem não quer para na categoria — e nos dois casos o
+    lançamento sai da fila.
+    """
+    saida: dict[str, tuple[int, int | None] | None] = {ESCOLHER["nome"]: None}
+    for categoria in plano:
+        if categoria["natureza"] != natureza or not categoria["ativa"]:
+            continue
+        saida[categoria["nome"]] = (categoria["id"], None)
+        for sub in categoria["subcategorias"]:
+            if sub["ativa"]:
+                saida[f"    ↳ {categoria['nome']} › {sub['nome']}"] = (
+                    categoria["id"], sub["id"]
+                )
+    return saida
+
+
 def _aba_de_para(engine, usuario: dict, plano) -> None:
     """Traduz o vocabulário da Rô para o plano de contas, um rótulo por vez.
 
@@ -145,30 +166,34 @@ def _aba_de_para(engine, usuario: dict, plano) -> None:
             with direita:
                 # o sinal do total diz o lado: rótulo de saída não pode virar receita
                 natureza = "receita" if item["total"] > 0 else "despesa"
-                categorias = [c for c in plano if c["natureza"] == natureza and c["ativa"]]
-                c1, c2, c3 = st.columns([1.4, 1.4, 0.8])
-                categoria = c1.selectbox(
-                    "Vai para", [ESCOLHER, *categorias], format_func=lambda c: c["nome"],
-                    key=f"dp_cat_{rotulo}",
+                # um seletor só, com "Categoria › Subcategoria" achatado. Dois
+                # campos encadeados obrigavam a escolher a categoria, esperar a
+                # tela recarregar e só então ver as subcategorias — e, com a
+                # lista de opções mudando debaixo do widget, elas nem sempre
+                # apareciam. Aqui o destino inteiro é uma escolha só.
+                destinos = _destinos(plano, natureza)
+                c1, c2 = st.columns([3.2, 0.9])
+                escolha = c1.selectbox(
+                    "Vai para", list(destinos), key=f"dp_dest_{rotulo}",
+                    help="Escolha a subcategoria quando ela importar. A categoria "
+                         "sozinha já tira o lançamento da fila.",
                 )
-                subs = (
-                    [s for s in categoria["subcategorias"] if s["ativa"]]
-                    if categoria and categoria["id"] else []
-                )
-                opcoes = [SEM_SUB, *[s["nome"] for s in subs]]
-                sub_nome = c2.selectbox("Subcategoria", opcoes, key=f"dp_sub_{rotulo}")
-                if c3.button("Aplicar", key=f"dp_ok_{rotulo}", type="primary",
+                if c2.button("Aplicar", key=f"dp_ok_{rotulo}", type="primary",
                              width="stretch"):
-                    if not categoria or categoria["id"] is None:
-                        st.warning("Escolha a categoria antes de aplicar.")
+                    destino = destinos[escolha]
+                    if destino is None:
+                        st.warning("Escolha o destino antes de aplicar.")
                     else:
-                        sub_id = next((s["id"] for s in subs if s["nome"] == sub_nome), None)
                         aplicados = repo.salvar_de_para(
-                            engine, rotulo=rotulo, categoria_id=categoria["id"],
-                            subcategoria_id=sub_id, usuario=usuario["nome"],
+                            engine, rotulo=rotulo, categoria_id=destino[0],
+                            subcategoria_id=destino[1], usuario=usuario["nome"],
                         )
                         st.session_state["msg_classificacao"] = (
-                            f"“{rotulo}” traduzido: {aplicados} lançamento(s) classificados."
+                            f"“{rotulo}”: {aplicados} lançamento(s) na categoria. "
+                            "Eles continuam na fila para você escolher a subcategoria "
+                            "caso a caso — já com a categoria preenchida."
+                            if destino[1] is None
+                            else f"“{rotulo}”: {aplicados} lançamento(s) classificados."
                         )
                         st.rerun()
 

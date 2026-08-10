@@ -11,7 +11,7 @@ from datetime import date
 
 import sqlalchemy as sa
 
-from core import db, repo
+from core import analytics, db, repo
 
 
 def _lancar(engine, descricao, valor, rotulo, competencia="2026-03"):
@@ -155,3 +155,66 @@ def test_desfazer_nao_desmancha_a_correcao_feita_a_mao_depois(engine):
             .where(db.transacoes.c.descricao == "REMEDIO")
         ).scalar()
     assert categoria == saude
+
+
+def test_o_destino_e_uma_escolha_so_categoria_ou_subcategoria(engine):
+    """Dois campos encadeados obrigavam a escolher, esperar a tela recarregar e
+    só então ver as subcategorias — e às vezes elas nem apareciam."""
+    from views.classificacao import _destinos
+
+    with engine.connect() as conn:
+        plano = repo.plano_de_contas(conn)
+    destinos = _destinos(plano, "despesa")
+
+    # a categoria sozinha é um destino válido
+    assert destinos["Vestuário & Cuidados Pessoais"][1] is None
+    # e cada subcategoria dela também, na mesma lista
+    subs = [k for k in destinos if k.startswith("    ↳ Vestuário & Cuidados Pessoais")]
+    assert len(subs) == 3
+    categoria_id, sub_id = destinos["    ↳ Vestuário & Cuidados Pessoais › Cabeleireiro & Estética"]
+    assert sub_id is not None
+    assert destinos["Vestuário & Cuidados Pessoais"][0] == categoria_id
+    # receita não aparece na lista de despesa
+    assert "Trabalho" not in destinos
+
+
+def test_so_categoria_resolve_o_relatorio_e_deixa_o_detalhe_na_fila(engine):
+    """Pedido do André: categoria em massa, subcategoria caso a caso.
+
+    A categoria é o que soma no relatório, então o número já fica certo. Mas a
+    subcategoria ainda é escolha de quem olha o lançamento — por isso as linhas
+    continuam na fila, agora com a categoria preenchida.
+    """
+    for i in range(3):
+        _lancar(engine, f"SALAO {i}", -10_000, "CUIDADOS PESSOAIS")
+
+    cat, _sub = _categoria(engine, "Vestuário & Cuidados Pessoais")
+    assert repo.salvar_de_para(
+        engine, rotulo="CUIDADOS PESSOAIS", categoria_id=cat,
+        subcategoria_id=None, usuario="André",
+    ) == 3
+
+    with engine.connect() as conn:
+        # continuam na fila, para escolher a subcategoria uma a uma
+        assert len(repo.fila_pendentes(conn)) == 3
+        # mas o rótulo sai da lista de traduzir: a categoria já foi decidida
+        assert repo.rotulos_pendentes(conn) == []
+        # e o relatório já soma na categoria certa
+        por_categoria = {
+            l["categoria"]: l["total"] for l in analytics.por_categoria(conn, competencia="2026-03")
+        }
+        assert abs(por_categoria["Vestuário & Cuidados Pessoais"]) == 30_000
+        linha = conn.execute(
+            sa.select(db.transacoes.c.categoria_id, db.transacoes.c.subcategoria_id)
+            .where(db.transacoes.c.descricao == "SALAO 0")
+        ).first()
+    assert (linha.categoria_id, linha.subcategoria_id) == (cat, None)
+
+
+def test_com_subcategoria_escolhida_o_lancamento_sai_da_fila(engine):
+    _lancar(engine, "SALAO", -10_000, "CUIDADOS PESSOAIS")
+    cat, sub = _categoria(engine, "Vestuário & Cuidados Pessoais", "Cabeleireiro & Estética")
+    repo.salvar_de_para(engine, rotulo="CUIDADOS PESSOAIS", categoria_id=cat,
+                        subcategoria_id=sub, usuario="André")
+    with engine.connect() as conn:
+        assert repo.fila_pendentes(conn) == []

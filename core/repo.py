@@ -706,6 +706,11 @@ def rotulos_pendentes(conn) -> list[dict]:
     Treze rotulos cobrem os 441 pendentes da carga inicial. Decidir treze vezes
     e um trabalho de minutos; decidir 441 vezes e um trabalho que nao acontece.
     """
+    # rótulo já traduzido sai da lista mesmo que os lançamentos sigam na fila:
+    # eles continuam lá só para escolher a subcategoria, e a decisão de
+    # categoria já foi tomada — repetir a pergunta seria pedir de novo o que já
+    # foi respondido
+    ja_traduzidos = sa.select(db.de_para.c.rotulo).scalar_subquery()
     consulta = (
         sa.select(
             db.transacoes.c.classificacao_origem.label("rotulo"),
@@ -716,6 +721,7 @@ def rotulos_pendentes(conn) -> list[dict]:
             db.transacoes.c.status == "pendente",
             db.transacoes.c.ativo == sa.true(),
             db.transacoes.c.classificacao_origem.isnot(None),
+            db.transacoes.c.classificacao_origem.notin_(ja_traduzidos),
         )
         .group_by(db.transacoes.c.classificacao_origem)
         .order_by(sa.func.count().desc())
@@ -781,9 +787,25 @@ def salvar_de_para(
             db.transacoes.c.valor_centavos > 0 if natureza == "receita"
             else db.transacoes.c.valor_centavos < 0,
         ]
+        # traduzir só até a categoria resolve o relatório (é a categoria que
+        # soma) mas não encerra o assunto: a subcategoria ainda é escolha de
+        # quem olha o lançamento. Nesse caso a linha continua na fila, agora
+        # com a categoria preenchida — falta só o detalhe.
+        tem_subcategoria = conn.execute(
+            sa.select(sa.func.count())
+            .select_from(db.subcategorias)
+            .where(
+                db.subcategorias.c.categoria_id == categoria_id,
+                db.subcategorias.c.ativa == sa.true(),
+            )
+        ).scalar()
+        so_categoria = subcategoria_id is None and bool(tem_subcategoria)
         atualizacao = dict(
-            categoria_id=categoria_id, subcategoria_id=subcategoria_id,
-            status="manual", confianca=1.0, classificado_por=usuario,
+            categoria_id=categoria_id,
+            subcategoria_id=subcategoria_id,
+            status="pendente" if so_categoria else "manual",
+            confianca=None if so_categoria else 1.0,
+            classificado_por=None if so_categoria else usuario,
         )
         if dono:
             atualizacao["pessoa"] = dono

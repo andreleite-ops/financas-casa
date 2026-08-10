@@ -142,28 +142,33 @@ CSS = f"""
      Quatro cartões davam só o mês, e o mês sozinho engana: um bônus em janeiro
      ou um mês magro parecem a regra. Aqui o mês e o ano ficam lado a lado, na
      mesma linha de cada conta, e o olho compara sem trocar de tela. */
+  .quadro {{ border: 1px solid {LINHA}; border-radius: 12px; overflow: hidden;
+            box-shadow: 0 1px 2px rgba(20,17,15,.05); margin-bottom: 1.4rem;
+            max-width: 860px; }}
   .resumo {{ width: 100%; border-collapse: collapse; background: {BRANCO};
-            border: 1px solid {LINHA}; border-radius: 10px; overflow: hidden;
-            font-variant-numeric: tabular-nums; margin-bottom: 1.4rem; }}
-  .resumo th {{ font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
-               color: {CINZA_CLARO}; font-weight: 600; padding: .65rem .9rem;
-               border-bottom: 1px solid {LINHA}; text-align: right; white-space: nowrap; }}
-  .resumo th.grupo {{ background: {AREIA}; color: {VINHO_ESCURO}; text-align: center;
-                     border-left: 1px solid {LINHA}; }}
+            font-variant-numeric: tabular-nums; }}
+  /* faixa de cabeçalho em areia, atravessando a tabela inteira: é ela que dá
+     a moldura. Antes o cabeçalho era só um texto claro solto no branco. */
+  .resumo thead th {{ background: {AREIA}; font-size: .7rem; text-transform: uppercase;
+               letter-spacing: .08em; color: {VINHO_ESCURO}; font-weight: 700;
+               padding: .7rem 1rem; border-bottom: 1px solid {LINHA};
+               text-align: right; white-space: nowrap; }}
+  .resumo thead th.grupo {{ text-align: right; border-left: 1px solid {LINHA}; }}
   .resumo th:first-child {{ text-align: left; }}
-  .resumo td {{ padding: .62rem .9rem; text-align: right; font-size: .95rem;
-               color: {PRETO}; border-bottom: 1px solid {AREIA}; white-space: nowrap; }}
-  .resumo td.conta {{ text-align: left; font-size: .87rem; color: {CINZA};
-                     font-weight: 600; }}
+  .resumo td {{ padding: .7rem 1rem; text-align: right; font-size: 1.02rem;
+               color: {PRETO}; border-bottom: 1px solid {LINHA}; white-space: nowrap; }}
+  .resumo td.conta {{ text-align: left; font-size: .88rem; color: {PRETO};
+                     font-weight: 600; letter-spacing: .01em; }}
   .resumo td.abre {{ border-left: 1px solid {LINHA}; }}
-  .resumo tr:last-child td {{ border-bottom: none; }}
-  /* a sobra é a linha de fechamento: separada por um traço mais forte */
-  .resumo tr.fecha td {{ border-top: 2px solid {LINHA}; font-weight: 700;
-                        background: {AREIA_CLARA}; }}
-  .resumo .var {{ display: block; font-size: .7rem; font-weight: 600; margin-top: .1rem; }}
+  .resumo tbody tr:nth-child(even) td {{ background: #FCFAF6; }}
+  /* a sobra é a linha de fechamento: fundo areia e traço forte em cima */
+  .resumo tr.fecha td {{ border-top: 2px solid {VINHO_CLARO}; border-bottom: none;
+                        font-weight: 700; font-size: 1.08rem;
+                        background: {AREIA} !important; }}
+  .resumo .var {{ display: block; font-size: .72rem; font-weight: 600; margin-top: .15rem; }}
   .resumo .sobe {{ color: {BOM}; }}
   .resumo .desce {{ color: {CRITICO}; }}
-  .resumo .neutro {{ color: {CINZA_CLARO}; font-weight: 400; }}
+  .resumo .neutro {{ color: {CINZA}; font-weight: 500; }}
 
   .pill {{ display: inline-block; font-size: .7rem; font-weight: 600; padding: .1rem .5rem;
           border-radius: 3px; color: {BRANCO}; letter-spacing: .02em; }}

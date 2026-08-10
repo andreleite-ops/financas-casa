@@ -119,11 +119,11 @@ def _tabela_resumo(competencia, ano, mes, ano_todo, variacao, meses, meta_poupan
     )
     rotulo_mes = f"{graficos.rotulo_mes(competencia)}/{competencia[2:4]}"
     return (
-        "<table class='resumo'><thead><tr>"
+        "<div class='quadro'><table class='resumo'><thead><tr>"
         "<th></th>"
         f"<th class='grupo'>{rotulo_mes}</th>"
         f"<th class='grupo'>Ano {ano} · acumulado</th>"
-        "</tr></thead><tbody>" + "".join(linhas) + "</tbody></table>"
+        "</tr></thead><tbody>" + "".join(linhas) + "</tbody></table></div>"
     )
 
 
