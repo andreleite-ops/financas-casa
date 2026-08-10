@@ -190,6 +190,27 @@ class Indice:
                                "mesmo dia e valor de um lançamento do extrato")
 
         chave = chave_estabelecimento(descricao)
+
+        # Duas planilhas de carga inicial descrevendo o mesmo recebimento: a da
+        # casa anota "SALARIO" dia 28, a de receitas anota "Salário" dia 5. Mesmo
+        # valor, mesmo mes, mesmo nome — e o mesmo dinheiro, mas as datas
+        # distantes escapam da regra dos tres dias. Aqui a janela e o mes
+        # inteiro, e o resultado vai para confirmacao, nao para exclusao.
+        if chave and origem == "planilha":
+            for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
+                if viz["id"] in self._usados or not viz["ativo"]:
+                    continue
+                if viz["origem"] != "planilha" or viz["hash_dedup"] == h:
+                    continue
+                if (viz["data"].year, viz["data"].month) != (dia.year, dia.month):
+                    continue
+                if chave_estabelecimento(viz["descricao"]) == chave:
+                    return Decisao(
+                        "duplicata_provavel", viz["id"],
+                        f"mesmo valor e nome no mesmo mês, já na carga inicial "
+                        f"(dia {viz['data']:%d})",
+                    )
+
         if chave:
             for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
                 if viz["id"] in self._usados or not viz["ativo"]:
@@ -234,8 +255,10 @@ def carregar_indice(conn, conta_id: int, datas: list[date]) -> Indice:
         db.transacoes.c.status,
     ).where(
         db.transacoes.c.ativo == sa.true(),
-        db.transacoes.c.data >= min(datas) - JANELA_PROVAVEL,
-        db.transacoes.c.data <= max(datas) + JANELA_PROVAVEL,
+        # a janela cobre o mes inteiro nas pontas: a regra planilha x planilha
+        # compara por mes, nao pelos tres dias da regra geral
+        db.transacoes.c.data >= (min(datas) - JANELA_PROVAVEL).replace(day=1),
+        db.transacoes.c.data <= max(datas) + timedelta(days=31),
         # a conta filtra o historico da propria conta, mas a planilha entra de
         # qualquer conta: ela anota o gasto sem dizer de qual cartao saiu
         sa.or_(

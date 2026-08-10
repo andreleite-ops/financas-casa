@@ -45,7 +45,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
 
     origem = st.radio(
         "O que você está enviando",
-        ["Extrato ou fatura", "Planilha da Rô (carga inicial do histórico)"],
+        ["Extrato ou fatura", "Planilha (carga inicial do histórico)"],
         horizontal=True,
     )
     e_planilha = origem.startswith("Planilha")
