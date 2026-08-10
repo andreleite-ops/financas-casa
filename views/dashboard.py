@@ -60,6 +60,94 @@ def _barra_categoria(item: dict, teto: int) -> str:
     )
 
 
+def _celula(valor: int, nota: str = "", classe: str = "neutro", abre: bool = False) -> str:
+    extra = " abre" if abre else ""
+    rodape = f"<span class='var {classe}'>{nota}</span>" if nota else ""
+    return f"<td class='valor{extra}'>{fmt_brl(valor)}{rodape}</td>"
+
+
+def _tabela_resumo(competencia, ano, mes, ano_todo, variacao, meses, meta_poupanca) -> str:
+    """Receitas, despesas, poupança e sobra — no mês e no ano, lado a lado.
+
+    Quatro cartões só do mês enganavam: um bônus em janeiro fazia o mês parecer
+    a regra, e um mês magro parecia um problema. Com as duas colunas na mesma
+    linha, dá para ver de uma vez o que aconteceu e o que vinha acontecendo.
+    """
+    def var_mes(chave: str) -> tuple[str, str]:
+        texto = variacao(chave)
+        if not texto:
+            return "", "neutro"
+        subiu = texto.startswith("+")
+        # em despesa, subir é ruim; em receita e poupança, é bom
+        bom = subiu if chave in ("receitas", "poupanca") else not subiu
+        return texto, "sobe" if bom else "desce"
+
+    def nota_da_poupanca() -> tuple[str, str]:
+        # na poupança a comparação que importa não é com o mês passado, é com a
+        # meta: ela é um compromisso, não uma consequência
+        if not meta_poupanca:
+            return "sem meta definida", "neutro"
+        atingido = mes["poupanca"] / meta_poupanca * 100
+        if atingido >= 100:
+            return f"✔ {atingido:.0f}% da meta", "sobe"
+        return (
+            f"{atingido:.0f}% da meta — faltam "
+            f"{fmt_brl(meta_poupanca - mes['poupanca'])}", "desce",
+        )
+
+    linhas = []
+    for chave, rotulo in (
+        ("receitas", "Receitas"), ("despesas", "Despesas"), ("poupanca", "Poupança")
+    ):
+        nota, classe = nota_da_poupanca() if chave == "poupanca" else var_mes(chave)
+        rodape_ano = (
+            f"meta {fmt_brl(meta_poupanca)}/mês" if chave == "poupanca" and meta_poupanca
+            else f"média {fmt_brl(ano_todo[chave] // meses)}/mês"
+        )
+        linhas.append(
+            f"<tr><td class='conta'>{rotulo}</td>"
+            + _celula(mes[chave], nota, classe)
+            + _celula(ano_todo[chave], rodape_ano, "neutro", abre=True)
+            + "</tr>"
+        )
+
+    linhas.append(
+        "<tr class='fecha'><td class='conta'>Sobra livre</td>"
+        + _celula(mes["sobra"], "", "neutro")
+        + _celula(ano_todo["sobra"], "", "neutro", abre=True)
+        + "</tr>"
+    )
+    rotulo_mes = f"{graficos.rotulo_mes(competencia)}/{competencia[2:4]}"
+    return (
+        "<table class='resumo'><thead><tr>"
+        "<th></th>"
+        f"<th class='grupo'>{rotulo_mes}</th>"
+        f"<th class='grupo'>Ano {ano} · acumulado</th>"
+        "</tr></thead><tbody>" + "".join(linhas) + "</tbody></table>"
+    )
+
+
+def _competencia_de_abertura(engine, competencias: list[str]) -> str:
+    """Em que mês a tela abre.
+
+    A planilha traz lançamento agendado até dezembro, então o mês mais recente
+    da base é um mês que ainda não aconteceu: abrir nele mostrava despesa zero
+    e um gráfico vazio, como se a casa não tivesse gastado nada. Abre no mês de
+    hoje; se ele ainda não tiver gasto lançado, no último que teve.
+    """
+    hoje = date.today().strftime("%Y-%m")
+    if hoje in competencias:
+        with engine.connect() as conn:
+            if analytics.resumo(conn, competencia=hoje)["despesas"]:
+                return hoje
+    passados = [c for c in competencias if c <= hoje]
+    with engine.connect() as conn:
+        for competencia in passados:   # a lista vem do mais recente para o mais antigo
+            if analytics.resumo(conn, competencia=competencia)["despesas"]:
+                return competencia
+    return passados[0] if passados else competencias[0]
+
+
 def render(engine, usuario: dict) -> None:
     with engine.connect() as conn:
         competencias = repo.competencias_disponiveis(conn)
@@ -74,7 +162,10 @@ def render(engine, usuario: dict) -> None:
         return
 
     coluna_mes, coluna_pessoa, _ = st.columns([1.2, 1.2, 2.4])
-    competencia = coluna_mes.selectbox("Competência", competencias, index=0)
+    inicial = _competencia_de_abertura(engine, competencias)
+    competencia = coluna_mes.selectbox(
+        "Competência", competencias, index=competencias.index(inicial)
+    )
     pessoa = coluna_pessoa.selectbox("Pessoa", ["Todos", *db.PESSOAS])
     ano = int(competencia[:4])
 
@@ -97,43 +188,26 @@ def render(engine, usuario: dict) -> None:
         delta = (atual[chave] / anterior[chave] - 1) * 100
         return f"{delta:+.1f}% vs mês anterior"
 
-    c1, c2, c3, c4 = st.columns(4)
-    # só usamos delta onde ele é de fato uma variação; o resto vai em legenda,
-    # senão o Streamlit desenha uma seta ↑↓ em texto que não é comparação
-    c1.metric("Receitas do mês", fmt_brl(atual["receitas"]), variacao("receitas"))
-    c2.metric("Despesas do mês", fmt_brl(atual["despesas"]), variacao("despesas"),
-              delta_color="inverse")
-
     meta_poupanca = next(
         (o["meta"] for o in orcamento if o["categoria"] == analytics.CATEGORIA_POUPANCA), 0
     )
-    c3.metric("Poupança do mês", fmt_brl(atual["poupanca"]))
-    if meta_poupanca:
-        proporcao = atual["poupanca"] / meta_poupanca * 100
-        if proporcao >= 100:
-            c3.markdown(
-                f"<span class='nota' style='color:{BOM}'>✔ {proporcao:.0f}% da meta "
-                f"({fmt_brl(meta_poupanca)})</span>",
-                unsafe_allow_html=True,
-            )
-        else:
-            c3.markdown(
-                f"<span class='nota' style='color:{CRITICO}'>{proporcao:.0f}% da meta — "
-                f"faltam {fmt_brl(meta_poupanca - atual['poupanca'])}</span>",
-                unsafe_allow_html=True,
-            )
-    else:
-        c3.markdown("<span class='nota'>sem meta definida</span>", unsafe_allow_html=True)
-
-    estouradas = [o for o in orcamento if o["estourou"]]
-    c4.metric("Sobra livre", fmt_brl(atual["sobra"]))
-    c4.markdown(
-        f"<span class='nota' style='color:{CRITICO if estouradas else BOM}'>"
-        + (f"{len(estouradas)} categoria(s) acima da meta" if estouradas
-           else "todas as categorias dentro da meta")
-        + "</span>",
+    meses_no_ano = len([m for m in serie if m["receitas"] or m["despesas"]]) or 1
+    st.markdown(
+        _tabela_resumo(
+            competencia, ano, atual, acumulado, variacao, meses_no_ano, meta_poupanca
+        ),
         unsafe_allow_html=True,
     )
+
+    estouradas = [o for o in orcamento if o["estourou"]]
+    if estouradas:
+        st.markdown(
+            f"<p class='nota' style='color:{CRITICO};margin-top:-1rem'>"
+            f"{len(estouradas)} categoria(s) acima da meta neste mês: "
+            + ", ".join(o["categoria"] for o in estouradas)
+            + "</p>",
+            unsafe_allow_html=True,
+        )
 
     if atual["nao_classificado"]:
         st.warning(
@@ -146,14 +220,26 @@ def render(engine, usuario: dict) -> None:
     st.markdown(
         "<p class='sub'>Barra = realizado · traço preto = meta do mês</p>", unsafe_allow_html=True
     )
-    com_gasto = [o for o in orcamento if o["realizado"] or o["meta"]]
-    com_gasto.sort(key=lambda linha: -linha["realizado"])
+    # sem nenhum gasto no mês, listar todas as categorias produzia uma parede de
+    # "R$ 0,00" com traços de meta soltos — desenho de gráfico quebrado para
+    # dizer uma coisa simples: não teve gasto. Melhor dizer a frase.
+    com_gasto = [o for o in orcamento if o["realizado"]]
     if com_gasto:
+        com_gasto.sort(key=lambda linha: -linha["realizado"])
         teto = max(max(o["realizado"] for o in com_gasto),
                    max(o["meta"] for o in com_gasto), 1)
         st.markdown(
             "".join(_barra_categoria(item, teto) for item in com_gasto),
             unsafe_allow_html=True,
+        )
+        sem_gasto = [o["categoria"] for o in orcamento if o["meta"] and not o["realizado"]]
+        if sem_gasto:
+            st.caption(f"Sem gasto neste mês: {', '.join(sorted(sem_gasto))}.")
+    elif competencia > date.today().strftime("%Y-%m"):
+        st.info(
+            f"**{graficos.rotulo_mes(competencia)} ainda não aconteceu.** O que aparece aqui "
+            "são lançamentos já agendados na planilha.",
+            icon="📅",
         )
     else:
         st.caption("Nenhum gasto classificado neste mês.")

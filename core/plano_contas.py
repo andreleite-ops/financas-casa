@@ -22,6 +22,12 @@ DESPESAS: list[tuple[str, list[str]]] = [
     ("Saúde", ["Plano de Saúde", "Médicos & Dentistas", "Farmácia", "Exames", "Terapias",
                "Academia & Bem-estar"]),
     ("Educação", ["Mensalidades & Cursos", "Livros & Materiais", "Idiomas"]),
+    # Categoria propria, e nao diluida em Educacao e Saude: pensao e compromisso
+    # fixo e nao negociavel, e o que se gasta com os filhos e a pergunta que o
+    # Andre faz de verdade — nao daria para responde-la somando pedacos
+    # espalhados por cinco categorias.
+    ("Filhos & Pensão", ["Pensão Alimentícia", "Escola & Faculdade", "Saúde dos Filhos",
+                         "Mesada & Ajuda", "Atividades & Esportes", "Outros Gastos"]),
     ("Lazer & Viagens", ["Viagens", "Passeios & Eventos", "Hobbies", "Clube"]),
     ("Assinaturas & Tecnologia", ["Streaming", "Aplicativos & Software", "Eletrônicos"]),
     ("Vestuário & Cuidados Pessoais", ["Roupas & Calçados", "Cabeleireiro & Estética",
@@ -228,6 +234,10 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
     ("JUROS", "Financeiras & Impostos", "Juros & Multas"),
     ("MULTA", "Financeiras & Impostos", "Juros & Multas"),
     ("IOF", "Financeiras & Impostos", "Juros & Multas"),
+    # Filhos & pensao
+    ("PENSAO ALIMENTICIA", "Filhos & Pensão", "Pensão Alimentícia"),
+    ("PENSAO", "Filhos & Pensão", "Pensão Alimentícia"),
+    ("MESADA", "Filhos & Pensão", "Mesada & Ajuda"),
     ("DARF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IRPF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IMPOSTO DE RENDA", "Financeiras & Impostos", "Imposto de Renda"),
@@ -281,6 +291,7 @@ METAS_INICIAIS = {
     "Saúde": 8.0,
     "Transporte": 6.0,
     "Educação": 4.0,
+    "Filhos & Pensão": 0.0,   # sem chute: o André define na tela de Orçamento
     "Assinaturas & Tecnologia": 3.0,
     "Vestuário & Cuidados Pessoais": 4.0,
     "Financeiras & Impostos": 5.0,

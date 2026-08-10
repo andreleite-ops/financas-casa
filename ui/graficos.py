@@ -44,7 +44,14 @@ def rotulo_mes(competencia: str) -> str:
 
 
 def receitas_despesas(serie: list[dict]):
-    """Colunas agrupadas por mes: receitas x despesas x poupanca."""
+    """Receitas e despesas mes a mes, em dois paineis com escalas proprias.
+
+    Um painel so nao servia: o bonus de janeiro e a venda do apartamento em
+    abril passam de meio milhao cada, e numa escala que precisa chegar la os
+    meses normais da casa viravam tocos de dois pixels — um ano inteiro de
+    gasto ilegivel para caber duas barras. Dois paineis, cada um com sua
+    escala, dizem a verdade sem esmagar nada; o eixo do tempo continua o mesmo
+    embaixo, e e ele que permite ler os dois juntos."""
     if not serie:
         return None
     linhas = []
@@ -62,62 +69,90 @@ def receitas_despesas(serie: list[dict]):
                 }
             )
     df = pd.DataFrame(linhas)
-    return (
-        alt.Chart(df)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, size=20)
-        .encode(
-            x=alt.X("mes:N", sort=alt.SortField("ordem"), title=None,
-                    axis=alt.Axis(labelAngle=0, **_EIXO)),
-            xOffset=alt.XOffset("serie:N", sort=["Receitas", "Despesas", "Poupança"]),
-            y=alt.Y("valor:Q", title="R$", axis=alt.Axis(format=",.0f", **_EIXO)),
-            color=alt.Color(
-                "serie:N",
-                scale=alt.Scale(
-                    domain=["Receitas", "Despesas", "Poupança"],
-                    range=[SERIE_RECEITA, SERIE_DESPESA, SERIE_POUPANCA],
-                ),
-                legend=alt.Legend(title=None, orient="top", labelColor=CINZA),
-            ),
-            tooltip=[
-                alt.Tooltip("mes:N", title="Mês"),
-                alt.Tooltip("serie:N", title="Série"),
-                alt.Tooltip("rotulo:N", title="Valor"),
-            ],
+    cor = alt.Color(
+        "serie:N",
+        scale=alt.Scale(
+            domain=["Receitas", "Despesas", "Poupança"],
+            range=[SERIE_RECEITA, SERIE_DESPESA, SERIE_POUPANCA],
+        ),
+        legend=alt.Legend(title=None, orient="top", labelColor=CINZA),
+    )
+    tooltip = [
+        alt.Tooltip("mes:N", title="Mês"),
+        alt.Tooltip("serie:N", title="Série"),
+        alt.Tooltip("rotulo:N", title="Valor"),
+    ]
+
+    def painel(series: list[str], titulo: str, altura: int, com_rotulo_x: bool):
+        eixo_x = (
+            alt.Axis(labelAngle=0, **_EIXO) if com_rotulo_x
+            else alt.Axis(labels=False, ticks=False, title=None, domainColor=LINHA)
         )
-        .properties(height=260)
+        return (
+            alt.Chart(df[df["serie"].isin(series)])
+            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, size=18)
+            .encode(
+                x=alt.X("mes:N", sort=alt.SortField("ordem"), title=None, axis=eixo_x),
+                xOffset=alt.XOffset("serie:N", sort=series),
+                y=alt.Y("valor:Q", title=titulo, axis=alt.Axis(format="~s", **_EIXO)),
+                color=cor,
+                tooltip=tooltip,
+            )
+            .properties(height=altura)
+        )
+
+    return (
+        alt.vconcat(
+            painel(["Receitas"], "Receitas (R$)", 120, False),
+            painel(["Despesas", "Poupança"], "Despesas e poupança (R$)", 150, True),
+            spacing=6,
+        )
+        .resolve_scale(y="independent", color="shared")
         .configure_view(strokeWidth=0)
     )
 
 
-def rosca_categorias(dados: list[dict], limite: int = 8):
-    """Participacao de cada categoria no mes."""
+def rosca_categorias(dados: list[dict], limite: int = 5):
+    """Participacao de cada categoria no mes.
+
+    Cinco fatias mais "Demais". Rosca serve para dar a proporcao de relance, e
+    passar de seis fatias acaba com isso: as menores viram fios, os tons
+    vizinhos se confundem e sobra um grafico bonito que ninguem le. Quem quer o
+    detalhe tem a lista de barras logo acima, com o valor de cada categoria.
+    """
     if not dados:
         return None
     principais = dados[:limite]
     resto = sum(linha["total"] for linha in dados[limite:])
+    total = sum(linha["total"] for linha in dados) or 1
     linhas = [{"categoria": d["categoria"], "valor": d["total"] / 100,
+               "parte": f"{d['total'] / total * 100:.0f}%",
                "rotulo": fmt_brl(d["total"])} for d in principais]
     if resto:
-        linhas.append({"categoria": "Demais", "valor": resto / 100, "rotulo": fmt_brl(resto)})
+        linhas.append({"categoria": "Demais", "valor": resto / 100,
+                       "parte": f"{resto / total * 100:.0f}%", "rotulo": fmt_brl(resto)})
     df = pd.DataFrame(linhas)
-    return (
-        alt.Chart(df)
-        .mark_arc(innerRadius=62, stroke="#FFFFFF", strokeWidth=2)
-        .encode(
-            theta=alt.Theta("valor:Q", stack=True),
-            color=alt.Color(
-                "categoria:N",
-                sort=[linha["categoria"] for linha in linhas],
-                scale=alt.Scale(range=TONS_ROSCA),
-                legend=alt.Legend(title=None, orient="right", labelColor=CINZA,
-                                  labelFontSize=11),
-            ),
-            tooltip=[alt.Tooltip("categoria:N", title="Categoria"),
-                     alt.Tooltip("rotulo:N", title="Total")],
-        )
-        .properties(height=250)
-        .configure_view(strokeWidth=0)
+    ordem = [linha["categoria"] for linha in linhas]
+    base = alt.Chart(df).encode(
+        theta=alt.Theta("valor:Q", stack=True),
+        color=alt.Color(
+            "categoria:N",
+            sort=ordem,
+            scale=alt.Scale(domain=ordem, range=TONS_ROSCA[: len(ordem)]),
+            legend=alt.Legend(title=None, orient="right", labelColor=CINZA,
+                              labelFontSize=11),
+        ),
+        tooltip=[alt.Tooltip("categoria:N", title="Categoria"),
+                 alt.Tooltip("rotulo:N", title="Total")],
     )
+    arco = base.mark_arc(innerRadius=58, outerRadius=92, stroke="#FFFFFF", strokeWidth=2)
+    # o percentual vai FORA do arco, no branco: dentro dele o cinza sumia no
+    # vinho escuro das fatias maiores. E a resposta que a rosca existe para
+    # dar, e ela nao pode depender de passar o mouse
+    percentual = base.mark_text(radius=108, fontSize=11, fontWeight=600, color=CINZA).encode(
+        text=alt.Text("parte:N"),
+    )
+    return (arco + percentual).properties(height=250).configure_view(strokeWidth=0)
 
 
 def evolucao_categoria(historico: list[dict], categoria: str):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 from datetime import date
 
 import sqlalchemy as sa
@@ -453,6 +454,101 @@ def reclassificar(
         )
         if criar_regra and linha:
             classify.aprender(conn, linha.descricao, categoria_id, subcategoria_id, usuario, pessoa)
+
+
+CONTA_MANUAL = "Lançamento manual"
+
+
+def conta_manual(engine) -> int:
+    """Conta propria do que e digitado a mao, criada na primeira vez.
+
+    Fica separada das contas de banco de proposito: o que foi digitado nao veio
+    de extrato nenhum, e misturar as duas coisas faria a crítica planilha ×
+    extratos cobrar um comprovante que nunca vai existir.
+    """
+    with engine.begin() as conn:
+        existente = conn.execute(
+            sa.select(db.contas.c.id).where(db.contas.c.nome == CONTA_MANUAL)
+        ).scalar()
+        if existente:
+            return existente
+        return conn.execute(
+            sa.insert(db.contas).values(
+                nome=CONTA_MANUAL, tipo="corrente", titular="Casal",
+                instituicao="—", parser="generico", ativa=True,
+            )
+        ).inserted_primary_key[0]
+
+
+def lancar_receita_manual(
+    engine, *, competencia: str, valor_centavos: int, pessoa: str,
+    categoria_id: int, subcategoria_id: int | None, descricao: str, usuario: str,
+    conta_id: int | None = None, dia: int = 28,
+) -> int:
+    """Grava uma receita digitada a mao e devolve o id.
+
+    A Rô recebe dos pacientes em dezenas de valores pequenos; lancar um por um
+    seria trabalho sem retorno, e o extrato do Itaú traria os depositos sem
+    dizer que sao atendimentos. Um total por mes responde a mesma pergunta com
+    uma linha. O dia 28 e so um lugar no calendario: quem manda no relatorio e
+    a competencia.
+    """
+    if valor_centavos <= 0:
+        raise ValueError("receita precisa de valor positivo")
+    ano, mes = int(competencia[:4]), int(competencia[5:7])
+    ultimo = calendar.monthrange(ano, mes)[1]
+    data = date(ano, mes, min(dia, ultimo))
+    descricao = " ".join(str(descricao).split()) or "RECEITA MANUAL"
+    descricao_norm = normalizar(descricao)
+    conta = conta_id or conta_manual(engine)
+
+    with engine.begin() as conn:
+        return conn.execute(
+            sa.insert(db.transacoes).values(
+                data=data,
+                competencia=competencia,
+                descricao=descricao,
+                descricao_norm=descricao_norm,
+                valor_centavos=valor_centavos,
+                conta_id=conta,
+                categoria_id=categoria_id,
+                subcategoria_id=subcategoria_id,
+                pessoa=_pessoa_valida(pessoa, "Casal"),
+                status="manual",
+                confianca=1.0,
+                origem="manual",
+                natureza="receita",
+                hash_dedup=dedup.hash_lancamento(conta, data, valor_centavos, descricao_norm),
+                ativo=True,
+                classificado_por=usuario,
+            )
+        ).inserted_primary_key[0]
+
+
+def receitas_manuais(conn, ano: int) -> list[dict]:
+    """O que ja foi digitado a mao no ano, para a tela poder editar e apagar."""
+    consulta = (
+        sa.select(
+            db.transacoes.c.id,
+            db.transacoes.c.competencia,
+            db.transacoes.c.descricao,
+            db.transacoes.c.valor_centavos,
+            db.transacoes.c.pessoa,
+            db.categorias.c.nome.label("categoria"),
+            db.subcategorias.c.nome.label("subcategoria"),
+        )
+        .select_from(
+            db.transacoes.outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
+        )
+        .where(
+            db.transacoes.c.origem == "manual",
+            db.transacoes.c.valor_centavos > 0,
+            db.transacoes.c.competencia.like(f"{ano}-%"),
+        )
+        .order_by(db.transacoes.c.competencia.desc(), db.transacoes.c.id.desc())
+    )
+    return [dict(linha._mapping) for linha in conn.execute(consulta)]
 
 
 def excluir_transacao(engine, transacao_id: int) -> bool:

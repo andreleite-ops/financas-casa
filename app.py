@@ -76,8 +76,22 @@ def main() -> None:
                 rotulo = f"{rotulo} · {duplicidades}"
             rotulos.append(rotulo)
 
-        escolha = st.radio("Navegação", rotulos, label_visibility="collapsed")
-        indice = rotulos.index(escolha)
+        # botões de areia em vez de rádio: numa barra vinho a bolinha do rádio
+        # some no escuro e o alvo do clique é minúsculo. Aqui a área inteira é
+        # clicável, e a tela aberta fica marcada
+        if "tela" not in st.session_state:
+            st.session_state["tela"] = TELAS[0][2]
+        for (_ícone, _modulo, titulo, _sub), rotulo in zip(TELAS, rotulos):
+            aberta = st.session_state["tela"] == titulo
+            if st.button(
+                rotulo, key=f"nav_{titulo}", width="stretch",
+                type="primary" if aberta else "secondary",
+            ):
+                st.session_state["tela"] = titulo
+                st.rerun()
+        indice = next(
+            (i for i, tela in enumerate(TELAS) if tela[2] == st.session_state["tela"]), 0
+        )
 
         st.divider()
         estado = db.diagnostico()

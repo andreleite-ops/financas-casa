@@ -82,15 +82,25 @@ CSS = f"""
            font-weight: 500; color: {LATERAL_SUAVE} !important; letter-spacing: .11em;
            text-transform: uppercase; margin-top: 1.3rem; }}
 
-  /* navegacao: uma linha de respiro entre os itens */
-  section[data-testid="stSidebar"] div[role="radiogroup"] {{ gap: 0; }}
-  section[data-testid="stSidebar"] div[role="radiogroup"] > label {{
-       margin-bottom: .6rem; padding: .32rem .5rem; border-radius: 6px; }}
-  section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {{
-       background: rgba(255,255,255,.10); }}
-  section[data-testid="stSidebar"] div[role="radiogroup"] > label p {{ font-size: .93rem; }}
-  section[data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {{
-       border-color: {LATERAL_SUAVE} !important; }}
+  /* ==================== navegação ====================
+     Botões de areia com letra preta, um por tela. O aberto fica marcado: areia
+     cheia, texto em vinho escuro e um filete vinho na borda esquerda. Os
+     outros ficam num areia rebaixado — presentes, mas sem competir com ele. */
+  section[data-testid="stSidebar"] [class*="st-key-nav_"] {{ margin-bottom: .55rem; }}
+  section[data-testid="stSidebar"] [class*="st-key-nav_"] div[data-testid="stButton"] > button {{
+       background: {AREIA} !important; color: {PRETO} !important;
+       border: 1px solid rgba(0,0,0,.10) !important; border-left: 4px solid {AREIA} !important;
+       border-radius: 7px; padding: .42rem .7rem; text-align: left;
+       justify-content: flex-start; font-weight: 500; box-shadow: none; }}
+  section[data-testid="stSidebar"] [class*="st-key-nav_"] div[data-testid="stButton"] > button p {{
+       color: {PRETO} !important; font-size: .93rem; margin: 0; }}
+  section[data-testid="stSidebar"] [class*="st-key-nav_"] div[data-testid="stButton"] > button:hover {{
+       background: {AREIA_CLARA} !important; border-left-color: {VINHO_CLARO} !important; }}
+  section[data-testid="stSidebar"] [class*="st-key-nav_"] div[data-testid="stButton"] > button[kind="primary"] {{
+       background: {AREIA_CLARA} !important; border-left-color: {VINHO} !important;
+       box-shadow: 0 1px 3px rgba(0,0,0,.28); }}
+  section[data-testid="stSidebar"] [class*="st-key-nav_"] div[data-testid="stButton"] > button[kind="primary"] p {{
+       color: {VINHO_ESCURO} !important; font-weight: 700; }}
 
   section[data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,.18);
        margin: 1.4rem 0; }}
@@ -127,6 +137,33 @@ CSS = f"""
                background: {PRETO}; opacity: .7; }}
   .cb .val {{ font-size: .87rem; text-align: right; font-variant-numeric: tabular-nums;
              color: {PRETO}; }}
+
+  /* ==================== resumo mês × ano ====================
+     Quatro cartões davam só o mês, e o mês sozinho engana: um bônus em janeiro
+     ou um mês magro parecem a regra. Aqui o mês e o ano ficam lado a lado, na
+     mesma linha de cada conta, e o olho compara sem trocar de tela. */
+  .resumo {{ width: 100%; border-collapse: collapse; background: {BRANCO};
+            border: 1px solid {LINHA}; border-radius: 10px; overflow: hidden;
+            font-variant-numeric: tabular-nums; margin-bottom: 1.4rem; }}
+  .resumo th {{ font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+               color: {CINZA_CLARO}; font-weight: 600; padding: .65rem .9rem;
+               border-bottom: 1px solid {LINHA}; text-align: right; white-space: nowrap; }}
+  .resumo th.grupo {{ background: {AREIA}; color: {VINHO_ESCURO}; text-align: center;
+                     border-left: 1px solid {LINHA}; }}
+  .resumo th:first-child {{ text-align: left; }}
+  .resumo td {{ padding: .62rem .9rem; text-align: right; font-size: .95rem;
+               color: {PRETO}; border-bottom: 1px solid {AREIA}; white-space: nowrap; }}
+  .resumo td.conta {{ text-align: left; font-size: .87rem; color: {CINZA};
+                     font-weight: 600; }}
+  .resumo td.abre {{ border-left: 1px solid {LINHA}; }}
+  .resumo tr:last-child td {{ border-bottom: none; }}
+  /* a sobra é a linha de fechamento: separada por um traço mais forte */
+  .resumo tr.fecha td {{ border-top: 2px solid {LINHA}; font-weight: 700;
+                        background: {AREIA_CLARA}; }}
+  .resumo .var {{ display: block; font-size: .7rem; font-weight: 600; margin-top: .1rem; }}
+  .resumo .sobe {{ color: {BOM}; }}
+  .resumo .desce {{ color: {CRITICO}; }}
+  .resumo .neutro {{ color: {CINZA_CLARO}; font-weight: 400; }}
 
   .pill {{ display: inline-block; font-size: .7rem; font-weight: 600; padding: .1rem .5rem;
           border-radius: 3px; color: {BRANCO}; letter-spacing: .02em; }}
