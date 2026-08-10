@@ -26,14 +26,24 @@ def render(engine, usuario: dict) -> None:
         metas = repo.listar_metas(conn, ano)
         media = analytics.resumo(conn, ano=ano)
         meses_com_dado = len({c for c in competencias if c.startswith(str(ano))}) or 1
-        renda_media = media["receitas"] // meses_com_dado
+        # venda de bem fica de fora: um apartamento vendido uma vez não é renda
+        # mensal, e se entrasse aqui deixaria as metas em % frouxas o ano inteiro
+        renda_media = media["renda_recorrente"] // meses_com_dado
 
     base = c3.number_input(
         "Renda mensal considerada (R$)",
         min_value=0.0, step=500.0, value=float(renda_media / 100),
-        help="Sugerido: média das receitas do ano. Ajuste se quiser planejar por outro valor.",
+        help="Sugerido: média da renda do ano, sem venda de bens. Ajuste se quiser "
+             "planejar por outro valor.",
     )
     renda_base = int(round(base * 100))
+
+    if media["receitas_nao_recorrentes"]:
+        st.caption(
+            f"Fora da base: {fmt_brl(media['receitas_nao_recorrentes'])} de **venda de bens** "
+            f"em {ano}. O dinheiro entrou e aparece nas Receitas, mas não é renda mensal — "
+            "usá-lo aqui afrouxaria as metas do ano inteiro."
+        )
 
     st.caption(
         "Defina quanto por cento da renda vai para cada categoria. A Poupança entra como "

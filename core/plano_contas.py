@@ -58,6 +58,13 @@ REGRAS_RECEITA: list[tuple[str, str, str, str]] = [
     ("NUN", "Rendimentos", "Aluguéis", "Casal"),
     # o aluguel do NUN as vezes vem so pelo rotulo, sem o nome na descricao
     ("ALUGUEL", "Rendimentos", "Aluguéis", "Casal"),
+    # a venda do apartamento da mae do Andre: patrimonio dele virando saldo.
+    # Entra em Venda de Bens, que fica fora da renda base do orcamento.
+    ("VENDA APTO", "Outras Receitas", "Venda de Bens", "André"),
+    ("VENDA DE APTO", "Outras Receitas", "Venda de Bens", "André"),
+    ("VENDA APARTAMENTO", "Outras Receitas", "Venda de Bens", "André"),
+    ("VENDA IMOVEL", "Outras Receitas", "Venda de Bens", "André"),
+    ("VENDA DE IMOVEL", "Outras Receitas", "Venda de Bens", "André"),
 ]
 
 # (padrao, categoria, subcategoria) - casam por "contem" sobre a descricao
@@ -223,6 +230,11 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
     ("IOF", "Financeiras & Impostos", "Juros & Multas"),
     ("DARF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IRPF", "Financeiras & Impostos", "Imposto de Renda"),
+    ("IMPOSTO DE RENDA", "Financeiras & Impostos", "Imposto de Renda"),
+    # o IR da venda do apartamento: sai como despesa, no mesmo mes da venda
+    ("GANHO DE CAPITAL", "Financeiras & Impostos", "Imposto de Renda"),
+    ("IR GANHO DE CAPITAL", "Financeiras & Impostos", "Imposto de Renda"),
+    ("IR VENDA", "Financeiras & Impostos", "Imposto de Renda"),
     ("SEGURO DE VIDA", "Financeiras & Impostos", "Seguros (Vida / Residencial)"),
     ("PORTO SEGURO RESID", "Financeiras & Impostos", "Seguros (Vida / Residencial)"),
     # Poupanca & investimentos

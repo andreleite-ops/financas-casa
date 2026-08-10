@@ -180,3 +180,61 @@ def test_a_matriz_de_receitas_mostra_a_fonte_de_cada_um(engine):
     assert por_fonte[("Casal", "ALUGUEL")] == -50_000
     # nenhuma receita ficou com o dono herdado do titular da conta
     assert not [linha for linha in matriz["linhas"] if linha["fonte"] == "—"]
+
+
+# ---------------------------------------------------------------------------
+# venda de bem: entra no total, fica fora da renda que baliza o orçamento
+# ---------------------------------------------------------------------------
+VENDA = [
+    ("15/03/2026", "mar/26", "REC",  "VENDA APTO MAE", "520.000,00", "VENDA"),
+    ("30/04/2026", "abr/26", "DESP", "IR GANHO DE CAPITAL", "31.667,03", "IMPOSTOS"),
+]
+
+
+def _com_a_venda() -> bytes:
+    lancamentos = pd.DataFrame(
+        LANCAMENTOS + VENDA,
+        columns=["DATA", "MÊS/ANO", "CATEGORIA", "BENEFICIÁRIO", "VALOR", "CLASSIFICAÇÃO"],
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as escritor:
+        lancamentos.to_excel(escritor, sheet_name="Lançamento Despesas", index=False)
+    return buffer.getvalue()
+
+
+def _importar_com_a_venda(engine):
+    conteudo = _com_a_venda()
+    df = tabular.carregar_tabela(conteudo, "planilha.xlsx")
+    lancamentos, _ = tabular.extrair(
+        df, tabular.sugerir_mapeamento(df.columns, df), origem="planilha"
+    )
+    repo.importar(
+        engine, lancamentos=lancamentos, conta_id=repo.conta_da_planilha(engine),
+        arquivo="planilha.xlsx", origem="planilha", usuario="andre",
+        pessoa_padrao="Rô", usar_ia=False,
+    )
+
+
+def test_venda_de_bem_conta_no_total_mas_nao_vira_renda(engine):
+    _importar_com_a_venda(engine)
+    with engine.connect() as conn:
+        resumo = analytics.resumo(conn, ano=2026)
+
+    # o dinheiro entrou: aparece nas receitas
+    assert resumo["receitas"] == REC_ESPERADA + 52_000_000
+    # mas não é renda: a base do orçamento ignora a venda
+    assert resumo["receitas_nao_recorrentes"] == 52_000_000
+    assert resumo["renda_recorrente"] == REC_ESPERADA
+    # e o IR da venda é despesa, no mês em que foi recolhido
+    assert resumo["despesas"] == DESP_ESPERADA + 3_166_703
+
+
+def test_a_venda_do_apartamento_e_do_andre(engine):
+    _importar_com_a_venda(engine)
+    with engine.connect() as conn:
+        por_pessoa = {
+            linha["pessoa"]: linha["total"]
+            for linha in analytics.receitas_por_pessoa(conn, ano=2026)
+        }
+
+    assert por_pessoa["André"] == 2_000_000 + 52_000_000

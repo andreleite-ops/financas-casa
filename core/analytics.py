@@ -18,11 +18,37 @@ from . import db
 
 CATEGORIA_POUPANCA = "Poupança & Investimentos"
 
+# Vender um bem nao e ganhar dinheiro, e trocar patrimonio por saldo: o
+# apartamento virou dinheiro, e a casa continua com o mesmo tanto. Entra nos
+# totais, porque o dinheiro entrou mesmo, mas fica de fora da renda que serve
+# de base para o orcamento — senao um apartamento vendido uma vez viraria
+# "renda mensal" e todas as metas em % ficariam frouxas o ano inteiro.
+SUBCATEGORIAS_NAO_RECORRENTES = ("Venda de Bens",)
+
 
 def _id_poupanca(conn) -> int | None:
     return conn.execute(
         sa.select(db.categorias.c.id).where(db.categorias.c.nome == CATEGORIA_POUPANCA)
     ).scalar()
+
+
+def receitas_nao_recorrentes(
+    conn, competencia: str | None = None, ano: int | None = None, pessoa: str | None = None
+) -> int:
+    """Quanto das receitas do periodo veio de venda de bem, e nao de renda."""
+    total = conn.execute(
+        sa.select(sa.func.sum(db.transacoes.c.valor_centavos))
+        .select_from(
+            db.transacoes.join(
+                db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id
+            )
+        )
+        .where(
+            *_base(competencia, ano, pessoa),
+            db.subcategorias.c.nome.in_(SUBCATEGORIAS_NAO_RECORRENTES),
+        )
+    ).scalar()
+    return int(total or 0)
 
 
 def _base(competencia: str | None = None, ano: int | None = None, pessoa: str | None = None):
@@ -76,12 +102,17 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
         else:
             despesas += -total
 
+    nao_recorrentes = receitas_nao_recorrentes(conn, competencia, ano, pessoa)
     return {
         "receitas": receitas,
         "despesas": despesas,
         "poupanca": poupanca,
         "sobra": receitas - despesas - poupanca,
         "nao_classificado": sem_classe,
+        # venda de bem entra em "receitas" (o dinheiro entrou), mas fica de fora
+        # daqui: e esta linha que o orçamento usa como renda
+        "receitas_nao_recorrentes": nao_recorrentes,
+        "renda_recorrente": receitas - nao_recorrentes,
     }
 
 
