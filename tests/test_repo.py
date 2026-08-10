@@ -295,3 +295,44 @@ def test_plano_de_contas_nao_consulta_uma_vez_por_categoria(engine):
     assert {s["nome"] for s in alimentacao["subcategorias"]} == {
         "No Domicílio", "Fora do Domicílio"
     }
+
+
+def test_fila_pendentes_corta_por_mes_e_por_texto(engine):
+    """O André classifica mês a mês, e o gasto esporádico está espalhado.
+
+    Sem cortar por mês, achar as três linhas de agosto entre centenas é rolar a
+    lista inteira. O filtro de texto olha também o rótulo da origem — é ele que
+    diz o que a linha é quando a descrição não diz.
+    """
+    import sqlalchemy as sa
+
+    from core import db, repo
+
+    conta = repo.conta_da_planilha(engine)
+    linhas = [
+        ("2026-08-05", "COLEGIO SANTA CRUZ", -350_000, "EXTRA"),
+        ("2026-08-20", "PADARIA", -5_000, "ALIMENTAÇÃO"),
+        ("2026-07-10", "MATERIAL ESCOLAR", -20_000, "EXTRA"),
+    ]
+    with engine.begin() as conn:
+        for data, descricao, valor, rotulo in linhas:
+            conn.execute(
+                sa.insert(db.transacoes).values(
+                    data=date.fromisoformat(data), competencia=data[:7],
+                    descricao=descricao, descricao_norm=descricao,
+                    valor_centavos=valor, conta_id=conta, pessoa="Casal",
+                    status="pendente", origem="planilha", ativo=True,
+                    classificacao_origem=rotulo, hash_dedup=descricao + data,
+                )
+            )
+
+    with engine.connect() as conn:
+        assert repo.pendentes_por_competencia(conn) == {"2026-08": 2, "2026-07": 1}
+        so_agosto = repo.fila_pendentes(conn, competencia="2026-08")
+        assert {i["descricao"] for i in so_agosto} == {"COLEGIO SANTA CRUZ", "PADARIA"}
+        # o texto acha pela descrição...
+        assert len(repo.fila_pendentes(conn, termo="colegio")) == 1
+        # ...e também pelo rótulo que a planilha usou
+        assert len(repo.fila_pendentes(conn, termo="EXTRA")) == 2
+        # os dois filtros somam
+        assert len(repo.fila_pendentes(conn, competencia="2026-08", termo="EXTRA")) == 1

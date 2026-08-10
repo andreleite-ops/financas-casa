@@ -29,9 +29,13 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
 
     with st.container(border=True):
         cabecalho, corpo = st.columns([1.5, 2.6])
+        # o rótulo da origem é a melhor pista do que a linha é: a pensão vinha
+        # como "CONTRIBUIÇÃO MENSAL", e sem mostrá-lo a descrição fica sozinha
+        rotulo = item.get("classificacao_origem")
         cabecalho.markdown(
             f"**{item['data']:%d/%m/%Y}**<br>{item['descricao']}<br>"
-            f"<span class='nota'>{item.get('conta', '')} · "
+            + (f"<span class='pill p-neutro'>{rotulo}</span><br>" if rotulo else "")
+            + f"<span class='nota'>{item.get('conta', '')} · "
             f"{'entrada' if natureza == 'receita' else 'saída'} de "
             f"{fmt_brl(abs(item['valor_centavos']))}"
             + (f"<br>{sugestao}" if sugestao else "")
@@ -87,58 +91,84 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
             b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")
 
 
+def _listar(engine, usuario, fila, plano) -> None:
+    """Doze por vez, e não quarenta.
+
+    Cada lançamento na tela são cinco campos, e o Streamlit redesenha todos a
+    cada toque: com quarenta eram duzentos campos por clique, e a tela demorava
+    a transicionar de um campo para o seguinte. Doze cabem numa tela e
+    respondem.
+    """
+    por_pagina = 12
+    paginas = (len(fila) + por_pagina - 1) // por_pagina
+    pagina = 1
+    if paginas > 1:
+        pagina = st.number_input(
+            f"Página (de {paginas})", min_value=1, max_value=paginas, value=1, step=1,
+            help="Ao salvar, o lançamento sai da fila e os próximos sobem sozinhos.",
+        )
+    inicio = (int(pagina) - 1) * por_pagina
+    for item in fila[inicio:inicio + por_pagina]:
+        _editor(engine, usuario, item, plano, "f", item.get("observacao") or "")
+    if paginas > 1:
+        st.caption(
+            f"Mostrando {inicio + 1}–{min(inicio + por_pagina, len(fila))} de {len(fila)}."
+        )
+
+
 def render(engine, usuario: dict) -> None:
     if st.session_state.pop("msg_classificacao", None):
         st.success(st.session_state.get("msg_classificacao", "Salvo."), icon="🧠")
 
     with engine.connect() as conn:
         plano = repo.plano_de_contas(conn)
-        fila = repo.fila_pendentes(conn)
+        por_mes = repo.pendentes_por_competencia(conn)
 
+    total_pendente = sum(por_mes.values())
     aba_fila, aba_busca = st.tabs([
-        f"📌 Fila de pendências ({len(fila)})", "🔎 Reclassificar qualquer lançamento"
+        f"📌 Fila de pendências ({total_pendente})", "🔎 Reclassificar qualquer lançamento"
     ])
 
     with aba_fila:
-        if not fila:
+        if not total_pendente:
             st.success("Nada pendente — tudo classificado.", icon="✅")
             st.caption(
                 "Lançamentos com descrição genérica (PIX, transferência, código sem nome) "
                 "caem aqui quando as regras e a IA não têm certeza."
             )
         else:
-            c1, c2 = st.columns([3, 1])
-            c1.caption(
-                f"{len(fila)} lançamentos aguardando. Cada correção vira memória e reduz a "
-                "fila das próximas importações."
+            # mês a mês é como o André trabalha, e o gasto esporádico com os
+            # filhos está espalhado entre centenas de linhas: sem cortar por
+            # mês, achar as três de agosto é rolar a lista inteira
+            c1, c2, c3 = st.columns([1.3, 1.7, 1.2])
+            TODOS = f"Todos os meses ({total_pendente})"
+            opcoes = [TODOS] + [f"{mes} ({n})" for mes, n in por_mes.items()]
+            escolha = c1.selectbox("Mês", opcoes)
+            competencia = None if escolha == TODOS else escolha.split(" ")[0]
+            termo = c2.text_input(
+                "Filtrar", placeholder="Ex.: colégio, pensão, farmácia…",
+                help="Busca na descrição e no rótulo que a planilha usou.",
             )
-            if c2.button("Reaplicar regras na fila", width="stretch"):
+            if c3.button("Reaplicar regras na fila", width="stretch"):
                 with engine.begin() as conn:
                     resolvidas = classify.reclassificar_pendentes(conn)
                 st.success(f"{resolvidas} lançamento(s) resolvido(s) pelas regras atuais.")
                 st.rerun()
-            # doze por vez, e não quarenta. Cada lançamento na tela são cinco
-            # campos, e o Streamlit redesenha todos a cada toque: com quarenta
-            # eram duzentos campos por clique, e a tela demorava a transicionar
-            # de um campo para o seguinte. Doze cabem numa tela e respondem.
-            por_pagina = 12
-            paginas = (len(fila) + por_pagina - 1) // por_pagina
-            pagina = 1
-            if paginas > 1:
-                pagina = st.number_input(
-                    f"Página (de {paginas})", min_value=1, max_value=paginas,
-                    value=1, step=1,
-                    help="Ao salvar, o lançamento sai da fila e os próximos sobem sozinhos.",
+
+            with engine.connect() as conn:
+                # a fila inteira numa consulta só: são centenas de linhas leves,
+                # e um teto de 200 fazia a contagem da tela mentir sobre o total
+                fila = repo.fila_pendentes(
+                    conn, limite=5000, competencia=competencia, termo=termo
                 )
-            inicio = (int(pagina) - 1) * por_pagina
-            for item in fila[inicio:inicio + por_pagina]:
-                sugestao = item.get("observacao") or ""
-                _editor(engine, usuario, item, plano, "f", sugestao)
-            if paginas > 1:
+            if not fila:
+                st.info("Nenhum pendente com esse filtro.", icon="🔎")
+            else:
                 st.caption(
-                    f"Mostrando {inicio + 1}–{min(inicio + por_pagina, len(fila))} "
-                    f"de {len(fila)}."
+                    f"{len(fila)} lançamento(s) aqui. Cada correção vira memória: da "
+                    "próxima vez o sistema reconhece sozinho."
                 )
+                _listar(engine, usuario, fila, plano)
 
     with aba_busca:
         termo = st.text_input(

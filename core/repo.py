@@ -586,7 +586,29 @@ def excluir_transacao(engine, transacao_id: int) -> bool:
     return resultado.rowcount > 0
 
 
-def fila_pendentes(conn, limite: int = 200) -> list[dict]:
+def fila_pendentes(
+    conn, limite: int = 200, competencia: str | None = None, termo: str = "",
+) -> list[dict]:
+    """A fila de classificação, opcionalmente de um mês só ou filtrada por texto.
+
+    O André classifica mês a mês, e o gasto esporádico com os filhos está
+    espalhado entre centenas de linhas. Sem cortar por mês, achar as três de
+    agosto significa rolar a lista inteira.
+    """
+    condicoes = [
+        db.transacoes.c.status == "pendente",
+        db.transacoes.c.ativo == sa.true(),
+    ]
+    if competencia:
+        condicoes.append(db.transacoes.c.competencia == competencia)
+    if termo.strip():
+        alvo = f"%{termo.strip()}%"
+        condicoes.append(
+            sa.or_(
+                db.transacoes.c.descricao.ilike(alvo),
+                db.transacoes.c.classificacao_origem.ilike(alvo),
+            )
+        )
     consulta = (
         sa.select(
             db.transacoes.c.id,
@@ -596,17 +618,29 @@ def fila_pendentes(conn, limite: int = 200) -> list[dict]:
             db.transacoes.c.pessoa,
             db.transacoes.c.confianca,
             db.transacoes.c.observacao,
+            db.transacoes.c.classificacao_origem,
             db.contas.c.nome.label("conta"),
         )
         .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
-        .where(
-            db.transacoes.c.status == "pendente",
-            db.transacoes.c.ativo == sa.true(),
-        )
+        .where(*condicoes)
         .order_by(db.transacoes.c.data.desc())
         .limit(limite)
     )
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def pendentes_por_competencia(conn) -> dict[str, int]:
+    """Quantos pendentes em cada mês — para a tela dizer onde está o trabalho."""
+    consulta = (
+        sa.select(db.transacoes.c.competencia, sa.func.count().label("n"))
+        .where(
+            db.transacoes.c.status == "pendente",
+            db.transacoes.c.ativo == sa.true(),
+        )
+        .group_by(db.transacoes.c.competencia)
+        .order_by(db.transacoes.c.competencia.desc())
+    )
+    return {linha.competencia: int(linha.n) for linha in conn.execute(consulta)}
 
 
 def buscar_transacoes(conn, termo: str = "", limite: int = 100) -> list[dict]:
