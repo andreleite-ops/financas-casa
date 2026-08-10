@@ -789,10 +789,34 @@ def salvar_de_para(
     return resultado.rowcount
 
 
-def apagar_de_para(engine, rotulo: str) -> None:
-    """Desfaz a tradução. Não mexe no que já foi classificado por ela."""
+def apagar_de_para(engine, rotulo: str) -> int:
+    """Desfaz a tradução e devolve à fila o que ela classificou.
+
+    Devolve quantos lançamentos voltaram a ficar pendentes. Só volta o que
+    está exatamente onde a tradução colocou: se depois disso alguém corrigiu um
+    lançamento para outra categoria, essa correção fica de pé — desfazer uma
+    decisão em massa não pode desfazer o trabalho fino feito em cima dela.
+    """
     with engine.begin() as conn:
+        traducao = conn.execute(
+            sa.select(db.de_para.c.categoria_id, db.de_para.c.subcategoria_id)
+            .where(db.de_para.c.rotulo == rotulo)
+        ).first()
+        devolvidos = 0
+        if traducao:
+            devolvidos = conn.execute(
+                sa.update(db.transacoes)
+                .where(
+                    db.transacoes.c.classificacao_origem == rotulo,
+                    db.transacoes.c.categoria_id == traducao.categoria_id,
+                    db.transacoes.c.status == "manual",
+                    db.transacoes.c.ativo == sa.true(),
+                )
+                .values(categoria_id=None, subcategoria_id=None,
+                        status="pendente", confianca=None, classificado_por=None)
+            ).rowcount
         conn.execute(sa.delete(db.de_para).where(db.de_para.c.rotulo == rotulo))
+    return devolvidos
 
 
 def excluir_transacao(engine, transacao_id: int) -> bool:

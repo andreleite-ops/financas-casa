@@ -117,11 +117,14 @@ def _aba_de_para(engine, usuario: dict, plano) -> None:
                 )
                 linha.markdown(f"**{rotulo}** → {destino}")
                 if botao.button("Desfazer", key=f"dp_del_{rotulo}"):
-                    repo.apagar_de_para(engine, rotulo)
+                    devolvidos = repo.apagar_de_para(engine, rotulo)
+                    st.session_state["msg_classificacao"] = (
+                        f"“{rotulo}” desfeito: {devolvidos} lançamento(s) voltaram para a fila."
+                    )
                     st.rerun()
             st.caption(
-                "Desfazer só apaga a tradução: o que já foi classificado por ela continua "
-                "como está, e pode ser corrigido na fila ou na busca."
+                "Desfazer devolve à fila os lançamentos que a tradução classificou. O que "
+                "você corrigiu à mão depois, para outra categoria, fica como está."
             )
 
     if not rotulos:

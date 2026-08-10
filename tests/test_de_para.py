@@ -114,13 +114,44 @@ def test_traducao_para_categoria_do_andre_leva_o_dono_junto(engine):
     assert pessoa == "André"
 
 
-def test_desfazer_apaga_a_traducao_mas_nao_desclassifica(engine):
+def test_desfazer_devolve_a_fila_o_que_a_traducao_classificou(engine):
+    """Uma decisão em massa precisa ser reversível para valer a pena tomar."""
     _lancar(engine, "SALAO", -10_000, "CUIDADOS PESSOAIS")
+    _lancar(engine, "MANICURE", -6_000, "CUIDADOS PESSOAIS")
     cat, sub = _categoria(engine, "Vestuário & Cuidados Pessoais", "Cabeleireiro & Estética")
     repo.salvar_de_para(engine, rotulo="CUIDADOS PESSOAIS", categoria_id=cat,
                         subcategoria_id=sub, usuario="André")
-    repo.apagar_de_para(engine, "CUIDADOS PESSOAIS")
+    with engine.connect() as conn:
+        assert repo.fila_pendentes(conn) == []
 
+    assert repo.apagar_de_para(engine, "CUIDADOS PESSOAIS") == 2
     with engine.connect() as conn:
         assert repo.listar_de_para(conn) == {}
-        assert repo.fila_pendentes(conn) == []   # o lançamento continua classificado
+        assert {i["descricao"] for i in repo.fila_pendentes(conn)} == {"SALAO", "MANICURE"}
+
+
+def test_desfazer_nao_desmancha_a_correcao_feita_a_mao_depois(engine):
+    """Desfazer a decisão em massa não pode desfazer o trabalho fino em cima dela."""
+    _lancar(engine, "SALAO", -10_000, "CUIDADOS PESSOAIS")
+    _lancar(engine, "REMEDIO", -6_000, "CUIDADOS PESSOAIS")
+    cat, sub = _categoria(engine, "Vestuário & Cuidados Pessoais", "Cabeleireiro & Estética")
+    repo.salvar_de_para(engine, rotulo="CUIDADOS PESSOAIS", categoria_id=cat,
+                        subcategoria_id=sub, usuario="André")
+
+    # o remédio não era cuidado pessoal: corrigido à mão para Saúde
+    saude, farmacia = _categoria(engine, "Saúde", "Farmácia")
+    with engine.connect() as conn:
+        remedio = conn.execute(
+            sa.select(db.transacoes.c.id).where(db.transacoes.c.descricao == "REMEDIO")
+        ).scalar()
+    repo.reclassificar(engine, remedio, categoria_id=saude, subcategoria_id=farmacia,
+                       pessoa="Rô", usuario="André", criar_regra=False)
+
+    assert repo.apagar_de_para(engine, "CUIDADOS PESSOAIS") == 1   # só o salão
+    with engine.connect() as conn:
+        assert {i["descricao"] for i in repo.fila_pendentes(conn)} == {"SALAO"}
+        categoria = conn.execute(
+            sa.select(db.transacoes.c.categoria_id)
+            .where(db.transacoes.c.descricao == "REMEDIO")
+        ).scalar()
+    assert categoria == saude
