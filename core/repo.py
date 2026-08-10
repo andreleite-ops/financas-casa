@@ -286,17 +286,21 @@ def importar(
                 subcategoria_id = achado.subcategoria_id
                 status, confianca = achado.status, achado.confianca
 
-            # a dica do arquivo manda; depois a regra; depois o que a própria
-            # descrição diz ("ALMOÇO ANDRÉ", "CONSULTA RO"); por último o
-            # titular da conta — que na carga inicial não sabe de nada, porque
-            # a planilha mistura todas as contas numa só
-            pessoa = _pessoa_valida(
+            # quem diz de quem é o gasto, em ordem: a coluna de pessoa do
+            # arquivo, a regra, a própria descrição ("ALMOÇO ANDRÉ") e a
+            # categoria que é de uma pessoa por natureza (Filhos & Pensão).
+            declarado = (
                 lan.pessoa_hint
                 or achado.pessoa
                 or pessoa_na_descricao(lan.descricao)
-                or donos_de_categoria.get(categoria_id),
-                pessoa_padrao,
+                or donos_de_categoria.get(categoria_id)
             )
+            # ninguém disse: despesa sem dono declarado é da casa. Herdar o
+            # titular da conta ou a resposta de "de quem é este arquivo" fazia
+            # o gasto comum inteiro virar dívida de uma pessoa só — foi assim
+            # que R$ 713 mil da casa apareceram como despesa da Rô.
+            padrao = PESSOA_PADRAO if lan.valor_centavos < 0 else pessoa_padrao
+            pessoa = _pessoa_valida(declarado, padrao)
             observacao = decisao.motivo or None
 
             if decisao.situacao == "confere_planilha":

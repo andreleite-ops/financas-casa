@@ -437,3 +437,45 @@ def test_gasto_da_casa_nao_pode_ficar_com_uma_pessoa_so(engine):
         "MERCADO": "Casal",
         "PADARIA": "Casal",
     }
+
+
+def test_despesa_sem_dono_declarado_e_sempre_do_casal(engine):
+    """Regra do André: qualquer despesa sem classificação é do casal.
+
+    Herdar o titular da conta, ou a resposta de "de quem é este arquivo",
+    fazia o gasto comum inteiro virar dívida de uma pessoa só.
+    """
+    import sqlalchemy as sa
+
+    from core import db, repo
+    from parsers.base import Lancamento
+
+    # conta de uma pessoa só, e o upload dizendo que o arquivo é dela:
+    # nem isso torna a despesa comum dela
+    with engine.connect() as conn:
+        conta = next(c for c in repo.listar_contas(conn) if c["titular"] == "André")
+
+    repo.importar(
+        engine,
+        lancamentos=[
+            Lancamento(data=date(2026, 3, 2), descricao="MERCADO", valor_centavos=-30_000),
+            Lancamento(data=date(2026, 3, 3), descricao="ALMOÇO ANDRÉ", valor_centavos=-9_000),
+            Lancamento(data=date(2026, 3, 4), descricao="PENSAO ALIMENTICIA",
+                       valor_centavos=-1_560_000),
+        ],
+        conta_id=conta["id"], arquivo="fatura.csv", origem="extrato",
+        usuario="André", pessoa_padrao="André", usar_ia=False,
+    )
+
+    with engine.connect() as conn:
+        donos = {
+            linha.descricao: linha.pessoa
+            for linha in conn.execute(
+                sa.select(db.transacoes.c.descricao, db.transacoes.c.pessoa)
+            )
+        }
+    assert donos == {
+        "MERCADO": "Casal",              # ninguém disse: é da casa
+        "ALMOÇO ANDRÉ": "André",         # a descrição diz
+        "PENSAO ALIMENTICIA": "André",   # a categoria é dele
+    }

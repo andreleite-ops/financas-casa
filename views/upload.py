@@ -91,18 +91,15 @@ def _aba_enviar(engine, usuario: dict) -> None:
         # Sem isso, tudo entraria como "Casal" e o relatório por pessoa não
         # separaria o que é de quem
         pessoa_arquivo = st.radio(
-            "De quem é este arquivo", db.PESSOAS, index=2, horizontal=True,
-            help="Vale para TODAS as linhas que não disserem de quem são. Na planilha da "
-                 "casa, que mistura as contas de vocês dois, isso é quase tudo — por isso "
-                 "o certo aqui é Casal. Escolher uma pessoa faz o gasto da casa inteiro "
-                 "aparecer como dela.",
+            "De quem são as receitas deste arquivo", db.PESSOAS, index=2, horizontal=True,
+            help="Vale só para as receitas que não disserem de quem são. Despesa sem dono "
+                 "declarado é sempre da casa.",
         )
-        if pessoa_arquivo != "Casal":
-            st.caption(
-                f"⚠️ Tudo que não disser de quem é vai entrar como **{pessoa_arquivo}**. "
-                "Numa planilha que junta as contas do casal, escolha **Casal** — quem tem "
-                "o nome escrito na descrição continua sendo reconhecido."
-            )
+        st.caption(
+            "**Despesa sem dono declarado entra como Casal**, sempre. Só sai disso o que "
+            "diz de quem é — o nome na descrição (“ALMOÇO ANDRÉ”), uma regra, ou uma "
+            "categoria que é de uma pessoa (Filhos & Pensão)."
+        )
     else:
         pessoa_arquivo = None
 
