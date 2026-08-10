@@ -79,14 +79,32 @@ def classificar_local(
     valor_centavos: int,
     regras: list[dict],
     naturezas: dict[int, str],
+    natureza_hint: str | None = None,
+    rotulo_origem: str | None = None,
 ) -> Resultado:
-    """Camadas 1 e 2, sem tocar no banco nem na rede."""
+    """Camadas 1 e 2, sem tocar no banco nem na rede.
+
+    natureza_hint vem da origem quando ela declara despesa ou receita numa
+    coluna propria; nesse caso ela manda, porque um estorno dentro de despesa
+    tem sinal de entrada sem deixar de ser despesa.
+
+    rotulo_origem e como a origem chamou o lancamento na coluna dela ("TAG",
+    "BIOS", "ALUGUEL"). Na planilha da casa a fonte de renda mora ali, nao na
+    descricao: a linha diz "SALARIO" e so o rotulo conta que e da TAG, do
+    Andre. Sem olhar o rotulo, toda receita ficaria com o dono da conta.
+    """
     descricao_norm = normalizar(descricao)
     chave = chave_estabelecimento(descricao)
-    natureza_esperada = "receita" if valor_centavos > 0 else "despesa"
+    rotulo_norm = normalizar(rotulo_origem) if rotulo_origem else ""
+    natureza_esperada = natureza_hint or ("receita" if valor_centavos > 0 else "despesa")
 
     for regra in regras:
-        if not _casa(regra, descricao_norm, chave):
+        onde = None
+        if _casa(regra, descricao_norm, chave):
+            onde = "descrição"
+        elif rotulo_norm and _casa(regra, rotulo_norm, rotulo_norm):
+            onde = "rótulo da origem"
+        if onde is None:
             continue
         if naturezas.get(regra["categoria_id"]) != natureza_esperada:
             continue  # guarda de natureza
@@ -97,7 +115,10 @@ def classificar_local(
             pessoa=regra["pessoa"],
             status=status,
             confianca=1.0 if status == "auto_memoria" else 0.9,
-            explicacao=("memória: " if status == "auto_memoria" else "regra: ") + regra["padrao"],
+            explicacao=(
+                ("memória: " if status == "auto_memoria" else "regra: ")
+                + f"{regra['padrao']} ({onde})"
+            ),
         )
     return Resultado()
 

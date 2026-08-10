@@ -34,7 +34,21 @@ class Decisao:
 
     @property
     def entra_ativo(self) -> bool:
-        return self.situacao in ("novo", "confere_planilha")
+        """Ja entra valendo nos relatorios?
+
+        So fica de fora o que repete, com identidade exata, algo que ja estava
+        gravado antes — o caso de reenviar o mesmo arquivo duas vezes. Suspeita
+        provavel entra valendo e vai para a fila de confirmacao: quem decide e
+        o usuario, e ate ele decidir o total do mes tem de bater com a origem,
+        senao a primeira tela depois do upload ja mostra um numero menor que a
+        planilha e nada explica a diferenca. Repeticao dentro do proprio
+        arquivo (id provisorio, negativo) tambem entra: dois cafes no mesmo
+        lugar, no mesmo dia, pelo mesmo valor acontecem, e a origem contou os
+        dois.
+        """
+        if self.situacao != "duplicata_exata":
+            return True
+        return self.existente_id is not None and self.existente_id < 0
 
     @property
     def e_duplicata(self) -> bool:

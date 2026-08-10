@@ -14,10 +14,10 @@ from parsers.base import ErroDeLeitura
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
 
-PAPEIS = ["data", "descricao", "valor", "entrada", "saida", "categoria", "subcategoria",
+PAPEIS = ["data", "competencia", "descricao", "valor", "entrada", "saida", "categoria", "subcategoria",
           "pessoa", "tipo"]
 ROTULOS_PAPEL = {
-    "data": "Data (obrigatória)", "descricao": "Descrição", "valor": "Valor único",
+    "data": "Data (obrigatória)", "competencia": "Mês de referência", "descricao": "Descrição", "valor": "Valor único",
     "entrada": "Entrada / crédito", "saida": "Saída / débito",
     "categoria": "Categoria (se a planilha já tiver)", "subcategoria": "Subcategoria",
     "pessoa": "Pessoa", "tipo": "Tipo (D/C)",
@@ -309,10 +309,15 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
         )
     if resumo["duplicados_exatos"] + resumo["duplicados_provaveis"]:
         st.warning(
-            f"{resumo['duplicados_exatos']} duplicata(s) exata(s) e "
-            f"{resumo['duplicados_provaveis']} provável(is) ficaram fora dos relatórios "
-            "aguardando sua confirmação na aba **Duplicidades**.",
+            f"{resumo['duplicados_exatos']} duplicata(s) exata(s) — repetição de arquivo já "
+            f"enviado, essas ficaram fora dos relatórios — e {resumo['duplicados_provaveis']} "
+            "suspeita(s) provável(is), que **continuam contando** até você decidir. "
+            "Revise na aba **Duplicidades**.",
             icon="🔁",
+        )
+        st.caption(
+            "Suspeita provável entra valendo de propósito: assim o total logo após o upload "
+            "bate com o do arquivo, e nenhuma diferença aparece sem explicação."
         )
     if resumo["pendentes"]:
         st.info(
@@ -435,16 +440,18 @@ def _aba_duplicidades(engine, usuario: dict) -> None:
         st.success("Nenhuma duplicidade pendente.", icon="✅")
         st.caption(
             "Quando o mesmo extrato for enviado duas vezes, os lançamentos repetidos aparecem "
-            "aqui e ficam fora dos relatórios até você decidir."
+            "aqui para você decidir."
         )
         return
 
     exatas = [linha for linha in fila if linha["tipo"] == "exata"]
-    st.markdown(
-        f"**{len(fila)} lançamento(s) aguardando decisão** — nenhum deles está entrando nos "
-        "relatórios enquanto isso."
-    )
     provaveis = [linha for linha in fila if linha["tipo"] != "exata"]
+    st.markdown(f"**{len(fila)} lançamento(s) aguardando decisão.**")
+    st.caption(
+        f"As {len(exatas)} **exatas** repetem arquivo já enviado e estão fora dos relatórios. "
+        f"As {len(provaveis)} **prováveis** continuam contando: são só suspeitas, e tirá-las "
+        "sozinho faria o total do mês ficar menor que o do arquivo sem nada explicar."
+    )
     b1, b2, _ = st.columns([1.5, 1.5, 1])
     if exatas and b1.button(f"Excluir as {len(exatas)} duplicatas exatas", type="primary",
                             width="stretch"):

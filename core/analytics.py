@@ -43,20 +43,29 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
         sa.select(
             db.categorias.c.natureza,
             db.transacoes.c.categoria_id,
+            # natureza declarada pela origem; decide o lado quando falta categoria
+            db.transacoes.c.natureza.label("natureza_origem"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
             db.transacoes.outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
         )
         .where(*_base(competencia, ano, pessoa))
-        .group_by(db.categorias.c.natureza, db.transacoes.c.categoria_id)
+        .group_by(
+            db.categorias.c.natureza,
+            db.transacoes.c.categoria_id,
+            db.transacoes.c.natureza,
+        )
     )
     receitas = despesas = poupanca = sem_classe = 0
     for linha in conn.execute(consulta):
         total = int(linha.total or 0)
         if linha.categoria_id is None:
             sem_classe += total
-            if total > 0:
+            # sem categoria o sinal decide, a menos que a origem tenha dito de
+            # que lado o lançamento está (estorno de despesa entra positivo)
+            lado = linha.natureza_origem or ("receita" if total > 0 else "despesa")
+            if lado == "receita":
                 receitas += total
             else:
                 despesas += -total
@@ -135,13 +144,19 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
             db.transacoes.c.competencia,
             db.categorias.c.natureza,
             db.transacoes.c.categoria_id,
+            db.transacoes.c.natureza.label("natureza_origem"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
             db.transacoes.outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
         )
         .where(*_base(ano=ano, pessoa=pessoa))
-        .group_by(db.transacoes.c.competencia, db.categorias.c.natureza, db.transacoes.c.categoria_id)
+        .group_by(
+            db.transacoes.c.competencia,
+            db.categorias.c.natureza,
+            db.transacoes.c.categoria_id,
+            db.transacoes.c.natureza,
+        )
     )
     meses: dict[str, dict] = {}
     for linha in conn.execute(consulta):
@@ -151,7 +166,10 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
         total = int(linha.total or 0)
         if linha.categoria_id == poupanca_id and poupanca_id is not None:
             alvo["poupanca"] += -total
-        elif linha.natureza == "receita" or (linha.categoria_id is None and total > 0):
+        elif linha.natureza == "receita" or (
+            linha.categoria_id is None
+            and (linha.natureza_origem or ("receita" if total > 0 else "despesa")) == "receita"
+        ):
             alvo["receitas"] += total
         else:
             alvo["despesas"] += -total

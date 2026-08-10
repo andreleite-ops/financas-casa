@@ -44,6 +44,20 @@ CONTAS_INICIAIS = [
     ("Conjunta C/C", "corrente", "Casal", "Itaú", "itau"),
 ]
 
+# As tres fontes de renda da casa, ditas pelo Andre. Ficam separadas das demais
+# regras porque so elas dizem tambem DE QUEM e o dinheiro, e isso e o que
+# impede a dupla contagem: a mesma receita lancada na planilha da Ro e no
+# extrato do Andre precisa cair na mesma pessoa nos dois caminhos.
+#   TAG  -> Andre (trabalho dele)
+#   BIOS -> Ro (trabalho dela)
+#   NUN  -> Casal (aluguel do apartamento, que e dos dois)
+# (padrao, categoria, subcategoria, pessoa)
+REGRAS_RECEITA: list[tuple[str, str, str, str]] = [
+    ("TAG", "Trabalho", "Pró-labore / Salário", "André"),
+    ("BIOS", "Trabalho", "Pró-labore / Salário", "Rô"),
+    ("NUN", "Rendimentos", "Aluguéis", "Casal"),
+]
+
 # (padrao, categoria, subcategoria) - casam por "contem" sobre a descricao
 # normalizada (maiuscula, sem acento). Prioridade menor = avaliada primeiro.
 REGRAS_INICIAIS: list[tuple[str, str, str]] = [

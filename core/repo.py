@@ -237,7 +237,11 @@ def importar(
                 # que entrou não pode cair numa categoria de despesa só porque
                 # a origem rotulou assim. Sem isso, um erro de sinal na leitura
                 # vira um total de despesas negativo, sem nada apontar a causa.
-                natureza_esperada = "receita" if lan.valor_centavos > 0 else "despesa"
+                # Quando a origem declara a natureza numa coluna (DESP/REC), ela
+                # manda: estorno de despesa entra positivo e continua despesa.
+                natureza_esperada = lan.natureza_hint or (
+                    "receita" if lan.valor_centavos > 0 else "despesa"
+                )
                 if categoria_id and naturezas.get(categoria_id) != natureza_esperada:
                     categoria_id = None
                 if categoria_id and lan.subcategoria_hint:
@@ -246,16 +250,22 @@ def importar(
                     )
                 if categoria_id:
                     status, confianca = "manual", 1.0
-            if categoria_id is None:
-                achado = classify.classificar_local(
-                    lan.descricao, lan.valor_centavos, regras, naturezas
-                )
-                if achado.classificado:
-                    categoria_id = achado.categoria_id
-                    subcategoria_id = achado.subcategoria_id
-                    status, confianca = achado.status, achado.confianca
+            # as regras rodam sempre, mesmo com a categoria ja resolvida pela
+            # dica: e delas que sai o dono da receita (TAG e do André, BIOS e da
+            # Rô, NUN e dos dois). Sem isso, uma receita minha lançada na
+            # planilha dela entraria como dela, e o "quem trouxe o quê" mentiria.
+            achado = classify.classificar_local(
+                lan.descricao, lan.valor_centavos, regras, naturezas,
+                natureza_hint=lan.natureza_hint,
+                rotulo_origem=lan.categoria_hint,
+            )
+            if categoria_id is None and achado.classificado:
+                categoria_id = achado.categoria_id
+                subcategoria_id = achado.subcategoria_id
+                status, confianca = achado.status, achado.confianca
 
-            pessoa = _pessoa_valida(lan.pessoa_hint, pessoa_padrao)
+            # a dica do arquivo manda; depois a regra; por último o titular da conta
+            pessoa = _pessoa_valida(lan.pessoa_hint or achado.pessoa, pessoa_padrao)
             observacao = decisao.motivo or None
 
             if decisao.situacao == "confere_planilha":
@@ -293,6 +303,7 @@ def importar(
                 "classificado_por": None,
                 "classificacao_origem": (str(lan.categoria_hint).strip()
                                          if lan.categoria_hint else None),
+                "natureza": lan.natureza_hint,
             }
             posicao = len(linhas)
             linhas.append(registro)

@@ -29,6 +29,11 @@ class Lancamento:
     categoria_hint: str | None = None
     subcategoria_hint: str | None = None
     pessoa_hint: str | None = None
+    # "despesa"/"receita" quando a origem diz isso explicitamente (a coluna
+    # DESP/REC da planilha da casa). Manda mais que o sinal: um estorno dentro
+    # de DESP vem positivo e continua sendo despesa — abate o gasto do mes em
+    # vez de entrar como receita, que e como a tabela dinamica da planilha soma.
+    natureza_hint: str | None = None
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:

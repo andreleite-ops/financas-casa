@@ -39,6 +39,10 @@ SINONIMOS = {
                      "subgrupo", "subclassificacao"],
     "pessoa": ["pessoa", "responsavel", "quem", "titular", "de quem", "usuario"],
     "tipo": ["tipo", "natureza", "d/c", "tipo lancamento", "operacao", "tipo de lancamento"],
+    # mes de referencia, quando a planilha traz um separado da data do
+    # lancamento — o INSS pago em 10/02 pode ser competencia de janeiro
+    "competencia": ["mes ano", "mesano", "competencia", "mes referencia",
+                    "referencia", "mes de referencia", "mes"],
 }
 
 
@@ -245,11 +249,58 @@ def _achar_cabecalho(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def carregar_tabela(conteudo: bytes, nome_arquivo: str = "") -> pd.DataFrame:
+def listar_abas(conteudo: bytes) -> list[str]:
+    """Nomes das abas de uma pasta de trabalho; lista vazia se nao for Excel."""
+    try:
+        return pd.ExcelFile(io.BytesIO(conteudo)).sheet_names
+    except Exception:
+        return []
+
+
+# abas de resumo nunca sao fonte de lancamento: elas repetem, ja somados, os
+# numeros que estao na aba de lancamento. Ler uma delas dobraria tudo.
+_ABA_DE_RESUMO = re.compile(
+    r"tabela\s*dinamica|dinamica|pivot|resumo|consolidad|totais|totalizad|grafico",
+    re.IGNORECASE,
+)
+
+
+def aba_de_resumo(nome: str) -> bool:
+    """True quando o nome da aba diz que ali mora um resumo, nao lancamentos."""
+    return bool(_ABA_DE_RESUMO.search(sem_acento(str(nome))))
+
+
+def _aba_com_lancamentos(conteudo: bytes, abas: list[str]) -> str:
+    """Escolhe a aba que tem cara de lancamento, nao a de resumo.
+
+    A pasta de trabalho da casa comeca pela tabela dinamica; ler a primeira aba
+    por padrao significaria ler o resumo e nunca chegar aos lancamentos. Duas
+    barreiras, nessa ordem: descarta pelo nome quem se anuncia como resumo e,
+    entre as que sobram, fica com a primeira que tem data e valor.
+    """
+    candidatas = [aba for aba in abas if not aba_de_resumo(aba)] or list(abas)
+    for aba in candidatas:
+        try:
+            df = pd.read_excel(io.BytesIO(conteudo), sheet_name=aba, dtype=str, header=0)
+        except Exception:
+            continue
+        df = _achar_cabecalho(df)
+        mapa = sugerir_mapeamento(df.columns, df)
+        if mapa.get("data") and (mapa.get("valor") or mapa.get("entrada") or mapa.get("saida")):
+            return aba
+    return candidatas[0]
+
+
+def carregar_tabela(conteudo: bytes, nome_arquivo: str = "", aba: str | None = None) -> pd.DataFrame:
     """Le CSV ou XLSX e devolve o DataFrame ja posicionado no cabecalho."""
     nome = (nome_arquivo or "").lower()
     if nome.endswith((".xlsx", ".xlsm", ".xls")):
-        df = pd.read_excel(io.BytesIO(conteudo), dtype=str, header=0)
+        abas = listar_abas(conteudo)
+        if aba is None and len(abas) > 1:
+            aba = _aba_com_lancamentos(conteudo, abas)
+        df = pd.read_excel(
+            io.BytesIO(conteudo), sheet_name=aba or 0, dtype=str, header=0
+        )
     elif nome.endswith((".csv", ".txt", "")):
         df = _ler_csv(conteudo)
     else:
@@ -280,13 +331,28 @@ def marca_de_sinal(valor) -> int | None:
     return None
 
 
+def _natureza_da_linha(linha, mapa) -> str | None:
+    """"despesa"/"receita" quando a coluna de tipo diz; None quando nao diz."""
+    col_tipo = mapa.get("tipo")
+    if not col_tipo or not str(linha.get(col_tipo, "")).strip():
+        return None
+    sinal = marca_de_sinal(linha[col_tipo])
+    return None if sinal is None else ("receita" if sinal > 0 else "despesa")
+
+
 def _sinal_da_linha(linha, mapa, centavos: int) -> int:
-    """Decide entrada/saida quando o valor vem sem sinal."""
+    """Aplica a marca de despesa/receita ao valor, preservando o sinal dele.
+
+    Multiplica em vez de forcar o modulo: um valor negativo dentro de DESP e um
+    estorno, que abate a despesa, e dentro de REC e um ajuste, que reduz a
+    receita. Forcar o modulo transformava "-1.769,60" em "+1.769,60" e o total
+    do mes deixava de fechar com a planilha.
+    """
     col_tipo = mapa.get("tipo")
     if col_tipo and str(linha.get(col_tipo, "")).strip():
         sinal = marca_de_sinal(linha[col_tipo])
         if sinal is not None:
-            return sinal * abs(centavos)
+            return sinal * centavos
     return centavos
 
 
@@ -320,8 +386,14 @@ def extrair(
 
         centavos = None
         if mapa.get("valor") and str(linha.get(mapa["valor"], "")).strip():
+            bruto = str(linha[mapa["valor"]])
+            # letra no meio do numero e erro de digitacao ("Z195,82"). Limpar e
+            # somar seria inventar um valor; melhor apontar a linha
+            if re.search(r"[A-Za-z]", bruto):
+                avisos.append(f"linha {pos + 2}: valor não numérico {bruto!r} — ignorado")
+                continue
             try:
-                centavos = _sinal_da_linha(linha, mapa, para_centavos(linha[mapa["valor"]]))
+                centavos = _sinal_da_linha(linha, mapa, para_centavos(bruto))
             except (ValueError, ArithmeticError):
                 centavos = None
         if centavos is None and (mapa.get("entrada") or mapa.get("saida")):
@@ -348,15 +420,26 @@ def extrair(
             descricao = "SEM DESCRICAO"
             avisos.append(f"linha {pos + 2}: sem descricao")
 
+        natureza = _natureza_da_linha(linha, mapa)
         if inverter_sinal:
             centavos = -centavos
+            if natureza:
+                natureza = "despesa" if natureza == "receita" else "receita"
+
+        # a competencia manda no mes do relatorio; a data continua sendo o dia
+        # em que o dinheiro andou
+        competencia_linha = competencia
+        if mapa.get("competencia") and str(linha.get(mapa["competencia"], "")).strip():
+            competencia_linha = (
+                mes_da_coluna(linha[mapa["competencia"]]) or competencia
+            )
 
         lancamentos.append(
             Lancamento(
                 data=dia,
                 descricao=descricao,
                 valor_centavos=centavos,
-                competencia=competencia,
+                competencia=competencia_linha,
                 origem=origem,
                 categoria_hint=(str(linha[mapa["categoria"]]).strip()
                                 if mapa.get("categoria") and str(linha.get(mapa["categoria"], "")).strip()
@@ -368,6 +451,7 @@ def extrair(
                 pessoa_hint=(str(linha[mapa["pessoa"]]).strip()
                              if mapa.get("pessoa") and str(linha.get(mapa["pessoa"], "")).strip()
                              else None),
+                natureza_hint=natureza,
             )
         )
     return lancamentos, avisos

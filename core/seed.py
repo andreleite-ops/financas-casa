@@ -18,6 +18,7 @@ from .plano_contas import (
     METAS_INICIAIS,
     RECEITAS,
     REGRAS_INICIAIS,
+    REGRAS_RECEITA,
 )
 from .texto import normalizar
 
@@ -104,6 +105,32 @@ def _semear_regras(conn) -> int:
     }
 
     novas, vistos = [], set()
+
+    # as fontes de renda vem antes de tudo: sao poucas, sao nominais e trazem a
+    # pessoa junto. Se ficassem na fila geral, "TAG" perderia para algum padrao
+    # mais longo e a receita entraria sem dono.
+    for pos, (padrao, categoria, subcategoria, pessoa) in enumerate(REGRAS_RECEITA):
+        categoria_id = categorias.get(categoria)
+        if categoria_id is None:
+            continue
+        padrao_norm = normalizar(padrao)
+        chave = (padrao_norm, "contem")
+        if chave in ja_existem or chave in vistos:
+            continue
+        vistos.add(chave)
+        novas.append(
+            {
+                "padrao": padrao_norm,
+                "tipo_match": "contem",
+                "categoria_id": categoria_id,
+                "subcategoria_id": subs.get((categoria_id, subcategoria)),
+                "pessoa": pessoa,
+                "prioridade": 10 + pos,
+                "origem": "sistema",
+                "criada_por": None,
+            }
+        )
+
     # padrao mais longo = mais especifico = prioridade melhor (numero menor)
     for pos, (padrao, categoria, subcategoria) in enumerate(
         sorted(REGRAS_INICIAIS, key=lambda r: -len(r[0]))

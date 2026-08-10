@@ -77,6 +77,10 @@ transacoes = sa.Table(
     # Guardado mesmo quando nao casa com o plano de contas: e o que permite o
     # de-para depois, sem precisar reimportar o arquivo.
     sa.Column("classificacao_origem", sa.String(120)),
+    # despesa | receita quando a origem declara (a coluna DESP/REC da planilha).
+    # E o que faz um lancamento ainda sem categoria cair no lado certo do
+    # resumo: estorno de despesa entra com sinal de credito e nao e receita.
+    sa.Column("natureza", sa.String(10)),
     sa.Column("criado_em", sa.DateTime, server_default=sa.func.now()),
 )
 
