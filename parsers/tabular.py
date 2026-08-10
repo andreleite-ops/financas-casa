@@ -333,6 +333,20 @@ def marca_de_sinal(valor) -> int | None:
     return None
 
 
+def _vazio(valor) -> bool:
+    """Celula sem conteudo, inclusive o "nan" que o pandas devolve por vazio.
+
+    Lendo a planilha como texto, uma celula em branco chega como a string
+    "nan" — que tem letra e seria apontada como valor mal digitado. Uma linha
+    em branco no meio do arquivo e normal; avisar sobre ela so esconderia o
+    aviso que importa no meio de dezenas de falsos.
+    """
+    if valor is None:
+        return True
+    texto = str(valor).strip()
+    return not texto or texto.lower() in ("nan", "none", "nat", "-", "—")
+
+
 def _natureza_da_linha(linha, mapa) -> str | None:
     """"despesa"/"receita" quando a coluna de tipo diz; None quando nao diz."""
     col_tipo = mapa.get("tipo")
@@ -387,7 +401,7 @@ def extrair(
             continue  # linha de total/rodape
 
         centavos = None
-        if mapa.get("valor") and str(linha.get(mapa["valor"], "")).strip():
+        if mapa.get("valor") and not _vazio(linha.get(mapa["valor"])):
             bruto = str(linha[mapa["valor"]])
             # letra no meio do numero e erro de digitacao ("Z195,82"). Limpar e
             # somar seria inventar um valor; melhor apontar a linha

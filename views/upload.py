@@ -69,10 +69,23 @@ def _aba_enviar(engine, usuario: dict) -> None:
             contas,
             format_func=lambda c: f"{c['nome']} — {c['titular']}",
         )
-    competencia = c2.selectbox(
-        "Competência", _competencias_sugeridas(),
-        help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a própria data.",
-    )
+    if e_planilha:
+        # a carga inicial traz o ano inteiro: cada linha já diz o próprio mês.
+        # Pedir uma competência aqui só induziria ao erro — ela sugere que o
+        # arquivo é de um mês só, e o campo não tem efeito nenhum sobre ele.
+        competencia = None
+        c2.caption(
+            "Sem competência: a planilha traz vários meses, e o mês de cada lançamento "
+            "sai da própria linha."
+        )
+    else:
+        competencia = c2.selectbox(
+            "Competência", _competencias_sugeridas(),
+            help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a própria data.",
+        )
+    # só serve para completar data sem ano, o caso da fatura de cartão
+    ano_referencia = int(competencia[:4]) if competencia else date.today().year
+
     if e_planilha:
         # planilha de receitas costuma ser de uma pessoa só; a da casa, do casal.
         # Sem isso, tudo entraria como "Casal" e o relatório por pessoa não
@@ -202,7 +215,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
                 df.head(8), mapa,
                 origem="planilha" if e_planilha else "extrato",
                 competencia=None if conta["tipo"] == "corrente" else competencia,
-                ano_referencia=int(competencia[:4]),
+                ano_referencia=ano_referencia,
                 inverter_sinal=inverter,
             )
         except ErroDeLeitura as exc:
@@ -246,7 +259,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
                     df, mapa,
                     origem="planilha" if e_planilha else "extrato",
                     competencia=None if conta["tipo"] == "corrente" else competencia,
-                    ano_referencia=int(competencia[:4]),
+                    ano_referencia=ano_referencia,
                     inverter_sinal=inverter,
                 )
             except ErroDeLeitura as exc:
