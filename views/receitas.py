@@ -1,14 +1,25 @@
-"""Receitas — sempre separadas por pessoa."""
+"""Receitas — quanto cada um trouxe, de onde, em cada mês."""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from core import analytics, repo
-from core.money import fmt_brl
+from core import analytics, db, repo
+from core.money import fmt_brl, fmt_mil
 from ui import graficos
-from ui.tema import VINHO, selo_pessoa
+from ui.tema import CORES_PESSOA, selo_pessoa
+
+
+def _cartoes_por_pessoa(por_pessoa, total):
+    colunas = st.columns(1 + max(len(por_pessoa), 1))
+    colunas[0].metric("Total do casal", fmt_brl(total))
+    for coluna, linha in zip(colunas[1:], por_pessoa):
+        parte = (linha["total"] / total * 100) if total else 0
+        coluna.metric(linha["pessoa"], fmt_brl(linha["total"]))
+        coluna.markdown(
+            f"<span class='nota'>{parte:.0f}% do total</span>", unsafe_allow_html=True
+        )
 
 
 def render(engine, usuario: dict) -> None:
@@ -18,82 +29,116 @@ def render(engine, usuario: dict) -> None:
         st.info("Sem lançamentos ainda. Importe um extrato para ver as receitas.", icon="📥")
         return
 
-    c1, c2, _ = st.columns([1.2, 1.2, 2.4])
-    competencia = c1.selectbox("Competência", competencias)
-    ano = int(competencia[:4])
-    visao = c2.radio("Visão", ["Mês", f"Ano {ano}"], horizontal=True)
-    filtro = {"competencia": competencia} if visao == "Mês" else {"ano": ano}
+    anos = sorted({int(c[:4]) for c in competencias}, reverse=True)
+    c1, c2, _ = st.columns([1, 1.4, 2.2])
+    ano = c1.selectbox("Ano", anos)
+    do_ano = [c for c in competencias if c.startswith(str(ano))]
+    escopo = c2.radio("Ver", [f"Ano {ano} inteiro", "Um mês"], horizontal=True)
+
+    if escopo == "Um mês":
+        competencia = c2.selectbox("Competência", do_ano)
+        filtro = {"competencia": competencia}
+        rotulo = competencia
+    else:
+        filtro = {"ano": ano}
+        rotulo = f"ano {ano}"
 
     with engine.connect() as conn:
-        total = analytics.resumo(conn, **filtro)
+        total = analytics.resumo(conn, **filtro)["receitas"]
         por_pessoa = analytics.receitas_por_pessoa(conn, **filtro)
-        itens = analytics.lancamentos(conn, **filtro, natureza="receita", limite=300)
-        serie = analytics.serie_mensal(conn, ano)
+        matriz = analytics.receitas_por_pessoa_e_tipo(conn, ano)
+        itens = analytics.lancamentos(conn, **filtro, natureza="receita", limite=400)
 
-    colunas = st.columns(1 + len(por_pessoa))
-    colunas[0].metric("Total do casal", fmt_brl(total["receitas"]))
-    for coluna, linha in zip(colunas[1:], por_pessoa):
-        parte = (linha["total"] / total["receitas"] * 100) if total["receitas"] else 0
-        coluna.metric(linha["pessoa"], fmt_brl(linha["total"]), f"{parte:.0f}% do total",
-                      delta_color="off")
+    _cartoes_por_pessoa(por_pessoa, total)
 
+    if not matriz["linhas"]:
+        st.caption(
+            "Nenhuma receita classificada. Se o salário caiu na conta e não aparece aqui, "
+            "ele deve estar na fila da tela **Classificação**."
+        )
+        return
+
+    # ---- a matriz: uma linha por pessoa e tipo, uma coluna por mês ----------
+    st.markdown(f"### Quem trouxe o quê, mês a mês · {ano}")
+    colunas = {
+        "Pessoa": [linha["pessoa"] for linha in matriz["linhas"]],
+        "Tipo": [linha["tipo"] for linha in matriz["linhas"]],
+    }
+    for mes in matriz["meses"]:
+        colunas[graficos.MESES_PT.get(mes, mes)] = [
+            fmt_mil(linha["meses"][mes]) if linha["meses"][mes] else "—"
+            for linha in matriz["linhas"]
+        ]
+    colunas["Total"] = [fmt_mil(linha["total"]) for linha in matriz["linhas"]]
+    tabela = pd.DataFrame(colunas)
+
+    # uma linha de total por pessoa, para o olho fechar a conta sem somar
+    for pessoa in sorted({linha["pessoa"] for linha in matriz["linhas"]}):
+        da_pessoa = [linha for linha in matriz["linhas"] if linha["pessoa"] == pessoa]
+        soma = {"Pessoa": pessoa, "Tipo": "— total —"}
+        for mes in matriz["meses"]:
+            valor = sum(linha["meses"][mes] for linha in da_pessoa)
+            soma[graficos.MESES_PT.get(mes, mes)] = fmt_mil(valor) if valor else "—"
+        soma["Total"] = fmt_mil(sum(linha["total"] for linha in da_pessoa))
+        tabela = pd.concat([tabela, pd.DataFrame([soma])], ignore_index=True)
+
+    tabela = tabela.sort_values(
+        ["Pessoa", "Tipo"], key=lambda col: col.map(lambda v: (v == "— total —", str(v)))
+    ).reset_index(drop=True)
+    st.dataframe(tabela, width="stretch", hide_index=True)
+    st.markdown(
+        "<p class='nota'>Valores em R$ mil. Cada pessoa aparece com seus tipos de "
+        "recebimento e uma linha de total.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ---- participação de cada um -------------------------------------------
     esquerda, direita = st.columns([1, 1.3])
     with esquerda:
-        st.markdown("### Por pessoa")
+        st.markdown("### Participação")
         grafico = graficos.barras_pessoa(por_pessoa)
         if grafico is not None:
             st.altair_chart(grafico, width="stretch")
     with direita:
-        st.markdown(f"### Receitas mês a mês {ano}")
-        if serie:
-            df = pd.DataFrame(
-                [
-                    {"Mês": graficos.rotulo_mes(m["competencia"]),
-                     "Receitas": fmt_brl(m["receitas"]),
-                     "Despesas": fmt_brl(m["despesas"]),
-                     "Poupança": fmt_brl(m["poupanca"])}
-                    for m in serie
-                ]
-            )
-            st.dataframe(df, width="stretch", hide_index=True)
-
-    st.markdown("### Lançamentos de receita")
-    if not itens:
-        st.caption(
-            "Nenhuma receita classificada no período. Se o salário caiu na conta e não "
-            "apareceu aqui, ele deve estar na fila da tela **Classificação**."
+        st.markdown("### Total por pessoa")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Pessoa": linha["pessoa"],
+                    "Receitas": fmt_brl(linha["total"]),
+                    "Participação": f"{linha['total'] / total * 100:.1f}%" if total else "—",
+                }
+                for linha in por_pessoa
+            ]),
+            width="stretch", hide_index=True,
         )
+
+    # ---- lançamentos, separados por pessoa ---------------------------------
+    st.markdown(f"### Lançamentos de receita · {rotulo}")
+    if not itens:
+        st.caption("Nenhum lançamento de receita no período.")
         return
 
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Data": f"{i['data']:%d/%m/%Y}",
-                    "Descrição": i["descricao"],
-                    "Categoria": i["categoria"] or "—",
-                    "Subcategoria": i["subcategoria"] or "—",
-                    "Pessoa": i["pessoa"],
-                    "Conta": i["conta"],
-                    "Valor": fmt_brl(i["valor_centavos"]),
-                }
-                for i in itens
-            ]
-        ),
-        width="stretch", hide_index=True,
-    )
-
-    quebra: dict[tuple[str, str], int] = {}
-    for item in itens:
-        chave = (item["pessoa"], item["subcategoria"] or item["categoria"] or "—")
-        quebra[chave] = quebra.get(chave, 0) + item["valor_centavos"]
-    if quebra:
-        st.markdown("#### Composição por pessoa e tipo")
-        linhas = "".join(
-            f"<div class='cb'><div class='lbl'>{selo_pessoa(pessoa)} {tipo}</div>"
-            f"<div class='track'><div class='bar' style='width:"
-            f"{valor / max(quebra.values()) * 100:.1f}%;background:{VINHO}'></div></div>"
-            f"<div class='val'>{fmt_brl(valor)}</div></div>"
-            for (pessoa, tipo), valor in sorted(quebra.items(), key=lambda kv: -kv[1])
-        )
-        st.markdown(linhas, unsafe_allow_html=True)
+    pessoas = sorted({item["pessoa"] for item in itens})
+    abas = st.tabs([f"{p} ({sum(1 for i in itens if i['pessoa'] == p)})" for p in pessoas])
+    for aba, pessoa in zip(abas, pessoas):
+        with aba:
+            do_pessoa = [item for item in itens if item["pessoa"] == pessoa]
+            st.markdown(
+                f"{selo_pessoa(pessoa)} &nbsp; **{fmt_brl(sum(i['valor_centavos'] for i in do_pessoa))}** "
+                f"em {len(do_pessoa)} lançamento(s)",
+                unsafe_allow_html=True,
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Data": f"{i['data']:%d/%m/%Y}",
+                        "Descrição": i["descricao"],
+                        "Tipo": i["subcategoria"] or i["categoria"] or "—",
+                        "Conta": i["conta"],
+                        "Valor": fmt_brl(i["valor_centavos"]),
+                    }
+                    for i in do_pessoa
+                ]),
+                width="stretch", hide_index=True,
+            )

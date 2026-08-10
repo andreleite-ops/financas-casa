@@ -140,6 +140,9 @@ class Indice:
         self._por_valor.setdefault(registro["valor_centavos"], []).append(registro)
         self._por_id[registro["id"]] = registro
 
+    def _todos(self):
+        return self._por_id.values()
+
     def registro(self, registro_id: int | None) -> dict | None:
         return self._por_id.get(registro_id) if registro_id is not None else None
 
@@ -210,6 +213,30 @@ class Indice:
                         f"mesmo valor e nome no mesmo mês, já na carga inicial "
                         f"(dia {viz['data']:%d})",
                     )
+
+            # Receita recorrente anotada em duas planilhas, com valores que
+            # divergiram: a anotacao da casa ficou em 19.754,67 depois que o
+            # contracheque subiu para 20.596,21. Mesmo nome, mesmo mes, mesma
+            # pessoa — e o mesmo salario, ainda que o numero difira.
+            #
+            # Vale so para entradas de proposito. Receita e poucas e recorrente:
+            # um "SALARIO" por mes. Aplicar a mesma regra as despesas apontaria
+            # como suspeita toda segunda ida ao mercado no mes.
+            if valor_centavos > 0:
+                for candidato in sorted(self._todos(), key=lambda r: r["id"]):
+                    if candidato["id"] in self._usados or not candidato["ativo"]:
+                        continue
+                    if candidato["origem"] != "planilha" or candidato["valor_centavos"] <= 0:
+                        continue
+                    if (candidato["data"].year, candidato["data"].month) != (dia.year, dia.month):
+                        continue
+                    if chave_estabelecimento(candidato["descricao"]) == chave:
+                        return Decisao(
+                            "duplicata_provavel", candidato["id"],
+                            f"mesma receita no mesmo mês, já lançada como "
+                            f"{candidato['valor_centavos'] / 100:,.2f}".replace(",", "X")
+                            .replace(".", ",").replace("X", "."),
+                        )
 
         if chave:
             for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):

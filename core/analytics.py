@@ -231,6 +231,53 @@ def comparativo_anual(conn, pessoa: str | None = None) -> list[dict]:
     return saida
 
 
+def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
+    """Matriz de receitas: pessoa e tipo nas linhas, meses nas colunas.
+
+    A pergunta da tela e "quanto cada um trouxe, de onde, em cada mes" — e isso
+    nao se le numa lista de lancamentos misturados.
+    """
+    consulta = (
+        sa.select(
+            db.transacoes.c.pessoa,
+            db.subcategorias.c.nome.label("tipo"),
+            db.categorias.c.nome.label("categoria"),
+            db.transacoes.c.competencia,
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+        )
+        .select_from(
+            db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
+        )
+        .where(*_base(ano=ano), db.categorias.c.natureza == "receita")
+        .group_by(
+            db.transacoes.c.pessoa, db.subcategorias.c.nome,
+            db.categorias.c.nome, db.transacoes.c.competencia,
+        )
+    )
+    linhas: dict[tuple[str, str], dict[str, int]] = {}
+    meses: set[str] = set()
+    for registro in conn.execute(consulta):
+        mes = registro.competencia[5:7]
+        meses.add(mes)
+        chave = (registro.pessoa, registro.tipo or registro.categoria)
+        alvo = linhas.setdefault(chave, {})
+        alvo[mes] = alvo.get(mes, 0) + int(registro.total or 0)
+
+    ordem = sorted(meses)
+    saida = [
+        {
+            "pessoa": pessoa,
+            "tipo": tipo,
+            "meses": {mes: valores.get(mes, 0) for mes in ordem},
+            "total": sum(valores.values()),
+        }
+        for (pessoa, tipo), valores in linhas.items()
+    ]
+    saida.sort(key=lambda linha: (linha["pessoa"], -linha["total"]))
+    return {"meses": ordem, "linhas": saida}
+
+
 def receitas_por_pessoa(conn, competencia=None, ano=None) -> list[dict]:
     consulta = (
         sa.select(
