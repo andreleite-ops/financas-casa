@@ -1,6 +1,6 @@
 # Roteiro — onde estamos e o que vem
 
-Atualizado em 10/08/2026.
+Atualizado em 10/08/2026, fim do dia.
 
 ---
 
@@ -10,7 +10,10 @@ Atualizado em 10/08/2026.
 |---|---|
 | App publicado | ✅ no ar, `andre-leite-financas.streamlit.app` |
 | Banco na nuvem | ✅ Supabase (São Paulo), base única para André e Rô |
-| Carga inicial | ✅ bate com a planilha ao centavo (ver abaixo) |
+| Carga inicial 2026 | ✅ bate com a planilha ao centavo, mês a mês |
+| Venda do apartamento | ✅ lançada, e fora da renda que baliza o orçamento |
+| Classificação | 🔄 em curso — de-para pronto, pente fino com o André |
+| Leitura de extratos | ⬜ preparada, à espera das amostras |
 | Senhas definitivas | ⬜ ainda na senha provisória `financas` |
 | Análise por IA | ⬜ sem chave configurada |
 
@@ -20,28 +23,60 @@ A tabela dinâmica da própria planilha é a verdade. Para 2026:
 
 | | Planilha | App |
 |---|---|---|
-| DESP | 791.370,25 | 791.370,25 |
-| REC | 1.384.765,63 | 1.384.765,63 |
+| DESP | 823.037,28 | 823.037,28 |
+| REC | 1.904.765,63 | 1.904.765,63 |
 
-Confere também mês a mês, ao centavo, e o mesmo teste roda automaticamente
-antes de cada mudança no leitor.
+Confere mês a mês, ao centavo, e um teste automático refaz essa conferência
+antes de cada mudança no leitor (`tests/test_planilha_da_casa.py`).
 
-Como se chegou aqui — quatro coisas que estavam erradas:
+### Como o dinheiro se divide
 
-1. **A aba lida era a errada.** A pasta começa pela *Tabela Dinâmica*; o leitor
-   pegava a primeira aba e lia o resumo. Agora ele descarta pelo nome qualquer
-   aba de resumo e procura a que tem data e valor.
-2. **O mês era o da data, não o da competência.** A dinâmica agrupa por
-   `MÊS/ANO`. Vinte e duas linhas caíam num mês diferente do que a Rô lançou.
-3. **Estorno virava receita.** Um valor negativo dentro de `DESP` é abatimento
-   de gasto; o leitor tomava o módulo e o transformava em entrada.
-4. **`Z195,82`** entrava como 195,82. Valor com letra no meio agora é apontado
-   e fica de fora — inventar o número seria pior que apontar a linha.
+**Receita — o dono sai da fonte, não da conta em que caiu.** É isso que impede
+a dupla contagem quando a mesma receita aparece na planilha da Rô e num
+extrato meu.
 
-Uma decisão mudou junto: **suspeita provável de duplicidade continua contando**
-nos relatórios até você decidir. Só a duplicata exata contra arquivo já enviado
-fica de fora. Sem isso, o total logo depois do upload já vinha menor que o da
-planilha, sem nada explicando a diferença.
+| Fonte | De quem | Onde entra |
+|---|---|---|
+| **TAG** | André | Trabalho › Pró-labore / Salário |
+| **BIOS** | Rô | Trabalho › Pró-labore / Salário |
+| **NUN** / rótulo `ALUGUEL` | Casal — o apartamento é dos dois | Rendimentos › Aluguéis |
+
+**Despesa — sem dono declarado, é da casa.** Só sai do Casal o que diz de quem
+é: o nome no fim da descrição (`ALMOÇO ANDRÉ`, `CONSULTA RO`), uma regra
+aprendida, uma coluna de pessoa no arquivo, ou uma categoria que é de uma
+pessoa por natureza (**Filhos & Pensão é do André**).
+
+Isso vale inclusive para fatura de cartão pessoal: o mercado do mês não vira
+despesa de um só por ter passado no cartão dele.
+
+---
+
+## O que foi resolvido hoje
+
+Nove coisas que estavam erradas, todas encontradas confrontando o app com a
+planilha de verdade:
+
+1. **A aba lida era a errada** — a pasta começa pela *Tabela Dinâmica*. O
+   leitor agora descarta pelo nome qualquer aba de resumo.
+2. **A data do Excel vinha com hora** (`2026-01-05 00:00:00`) e caía no leitor
+   genérico, que lia 5 de janeiro como 1º de maio. Maio inchava para 486 mil,
+   novembro e dezembro sumiam.
+3. **Estorno virava receita** — valor negativo dentro de `DESP` é abatimento
+   de gasto, não entrada.
+4. **`Z195,82`** entrava como 195,82. Valor com letra agora é apontado e fica
+   de fora — a linha 1882 continua para corrigir na planilha.
+5. **O rótulo ganhava da descrição** — a venda do apartamento vinha marcada
+   `TAG` e entrava como pró-labore. Agora a descrição diz *o que foi*, o rótulo
+   diz no máximo *de quem é*.
+6. **`RO` era lido como Rondônia** e sumia do fim da descrição. Eram 92
+   lançamentos perdendo a marca da Rô.
+7. **O gasto da casa virava dívida de uma pessoa** — 1.643 lançamentos sem
+   dono declarado herdavam a resposta de "de quem é este arquivo". R$ 713 mil
+   apareciam como despesa da Rô, que de fato tem R$ 35.371,57.
+8. **A tela de classificação travava** — o plano de contas era relido com uma
+   consulta por categoria, 18 idas ao banco a cada toque de campo.
+9. **Não havia onde lançar pensão e filhos.** Criada a categoria
+   **Filhos & Pensão**; só a pensão já são R$ 124.800 no ano.
 
 ---
 
@@ -62,21 +97,30 @@ padrão se confirmar, o botão **"Manter as N prováveis"** limpa a fila de uma
 vez.
 
 ### 1.2 Tratar o que não foi classificado
-**Classificação › Fila de pendências**
+**Classificação › De-para de rótulos** (primeira aba) e **Fila de pendências**
 
-Boa parte usa classificações da Rô que não existem no plano de contas:
-`CUIDADOS PESSOAIS`, `INFRA`, `CONTRIBUIÇÃO MENSAL`, `EXTRA`, `TAXAS`, `TAG`,
-`ALUGUEL`. Classificar isso à mão, um por um, não é viável.
+A Rô classifica com o vocabulário dela, e **13 rótulos cobrem os 441
+pendentes** — cinco deles cobrem 83%:
 
-> **Pendente do meu lado:** a tela de **de-para**, que lista as classificações
-> distintas da planilha e permite mapear cada uma **uma vez** para o plano de
-> contas — resolvendo centenas de lançamentos de uma vez. A estrutura de dados
-> já está pronta (tabela `de_para` e a coluna que guarda a classificação de
-> origem); falta a tela.
->
-> **Decisão pendente do casal:** traduzir o vocabulário da Rô para o nosso
-> plano, ou adaptar o plano ao vocabulário dela? Ela usa isso há anos; a
-> segunda opção costuma funcionar melhor.
+| Rótulo | Lançamentos | Valor |
+|---|---|---|
+| CUIDADOS PESSOAIS | 133 | 26.640,65 |
+| INFRA | 67 | 13.102,68 |
+| CONTRIBUIÇÃO MENSAL | 61 | 46.712,07 |
+| CONTRIBUIÇÃO IGREJA | 56 | 73.108,72 |
+| VIAGEM | 47 | 90.732,23 |
+| TAXAS · CASA · NUN · LAZER | 63 | 58.271,10 |
+| TORANA · LILLE · RIO · SEGURO | 14 | 2.225,46 |
+
+O de-para traduz cada rótulo **uma vez** e guarda a tradução, então a próxima
+importação já entra classificada. Parar na categoria resolve o relatório (é a
+categoria que soma) e deixa o lançamento na fila para a subcategoria ser
+escolhida caso a caso; escolher a subcategoria de uma vez tira da fila direto.
+Desfazer devolve à fila o que a tradução classificou, sem desmanchar o que foi
+corrigido à mão depois.
+
+> **Pendente do André:** `TORANA`, `LILLE`, `RIO` e `NUN` como despesa não sei
+> o que são. Se forem imóveis ou lugares recorrentes, viram regra.
 
 ### 1.3 As três fontes de renda
 Quem trouxe o dinheiro sai do rótulo que a Rô usa na planilha, não da conta em
@@ -114,18 +158,22 @@ Os leitores de **Visa XP, BTG, Bradesco e Itaú** estão implementados sobre o
 motor genérico, mas nunca viram o layout de verdade desses bancos. O do
 **Nubank** segue o formato conhecido de exportação (`date,title,amount`).
 
-**O que preciso de você:** para cada uma das contas, uma amostra —
+**O preparo já está feito, e mudou o que preciso de você.** Ao subir um PDF, a
+tela agora mostra, antes de gravar qualquer coisa:
 
-- **PDF:** ~10 linhas de lançamento copiadas como texto, com o cabeçalho e
-  alguma linha de total. Pode trocar os valores; o que importa é o formato.
-- **CSV/XLSX:** o cabeçalho e 4 ou 5 linhas.
+- quantos lançamentos reconheceu, de quantas linhas de texto
+- **quais linhas pareciam lançamento e ficaram de fora** — são elas que dizem
+  o que falta ensinar ao leitor
+- o texto cru, como o leitor o recebe
+- e há campo de **senha do PDF**, que quase todo extrato de banco exige
 
-Pode colar direto na conversa. Se preferir mandar o arquivo, use uma pasta
-`amostras/` — mas **este repositório é público**: troque os valores e apague
-nome, agência e conta antes.
+Então não preciso mais dos arquivos: **copie o que a tela mostrar**, umas 10
+linhas de lançamento, com os valores trocados. Este repositório é público —
+apague nome, agência e conta antes de colar.
 
-Com as amostras eu calibro cada leitor e escrevo um teste por banco, para o
-formato não quebrar depois.
+Com isso eu calibro cada leitor e escrevo um teste por banco, para o formato
+não quebrar depois. Já existem quatro testes gerando PDFs de verdade (fatura
+reconhecida, layout desconhecido, arquivo com senha, PDF só de imagem).
 
 **Ao carregar:** um mês por vez, do mais antigo para o mais recente. Depois
 confira **Upload › Crítica planilha × extratos**, que confronta as duas fontes
@@ -173,3 +221,34 @@ conferir a Visão Geral e ler a análise.
 - **Desfazer é seguro.** Upload › Histórico › Desfazer uma importação remove
   exatamente os lançamentos daquele arquivo. A importação inteira roda numa
   transação: interromper no meio não deixa nada pela metade.
+- **Uma categoria nova não alcança o passado sozinha.** Criar categoria ou
+  regra só vale para importações seguintes; o que já está gravado se resolve
+  pelo botão **"Reaplicar regras na fila"**.
+- **O banco fica em São Paulo e o app roda nos Estados Unidos.** São ~150ms por
+  consulta. Qualquer código que consulte dentro de um laço trava a tela — foi
+  assim três vezes (seed, importação, plano de contas). Há um teste contando
+  consultas em `tests/test_repo.py` para não acontecer de novo.
+- **Sigla de duas letras no fim da descrição não é sempre estado.** Nesta casa
+  `RO` é a Rô. Só sai UF de verdade, e só quando sobra nome antes dela.
+- **Não confiar em número apresentado sem conferir contra a origem.** Mais de
+  uma vez um número de base de teste foi mostrado como se fosse da base real. A
+  tabela dinâmica da planilha é a única verdade; quando divergir, ela ganha.
+
+---
+
+## Onde está cada coisa
+
+| | |
+|---|---|
+| Repositório | `andreleite-ops/financas-casa` (público), branch `main` |
+| App | `andre-leite-financas.streamlit.app` |
+| Banco | Supabase São Paulo, via **Session pooler** — o Direct é IPv6 e o Streamlit é IPv4 |
+| Testes | `pytest tests/` — 154 passando |
+| Deploy | `DEPLOY.md`, passo a passo, senhas por último |
+
+Para rodar os testes:
+
+```
+pip install -r requirements-dev.txt
+DATABASE_URL="sqlite:///teste.db" pytest tests/ -q
+```
