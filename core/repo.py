@@ -8,7 +8,7 @@ from datetime import date
 import sqlalchemy as sa
 
 from . import ai, classify, db, dedup
-from .texto import normalizar
+from .texto import normalizar, pessoa_na_descricao
 
 PESSOA_PADRAO = "Casal"
 
@@ -277,8 +277,14 @@ def importar(
                 subcategoria_id = achado.subcategoria_id
                 status, confianca = achado.status, achado.confianca
 
-            # a dica do arquivo manda; depois a regra; por último o titular da conta
-            pessoa = _pessoa_valida(lan.pessoa_hint or achado.pessoa, pessoa_padrao)
+            # a dica do arquivo manda; depois a regra; depois o que a própria
+            # descrição diz ("ALMOÇO ANDRÉ", "CONSULTA RO"); por último o
+            # titular da conta — que na carga inicial não sabe de nada, porque
+            # a planilha mistura todas as contas numa só
+            pessoa = _pessoa_valida(
+                lan.pessoa_hint or achado.pessoa or pessoa_na_descricao(lan.descricao),
+                pessoa_padrao,
+            )
             observacao = decisao.motivo or None
 
             if decisao.situacao == "confere_planilha":
@@ -561,6 +567,50 @@ def receitas_manuais(conn, ano: int) -> list[dict]:
         .order_by(db.transacoes.c.competencia.desc(), db.transacoes.c.id.desc())
     )
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def dono_pela_descricao(conn) -> dict[str, int]:
+    """Quantos lançamentos têm dono escrito na descrição e estão com outro.
+
+    A carga inicial atribuiu tudo ao dono do arquivo, porque a planilha mistura
+    as contas do casal. Mas a Rô escreve de quem é o gasto no fim da descrição
+    — "ALMOÇO ANDRÉ", "CONSULTA RO" —, e isso vale mais que o padrão do
+    arquivo. Devolve a contagem por pessoa, sem mudar nada.
+    """
+    consulta = sa.select(
+        db.transacoes.c.id, db.transacoes.c.descricao, db.transacoes.c.pessoa
+    ).where(db.transacoes.c.ativo == sa.true())
+    contagem: dict[str, int] = {}
+    for linha in conn.execute(consulta):
+        dono = pessoa_na_descricao(linha.descricao)
+        if dono and dono != linha.pessoa:
+            contagem[dono] = contagem.get(dono, 0) + 1
+    return contagem
+
+
+def corrigir_dono_pela_descricao(engine) -> int:
+    """Aplica o dono que a descrição declara. Devolve quantos mudaram."""
+    with engine.begin() as conn:
+        alvos: dict[str, list[int]] = {}
+        for linha in conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.descricao, db.transacoes.c.pessoa)
+            .where(db.transacoes.c.ativo == sa.true())
+        ):
+            dono = pessoa_na_descricao(linha.descricao)
+            if dono and dono != linha.pessoa:
+                alvos.setdefault(dono, []).append(linha.id)
+
+        # uma atualização por pessoa, e não uma por lançamento: são centenas de
+        # linhas, e cada ida ao banco custa uns 150ms daqui até São Paulo
+        total = 0
+        for dono, ids in alvos.items():
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(ids))
+                .values(pessoa=dono)
+            )
+            total += len(ids)
+    return total
 
 
 def excluir_transacao(engine, transacao_id: int) -> bool:

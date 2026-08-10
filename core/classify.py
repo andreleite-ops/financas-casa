@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 
 from . import db
-from .texto import chave_estabelecimento, normalizar
+from .texto import chave_estabelecimento, normalizar, pessoa_na_descricao
 
 LIMITE_CONFIANCA_IA = 0.75
 
@@ -217,8 +217,12 @@ def reclassificar_pendentes(conn, limite: int | None = None) -> int:
                 status=resultado.status,
                 confianca=resultado.confianca,
             )
-            if resultado.pessoa:
-                valores["pessoa"] = resultado.pessoa
+            # a regra manda; senão, o que a própria descrição diz ("ALMOÇO
+            # ANDRÉ", "CONSULTA RO"). Sem isso, reaplicar as regras acertava a
+            # categoria e continuava atribuindo o gasto à pessoa errada.
+            dono = resultado.pessoa or pessoa_na_descricao(linha.descricao)
+            if dono:
+                valores["pessoa"] = dono
             conn.execute(
                 sa.update(db.transacoes).where(db.transacoes.c.id == linha.id).values(**valores)
             )

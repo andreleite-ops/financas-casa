@@ -123,6 +123,24 @@ def render(engine, usuario: dict) -> None:
     with engine.connect() as conn:
         plano = repo.plano_de_contas(conn)
         por_mes = repo.pendentes_por_competencia(conn)
+        donos_errados = repo.dono_pela_descricao(conn)
+
+    # a carga inicial atribuiu tudo ao dono do arquivo, mas a Rô escreve de quem
+    # é o gasto no fim da descrição. Corrigir isso é uma decisão dele, não minha
+    if donos_errados:
+        total = sum(donos_errados.values())
+        detalhe = ", ".join(f"{n} para {p}" for p, n in sorted(donos_errados.items()))
+        c1, c2 = st.columns([3, 1])
+        c1.info(
+            f"**{total} lançamentos dizem na descrição de quem são** e estão atribuídos a "
+            f"outra pessoa ({detalhe}). É a Rô escrevendo o dono no fim — "
+            "“ALMOÇO ANDRÉ”, “CONSULTA RO”.",
+            icon="👤",
+        )
+        if c2.button("Corrigir o dono", type="primary", width="stretch"):
+            mudados = repo.corrigir_dono_pela_descricao(engine)
+            st.success(f"{mudados} lançamento(s) com o dono corrigido.")
+            st.rerun()
 
     total_pendente = sum(por_mes.values())
     aba_fila, aba_busca = st.tabs([
@@ -184,10 +202,12 @@ def render(engine, usuario: dict) -> None:
             for item in achados:
                 marca = (f"origem: {item['classificacao_origem']} · "
                          if item.get("classificacao_origem") else "")
-                atual = marca + (
-                    + (f" › {item['subcategoria']}" if item["subcategoria"] else "")
-                    + f" ({item['status'].replace('_', ' ')})"
-                    if item["categoria"]
-                    else "ainda sem categoria"
-                )
+                if item["categoria"]:
+                    atual = (
+                        marca + item["categoria"]
+                        + (f" › {item['subcategoria']}" if item["subcategoria"] else "")
+                        + f" ({item['status'].replace('_', ' ')})"
+                    )
+                else:
+                    atual = marca + "ainda sem categoria"
                 _editor(engine, usuario, item, plano, "b", atual)

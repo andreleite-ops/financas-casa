@@ -336,3 +336,56 @@ def test_fila_pendentes_corta_por_mes_e_por_texto(engine):
         assert len(repo.fila_pendentes(conn, termo="EXTRA")) == 2
         # os dois filtros somam
         assert len(repo.fila_pendentes(conn, competencia="2026-08", termo="EXTRA")) == 1
+
+
+def test_dono_sai_da_descricao_quando_ela_diz(engine):
+    """"RO" é a Rô, não Rondônia.
+
+    A carga inicial atribui tudo ao dono do arquivo, porque a planilha da casa
+    mistura as contas do casal. Mas a Rô escreve de quem é o gasto no fim da
+    descrição, e isso vale mais: são 233 lançamentos só em 2026.
+    """
+    import sqlalchemy as sa
+
+    from core import db, repo
+    from core.texto import chave_estabelecimento, pessoa_na_descricao
+
+    # a chave da memória não pode comer o "RO" achando que é sigla de estado
+    assert chave_estabelecimento("INSS RO") == "INSS RO"
+    assert chave_estabelecimento("ALMOÇO RO") == "ALMOCO RO"
+    assert chave_estabelecimento("INSS ANDRE") == "INSS ANDRE"
+    # e a sigla de estado de verdade continua saindo
+    assert chave_estabelecimento("EC *CLINICA VERTEX RJ") == "CLINICA VERTEX"
+    assert chave_estabelecimento("RESTAURANTE DO ZE SP") == "RESTAURANTE DO ZE"
+
+    assert pessoa_na_descricao("ALMOÇO ANDRÉ") == "André"
+    assert pessoa_na_descricao("CONSULTA RO") == "Rô"
+    assert pessoa_na_descricao("PADARIA") is None
+
+    conta = repo.conta_da_planilha(engine)
+    linhas = [("INSS ANDRE", "André"), ("INSS RO", "Rô"), ("PADARIA", None)]
+    with engine.begin() as conn:
+        for descricao, _ in linhas:
+            conn.execute(
+                sa.insert(db.transacoes).values(
+                    data=date(2026, 3, 10), competencia="2026-03", descricao=descricao,
+                    descricao_norm=descricao, valor_centavos=-50_000, conta_id=conta,
+                    pessoa="Rô", status="pendente", origem="planilha", ativo=True,
+                    hash_dedup=descricao,
+                )
+            )
+
+    with engine.connect() as conn:
+        # só o do André está com o dono errado; PADARIA não diz nada
+        assert repo.dono_pela_descricao(conn) == {"André": 1}
+    assert repo.corrigir_dono_pela_descricao(engine) == 1
+
+    with engine.connect() as conn:
+        donos = {
+            linha.descricao: linha.pessoa
+            for linha in conn.execute(
+                sa.select(db.transacoes.c.descricao, db.transacoes.c.pessoa)
+            )
+        }
+        assert repo.dono_pela_descricao(conn) == {}   # idempotente
+    assert donos == {"INSS ANDRE": "André", "INSS RO": "Rô", "PADARIA": "Rô"}
