@@ -389,3 +389,51 @@ def test_dono_sai_da_descricao_quando_ela_diz(engine):
         }
         assert repo.dono_pela_descricao(conn) == {}   # idempotente
     assert donos == {"INSS ANDRE": "André", "INSS RO": "Rô", "PADARIA": "Rô"}
+
+
+def test_gasto_da_casa_nao_pode_ficar_com_uma_pessoa_so(engine):
+    """O upload pergunta "de quem é este arquivo", e a resposta valia para tudo.
+
+    Na planilha da casa, que junta as contas do casal, a maioria das linhas não
+    diz de quem é o gasto. Atribuir todas a uma pessoa fazia o relatório por
+    pessoa errar por um fator de vinte: R$ 713 mil da casa apareciam como
+    despesa da Rô.
+    """
+    import sqlalchemy as sa
+
+    from core import db, repo
+
+    conta = repo.conta_da_planilha(engine)
+    linhas = [("ALMOÇO ANDRÉ", -10_000), ("CONSULTA RO", -20_000),
+              ("MERCADO", -50_000), ("PADARIA", -3_000)]
+    with engine.begin() as conn:
+        for descricao, valor in linhas:
+            conn.execute(
+                sa.insert(db.transacoes).values(
+                    data=date(2026, 3, 10), competencia="2026-03", descricao=descricao,
+                    descricao_norm=descricao, valor_centavos=valor, conta_id=conta,
+                    pessoa="Rô", status="pendente", origem="planilha", ativo=True,
+                    hash_dedup=descricao,
+                )
+            )
+
+    with engine.connect() as conn:
+        orfaos = repo.sem_dono_declarado(conn)
+    # só MERCADO e PADARIA: os outros dois dizem de quem são
+    assert orfaos == {"quantidade": 2, "despesas": 53_000}
+
+    assert repo.atribuir_ao_casal(engine) == 2
+    with engine.connect() as conn:
+        donos = {
+            linha.descricao: linha.pessoa
+            for linha in conn.execute(
+                sa.select(db.transacoes.c.descricao, db.transacoes.c.pessoa)
+            )
+        }
+        assert repo.sem_dono_declarado(conn)["quantidade"] == 0   # idempotente
+    assert donos == {
+        "ALMOÇO ANDRÉ": "Rô",     # ainda não corrigido: é o outro botão
+        "CONSULTA RO": "Rô",
+        "MERCADO": "Casal",
+        "PADARIA": "Casal",
+    }

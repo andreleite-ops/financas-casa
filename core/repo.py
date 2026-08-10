@@ -214,6 +214,7 @@ def importar(
 
         regras = classify.carregar_regras(conn)
         naturezas = classify._natureza_por_categoria(conn)
+        donos_de_categoria = classify.donos_por_categoria(conn)
         cats_idx, subs_idx = _indice_categorias(conn)
 
         # todo o histórico que pode conflitar vem numa consulta só; as decisões
@@ -282,7 +283,10 @@ def importar(
             # titular da conta — que na carga inicial não sabe de nada, porque
             # a planilha mistura todas as contas numa só
             pessoa = _pessoa_valida(
-                lan.pessoa_hint or achado.pessoa or pessoa_na_descricao(lan.descricao),
+                lan.pessoa_hint
+                or achado.pessoa
+                or pessoa_na_descricao(lan.descricao)
+                or donos_de_categoria.get(categoria_id),
                 pessoa_padrao,
             )
             observacao = decisao.motivo or None
@@ -569,36 +573,39 @@ def receitas_manuais(conn, ano: int) -> list[dict]:
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
 
 
-def dono_pela_descricao(conn) -> dict[str, int]:
-    """Quantos lançamentos têm dono escrito na descrição e estão com outro.
+def _dono_declarado(conn) -> dict[str, list[int]]:
+    """pessoa -> ids que deveriam ser dela e estão com outra.
 
-    A carga inicial atribuiu tudo ao dono do arquivo, porque a planilha mistura
-    as contas do casal. Mas a Rô escreve de quem é o gasto no fim da descrição
-    — "ALMOÇO ANDRÉ", "CONSULTA RO" —, e isso vale mais que o padrão do
-    arquivo. Devolve a contagem por pessoa, sem mudar nada.
+    Duas fontes dizem de quem é o gasto sem margem para dúvida: a descrição,
+    quando a Rô escreve o nome no fim ("ALMOÇO ANDRÉ", "CONSULTA RO"), e a
+    categoria, quando ela é de uma pessoa por natureza — pensão e gasto com os
+    filhos são do André, não despesa da casa a ser rateada.
     """
+    donos_categoria = classify.donos_por_categoria(conn)
     consulta = sa.select(
-        db.transacoes.c.id, db.transacoes.c.descricao, db.transacoes.c.pessoa
+        db.transacoes.c.id,
+        db.transacoes.c.descricao,
+        db.transacoes.c.pessoa,
+        db.transacoes.c.categoria_id,
     ).where(db.transacoes.c.ativo == sa.true())
-    contagem: dict[str, int] = {}
+
+    alvos: dict[str, list[int]] = {}
     for linha in conn.execute(consulta):
-        dono = pessoa_na_descricao(linha.descricao)
+        dono = pessoa_na_descricao(linha.descricao) or donos_categoria.get(linha.categoria_id)
         if dono and dono != linha.pessoa:
-            contagem[dono] = contagem.get(dono, 0) + 1
-    return contagem
+            alvos.setdefault(dono, []).append(linha.id)
+    return alvos
+
+
+def dono_pela_descricao(conn) -> dict[str, int]:
+    """Quantos lançamentos têm dono declarado e estão com outra pessoa."""
+    return {pessoa: len(ids) for pessoa, ids in _dono_declarado(conn).items()}
 
 
 def corrigir_dono_pela_descricao(engine) -> int:
-    """Aplica o dono que a descrição declara. Devolve quantos mudaram."""
+    """Aplica o dono que a descrição ou a categoria declara."""
     with engine.begin() as conn:
-        alvos: dict[str, list[int]] = {}
-        for linha in conn.execute(
-            sa.select(db.transacoes.c.id, db.transacoes.c.descricao, db.transacoes.c.pessoa)
-            .where(db.transacoes.c.ativo == sa.true())
-        ):
-            dono = pessoa_na_descricao(linha.descricao)
-            if dono and dono != linha.pessoa:
-                alvos.setdefault(dono, []).append(linha.id)
+        alvos = _dono_declarado(conn)
 
         # uma atualização por pessoa, e não uma por lançamento: são centenas de
         # linhas, e cada ida ao banco custa uns 150ms daqui até São Paulo
@@ -611,6 +618,71 @@ def corrigir_dono_pela_descricao(engine) -> int:
             )
             total += len(ids)
     return total
+
+
+def sem_dono_declarado(conn) -> dict:
+    """O que está com uma pessoa só porque o upload perguntou de quem era.
+
+    A planilha da casa mistura as contas do casal, e a maior parte das linhas
+    não diz de quem é o gasto. Atribuir todas elas a uma pessoa só faz o
+    relatório por pessoa mentir por um fator de vinte — o que é da casa vira
+    dívida de quem enviou o arquivo. Devolve contagem e total, sem mudar nada.
+    """
+    return {
+        "quantidade": len(_ids_sem_dono(conn)),
+        "despesas": sum(-v for _i, v in _ids_sem_dono(conn, com_valor=True) if v < 0),
+    }
+
+
+def _ids_sem_dono(conn, com_valor: bool = False):
+    """Despesas da planilha que estão com uma pessoa sem a descrição dizer isso.
+
+    Receita fica de fora: o dono dela vem da fonte (TAG é do André, BIOS é da
+    Rô, NUN é dos dois), não da descrição — "SALARIO" não diz de quem é, e
+    passar isso para o casal apagaria justamente a separação que existe para
+    impedir dupla contagem.
+    """
+    consulta = (
+        sa.select(
+            db.transacoes.c.id,
+            db.transacoes.c.descricao,
+            db.transacoes.c.valor_centavos,
+            db.transacoes.c.categoria_id,
+        )
+        .select_from(
+            db.transacoes.outerjoin(
+                db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id
+            )
+        )
+        .where(
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.origem == "planilha",
+            db.transacoes.c.pessoa != "Casal",
+            sa.or_(db.categorias.c.natureza.is_(None), db.categorias.c.natureza != "receita"),
+            sa.or_(db.transacoes.c.natureza.is_(None), db.transacoes.c.natureza != "receita"),
+        )
+    )
+    donos_categoria = classify.donos_por_categoria(conn)
+    achados = [
+        (linha.id, linha.valor_centavos)
+        for linha in conn.execute(consulta)
+        if pessoa_na_descricao(linha.descricao) is None
+        and linha.categoria_id not in donos_categoria
+    ]
+    return achados if com_valor else [i for i, _v in achados]
+
+
+def atribuir_ao_casal(engine) -> int:
+    """Passa para o casal o que veio da planilha sem dono declarado."""
+    with engine.begin() as conn:
+        ids = _ids_sem_dono(conn)
+        for inicio in range(0, len(ids), 500):
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(ids[inicio : inicio + 500]))
+                .values(pessoa="Casal")
+            )
+    return len(ids)
 
 
 def excluir_transacao(engine, transacao_id: int) -> bool:

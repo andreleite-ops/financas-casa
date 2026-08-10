@@ -142,6 +142,24 @@ def render(engine, usuario: dict) -> None:
             st.success(f"{mudados} lançamento(s) com o dono corrigido.")
             st.rerun()
 
+    # o gasto da casa que ficou com uma pessoa só porque o upload perguntou
+    # "de quem é este arquivo": é o que faz o relatório por pessoa mentir feio
+    with engine.connect() as conn:
+        orfaos = repo.sem_dono_declarado(conn)
+    if orfaos["quantidade"]:
+        c1, c2 = st.columns([3, 1])
+        c1.warning(
+            f"**{orfaos['quantidade']} lançamentos da planilha não dizem de quem são** e estão "
+            f"atribuídos a uma pessoa — {fmt_brl(orfaos['despesas'])} de despesa. Isso vem da "
+            "resposta a “de quem é este arquivo”, que valeu para todas as linhas. Gasto da "
+            "casa deveria ficar como **Casal**.",
+            icon="👥",
+        )
+        if c2.button("Passar para o Casal", width="stretch"):
+            mudados = repo.atribuir_ao_casal(engine)
+            st.success(f"{mudados} lançamento(s) agora são do casal.")
+            st.rerun()
+
     total_pendente = sum(por_mes.values())
     aba_fila, aba_busca = st.tabs([
         f"📌 Fila de pendências ({total_pendente})", "🔎 Reclassificar qualquer lançamento"

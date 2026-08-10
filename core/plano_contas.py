@@ -283,6 +283,14 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
 ]
 
 # Metas iniciais (% da renda mensal) - editaveis na tela Orcamento
+# Categorias que sao, por natureza, de uma pessoa so. Pensao e gasto com os
+# filhos e do Andre: nao e gasto da casa a ser rateado, e o relatorio por pessoa
+# so faz sentido se essa distincao existir. Vale para qualquer lancamento que
+# caia na categoria, venha ele da planilha ou de um extrato.
+DONO_POR_CATEGORIA = {
+    "Filhos & Pensão": "André",
+}
+
 METAS_INICIAIS = {
     "Poupança & Investimentos": 20.0,
     "Moradia": 20.0,

@@ -42,6 +42,22 @@ def _natureza_por_categoria(conn) -> dict[int, str]:
     }
 
 
+def donos_por_categoria(conn) -> dict[int, str]:
+    """categoria_id -> pessoa, para as categorias que sao de uma pessoa so.
+
+    Pensao e gasto com os filhos e do Andre: nao e despesa da casa a ser
+    rateada. Sem isso, cair na categoria certa ainda deixava o gasto no dono
+    errado, e o relatorio por pessoa continuava mentindo.
+    """
+    from .plano_contas import DONO_POR_CATEGORIA
+
+    return {
+        linha.id: DONO_POR_CATEGORIA[linha.nome]
+        for linha in conn.execute(sa.select(db.categorias.c.id, db.categorias.c.nome))
+        if linha.nome in DONO_POR_CATEGORIA
+    }
+
+
 def carregar_regras(conn) -> list[dict]:
     """Memoria primeiro (prioridade menor), depois o dicionario."""
     consulta = (
@@ -190,6 +206,7 @@ def reclassificar_pendentes(conn, limite: int | None = None) -> int:
     """Reaplica as regras nas pendencias - util depois de aprender algo novo."""
     regras = carregar_regras(conn)
     naturezas = _natureza_por_categoria(conn)
+    donos = donos_por_categoria(conn)
     consulta = sa.select(
         db.transacoes.c.id,
         db.transacoes.c.descricao,
@@ -220,7 +237,11 @@ def reclassificar_pendentes(conn, limite: int | None = None) -> int:
             # a regra manda; senão, o que a própria descrição diz ("ALMOÇO
             # ANDRÉ", "CONSULTA RO"). Sem isso, reaplicar as regras acertava a
             # categoria e continuava atribuindo o gasto à pessoa errada.
-            dono = resultado.pessoa or pessoa_na_descricao(linha.descricao)
+            dono = (
+                resultado.pessoa
+                or pessoa_na_descricao(linha.descricao)
+                or donos.get(resultado.categoria_id)
+            )
             if dono:
                 valores["pessoa"] = dono
             conn.execute(
