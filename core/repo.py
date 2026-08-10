@@ -64,20 +64,32 @@ def plano_de_contas(conn, natureza: str | None = None) -> list[dict]:
     )
     if natureza:
         consulta = consulta.where(db.categorias.c.natureza == natureza)
-    saida = []
-    for cat in conn.execute(consulta):
+    categorias = conn.execute(consulta).fetchall()
+
+    # todas as subcategorias numa consulta só. Uma por categoria custava
+    # dezoito idas ao banco, e o banco está em São Paulo enquanto o app roda nos
+    # Estados Unidos: cada ida são uns 150ms. Isso acontecia a cada toque de
+    # campo na tela de classificação, e era ela a lentidão sentida ali.
+    por_categoria: dict[int, list[dict]] = {}
+    if categorias:
         subs = conn.execute(
-            sa.select(db.subcategorias.c.id, db.subcategorias.c.nome, db.subcategorias.c.ativa)
-            .where(db.subcategorias.c.categoria_id == cat.id)
+            sa.select(
+                db.subcategorias.c.id,
+                db.subcategorias.c.nome,
+                db.subcategorias.c.ativa,
+                db.subcategorias.c.categoria_id,
+            )
+            .where(db.subcategorias.c.categoria_id.in_([c.id for c in categorias]))
             .order_by(db.subcategorias.c.ordem)
-        ).fetchall()
-        saida.append(
-            {
-                **dict(cat._mapping),
-                "subcategorias": [dict(s._mapping) for s in subs],
-            }
         )
-    return saida
+        for sub in subs:
+            linha = dict(sub._mapping)
+            por_categoria.setdefault(linha.pop("categoria_id"), []).append(linha)
+
+    return [
+        {**dict(cat._mapping), "subcategorias": por_categoria.get(cat.id, [])}
+        for cat in categorias
+    ]
 
 
 def plano_para_ia(conn) -> dict[str, list[str]]:

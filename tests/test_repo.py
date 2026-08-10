@@ -267,3 +267,31 @@ def test_competencias_disponiveis_lista_distintas_ativas_desc(engine):
     with engine.begin() as conn:
         competencias = repo.competencias_disponiveis(conn)
     assert competencias == ["2026-07", "2026-05"]
+
+
+def test_plano_de_contas_nao_consulta_uma_vez_por_categoria(engine):
+    """A tela de classificação relê o plano a cada toque de campo.
+
+    Uma consulta por categoria custava dezoito idas ao banco por interação —
+    com o Supabase em São Paulo e o app nos Estados Unidos, quase três segundos
+    entre um campo e o seguinte. Este teste é o que impede a volta do N+1.
+    """
+    from sqlalchemy import event
+
+    from core import repo
+
+    consultas = []
+    event.listen(
+        engine, "before_cursor_execute",
+        lambda conn, cur, stmt, par, ctx, many: consultas.append(stmt),
+    )
+    with engine.connect() as conn:
+        plano = repo.plano_de_contas(conn)
+
+    assert len(consultas) <= 2, f"{len(consultas)} consultas — o N+1 voltou"
+    # e continua devolvendo o plano inteiro, com as subcategorias no lugar
+    assert len(plano) > 10
+    alimentacao = next(c for c in plano if c["nome"] == "Alimentação")
+    assert {s["nome"] for s in alimentacao["subcategorias"]} == {
+        "No Domicílio", "Fora do Domicílio"
+    }

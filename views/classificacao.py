@@ -117,11 +117,28 @@ def render(engine, usuario: dict) -> None:
                     resolvidas = classify.reclassificar_pendentes(conn)
                 st.success(f"{resolvidas} lançamento(s) resolvido(s) pelas regras atuais.")
                 st.rerun()
-            for item in fila[:40]:
+            # doze por vez, e não quarenta. Cada lançamento na tela são cinco
+            # campos, e o Streamlit redesenha todos a cada toque: com quarenta
+            # eram duzentos campos por clique, e a tela demorava a transicionar
+            # de um campo para o seguinte. Doze cabem numa tela e respondem.
+            por_pagina = 12
+            paginas = (len(fila) + por_pagina - 1) // por_pagina
+            pagina = 1
+            if paginas > 1:
+                pagina = st.number_input(
+                    f"Página (de {paginas})", min_value=1, max_value=paginas,
+                    value=1, step=1,
+                    help="Ao salvar, o lançamento sai da fila e os próximos sobem sozinhos.",
+                )
+            inicio = (int(pagina) - 1) * por_pagina
+            for item in fila[inicio:inicio + por_pagina]:
                 sugestao = item.get("observacao") or ""
                 _editor(engine, usuario, item, plano, "f", sugestao)
-            if len(fila) > 40:
-                st.caption(f"Mostrando 40 de {len(fila)}. Salve estes para ver os próximos.")
+            if paginas > 1:
+                st.caption(
+                    f"Mostrando {inicio + 1}–{min(inicio + por_pagina, len(fila))} "
+                    f"de {len(fila)}."
+                )
 
     with aba_busca:
         termo = st.text_input(

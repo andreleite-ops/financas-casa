@@ -14,8 +14,9 @@ import io
 from datetime import date
 
 import pandas as pd
+import sqlalchemy as sa
 
-from core import analytics, repo
+from core import analytics, db, repo, seed
 from parsers import tabular
 
 # ---------------------------------------------------------------------------
@@ -309,3 +310,54 @@ def test_descricao_manda_no_que_foi_o_rotulo_manda_em_de_quem_e(engine):
     # e só o salário vira base do orçamento
     assert resumo["renda_recorrente"] == 2_059_621
     assert resumo["receitas_nao_recorrentes"] == 52_000_000
+
+
+# ---------------------------------------------------------------------------
+# regra nova não reclassifica sozinha o que já está gravado
+# ---------------------------------------------------------------------------
+def test_reaplicar_regras_resolve_o_que_ficou_pendente(engine):
+    """Uma categoria criada depois só alcança o passado por este caminho.
+
+    A pensão do André entrou na base antes de existir Filhos & Pensão, e ficou
+    na fila. Criar a categoria não move lançamento nenhum — quem move é o botão
+    "Reaplicar regras na fila", e é ele que este teste protege.
+    """
+    from core import classify
+
+    lancamentos = pd.DataFrame(
+        [("2026-03-10 00:00:00", "DESP", "PENSÃO ALIMENTICIA", "15600",
+          "CONTRIBUIÇÃO MENSAL"),
+         ("2026-03-11 00:00:00", "DESP", "PADARIA", "50", "ALIMENTAÇÃO")],
+        columns=["DATA", "CATEGORIA", "BENEFICIÁRIO", "VALOR", "CLASSIFICAÇÃO"],
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as escritor:
+        lancamentos.to_excel(escritor, sheet_name="Lançamento Despesas e Receitas", index=False)
+    df = tabular.carregar_tabela(buffer.getvalue(), "planilha.xlsx")
+    lidos, _ = tabular.extrair(df, tabular.sugerir_mapeamento(df.columns, df), origem="planilha")
+
+    # simula a base de antes: sem as regras de pensão, a linha cai na fila
+    with engine.begin() as conn:
+        conn.execute(
+            sa.delete(db.regras).where(db.regras.c.padrao.like("PENSAO%"))
+        )
+    repo.importar(
+        engine, lancamentos=lidos, conta_id=repo.conta_da_planilha(engine),
+        arquivo="planilha.xlsx", origem="planilha", usuario="andre",
+        pessoa_padrao="Rô", usar_ia=False,
+    )
+    with engine.connect() as conn:
+        assert len(repo.fila_pendentes(conn)) == 1
+
+    # o reboot devolve as regras; o botão é que alcança o que já estava gravado
+    seed.semear(engine)
+    with engine.begin() as conn:
+        assert classify.reclassificar_pendentes(conn) == 1
+
+    with engine.connect() as conn:
+        assert repo.fila_pendentes(conn) == []
+        por_categoria = {
+            linha["categoria"]: linha["total"]
+            for linha in analytics.por_categoria(conn, competencia="2026-03")
+        }
+    assert abs(por_categoria["Filhos & Pensão"]) == 1_560_000

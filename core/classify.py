@@ -191,14 +191,25 @@ def reclassificar_pendentes(conn, limite: int | None = None) -> int:
     regras = carregar_regras(conn)
     naturezas = _natureza_por_categoria(conn)
     consulta = sa.select(
-        db.transacoes.c.id, db.transacoes.c.descricao, db.transacoes.c.valor_centavos
+        db.transacoes.c.id,
+        db.transacoes.c.descricao,
+        db.transacoes.c.valor_centavos,
+        # a natureza e o rotulo gravados no upload valem aqui tambem: sem eles,
+        # um estorno pendente cairia do lado errado e uma receita perderia o
+        # dono que so o rotulo da origem sabe
+        db.transacoes.c.natureza,
+        db.transacoes.c.classificacao_origem,
     ).where(db.transacoes.c.status == "pendente", db.transacoes.c.ativo == sa.true())
     if limite:
         consulta = consulta.limit(limite)
 
     resolvidas = 0
     for linha in conn.execute(consulta).fetchall():
-        resultado = classificar_local(linha.descricao, linha.valor_centavos, regras, naturezas)
+        resultado = classificar_local(
+            linha.descricao, linha.valor_centavos, regras, naturezas,
+            natureza_hint=linha.natureza,
+            rotulo_origem=linha.classificacao_origem,
+        )
         if resultado.classificado:
             valores = dict(
                 categoria_id=resultado.categoria_id,
