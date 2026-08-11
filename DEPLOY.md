@@ -47,10 +47,30 @@ verem os mesmos dados de computadores diferentes.
    `DATABASE_URL`.**
 
 > As tabelas são criadas sozinhas na primeira vez que o app abrir. Você não
-> precisa rodar nenhum comando de SQL.
+> precisa rodar nenhum comando de SQL — com uma exceção, logo abaixo.
 
 > **Onde colar:** direto na caixa de Secrets do Streamlit (Etapa 2). Essa linha
 > contém a senha do banco — não precisa passar por e-mail, mensagem ou chat.
+
+### 1.1 Fechar a porta pública do banco *(obrigatório, uma vez só)*
+
+O Supabase publica uma API REST em cima das suas tabelas, aberta na internet e
+autenticada por uma chave que é feita para ser pública. Sem Row-Level Security,
+quem tiver essa chave lê, altera e apaga tudo. É o alerta **"Table publicly
+accessible"** que chega por e-mail.
+
+**Depois de abrir o app pela primeira vez** — as tabelas precisam já existir:
+
+1. Supabase › **SQL Editor** › **New query**
+2. Cole o conteúdo de `scripts/proteger_banco.sql` e clique em **Run**
+3. Confira o resultado: `rls_ativo` tem de ser `true` nas dez tabelas
+
+O app continua funcionando igual. Ele não usa essa API: fala Postgres direto,
+pelo pooler, com o usuário `postgres`, que não passa por RLS. Quem fica de
+fora é a rua.
+
+> Criou tabela nova depois? Rode o script de novo — ele varre todo o schema
+> `public`, inclusive o que vier no futuro.
 
 ---
 
@@ -246,6 +266,10 @@ as tabelas e delete. Na próxima abertura o app recria tudo vazio.
 
 ## Segurança, em uma linha
 
-O `secrets.toml` nunca vai para o GitHub (está no `.gitignore`), as senhas são
-guardadas como hash bcrypt — não dá para voltar ao texto original — e o banco
-do Supabase só aceita conexão com a senha que você gerou na Etapa 1.
+O `secrets.toml` nunca vai para o GitHub (está no `.gitignore`), as senhas de
+vocês são guardadas como hash bcrypt — não dá para voltar ao texto original —,
+o banco só aceita conexão com a senha da Etapa 1, e a API pública do Supabase
+fica fechada por Row-Level Security (Etapa 1.1).
+
+O repositório é público: o código está lá, os dados não. Nunca comite
+`secrets.toml`, extrato, fatura ou planilha com números reais.
