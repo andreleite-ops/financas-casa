@@ -102,7 +102,7 @@ def _tabela_resumo(competencia, ano, mes, ano_todo, variacao, meses, meta_poupan
         nota, classe = nota_da_poupanca() if chave == "poupanca" else var_mes(chave)
         rodape_ano = (
             f"meta {fmt_brl(meta_poupanca)}/mês" if chave == "poupanca" and meta_poupanca
-            else f"média {fmt_brl(ano_todo[chave] // meses)}/mês"
+            else f"média {fmt_brl(ano_todo[chave] // meses)}/mês em {meses} meses"
         )
         linhas.append(
             f"<tr><td class='conta'>{rotulo}</td>"
@@ -127,6 +127,74 @@ def _tabela_resumo(competencia, ano, mes, ano_todo, variacao, meses, meta_poupan
     )
 
 
+def _tom_de_calor(valor: int, maximo: int) -> str:
+    """Fundo da célula: um matiz só, do claro ao vinho, conforme o peso.
+
+    Rampa de uma cor porque o que ela codifica é magnitude, não identidade —
+    matizes diferentes fariam o olho procurar um significado que não existe. O
+    passo é discreto, cinco degraus, para as faixas serem distinguíveis em vez
+    de virarem um borrão contínuo.
+    """
+    if not maximo or valor <= 0:
+        return ""
+    faixa = min(int(valor / maximo * 5), 4)   # 0..4
+    return ["#FBF6F1", "#F3E3E4", "#E7C9CD", "#D9A8AF", "#C6838D"][faixa]
+
+
+def _matriz_mes_a_mes(matriz: dict, ano: int) -> str:
+    """Categoria × mês, em HTML, inteira na tela.
+
+    Era um dataframe do Streamlit, que rola por dentro: as últimas categorias
+    ficavam escondidas justo quando são elas que se quer ver. Em HTML a tabela
+    aparece inteira, e sobra o fundo das células para dizer onde o dinheiro
+    pesou sem ninguém precisar comparar números um a um.
+    """
+    meses = matriz["meses"]
+    linhas = matriz["linhas"]
+    cabecalho = (
+        "<tr><th class='cat'>Categoria</th>"
+        + "".join(f"<th>{graficos.MESES_PT.get(m, m)}</th>" for m in meses)
+        + f"<th class='fecha'>Acum. {ano}</th><th>Média/mês</th>"
+        + f"<th>Total {ano - 1}</th></tr>"
+    )
+
+    corpo = []
+    for linha in linhas:
+        valores = [linha["meses"][m] for m in meses]
+        maximo = max(valores) if valores else 0
+        celulas = []
+        for valor in valores:
+            if not valor:
+                celulas.append("<td class='zero'>—</td>")
+                continue
+            fundo = _tom_de_calor(valor, maximo)
+            pico = " pico" if valor == maximo and maximo > 0 else ""
+            celulas.append(
+                f"<td class='calor{pico}' style='background:{fundo}'>{fmt_mil(valor)}</td>"
+            )
+        anterior = fmt_mil(linha["ano_anterior"]) if linha["ano_anterior"] else "—"
+        corpo.append(
+            f"<tr><td class='cat' title='{linha['categoria']}'>{linha['categoria']}</td>"
+            + "".join(celulas)
+            + f"<td class='fecha'>{fmt_mil(linha['acumulado'])}</td>"
+            + f"<td>{fmt_mil(linha['media'])}</td><td>{anterior}</td></tr>"
+        )
+
+    total_mes = [sum(l["meses"][m] for l in linhas) for m in meses]
+    acumulado = sum(l["acumulado"] for l in linhas)
+    corpo.append(
+        "<tr class='total'><td class='cat'>TOTAL</td>"
+        + "".join(f"<td>{fmt_mil(v) if v else '—'}</td>" for v in total_mes)
+        + f"<td class='fecha'>{fmt_mil(acumulado)}</td>"
+        + f"<td>{fmt_mil(acumulado // max(len(meses), 1))}</td>"
+        + f"<td>{fmt_mil(sum(l['ano_anterior'] for l in linhas)) or '—'}</td></tr>"
+    )
+    return (
+        "<div class='quadro' style='max-width:none'><table class='matriz'>"
+        f"<thead>{cabecalho}</thead><tbody>{''.join(corpo)}</tbody></table></div>"
+    )
+
+
 def _competencia_de_abertura(engine, competencias: list[str]) -> str:
     """Em que mês a tela abre.
 
@@ -136,15 +204,16 @@ def _competencia_de_abertura(engine, competencias: list[str]) -> str:
     hoje; se ele ainda não tiver gasto lançado, no último que teve.
     """
     hoje = date.today().strftime("%Y-%m")
-    if hoje in competencias:
-        with engine.connect() as conn:
-            if analytics.resumo(conn, competencia=hoje)["despesas"]:
-                return hoje
     passados = [c for c in competencias if c <= hoje]
+    # uma consulta para todos os meses. Perguntar mês a mês custava até doze
+    # idas ao banco só para decidir onde a tela abre
     with engine.connect() as conn:
-        for competencia in passados:   # a lista vem do mais recente para o mais antigo
-            if analytics.resumo(conn, competencia=competencia)["despesas"]:
-                return competencia
+        com_gasto = analytics.meses_com_despesa(conn)
+    if hoje in com_gasto:
+        return hoje
+    for competencia in passados:   # a lista vem do mais recente para o mais antigo
+        if competencia in com_gasto:
+            return competencia
     return passados[0] if passados else competencias[0]
 
 
@@ -174,7 +243,7 @@ def render(engine, usuario: dict) -> None:
         serie = analytics.serie_mensal(conn, ano, pessoa=pessoa)
         categorias = analytics.por_categoria(conn, competencia=competencia, pessoa=pessoa)
         metas = repo.listar_metas(conn, ano)
-        orcamento = analytics.orcamento(conn, competencia, metas)
+        orcamento = analytics.orcamento(conn, competencia, metas, resumo_do_mes=atual)
         matriz = analytics.tabela_mes_a_mes(conn, ano, pessoa=pessoa)
         anual = analytics.comparativo_anual(conn, pessoa=pessoa)
         acumulado = analytics.resumo(conn, ano=ano, pessoa=pessoa)
@@ -191,7 +260,9 @@ def render(engine, usuario: dict) -> None:
     meta_poupanca = next(
         (o["meta"] for o in orcamento if o["categoria"] == analytics.CATEGORIA_POUPANCA), 0
     )
-    meses_no_ano = len([m for m in serie if m["receitas"] or m["despesas"]]) or 1
+    # meses que já aconteceram — a planilha traz lançamento agendado até
+    # dezembro, e contar esses meses fazia a média mensal encolher
+    meses_no_ano = analytics.meses_decorridos(ano)
     st.markdown(
         _tabela_resumo(
             competencia, ano, atual, acumulado, variacao, meses_no_ano, meta_poupanca
@@ -260,35 +331,89 @@ def render(engine, usuario: dict) -> None:
 
     st.markdown(f"### Mês a mês {ano} · acumulado e comparativo")
     if matriz["linhas"]:
-        colunas = {"Categoria": [linha["categoria"] for linha in matriz["linhas"]]}
-        for mes in matriz["meses"]:
-            colunas[graficos.MESES_PT.get(mes, mes)] = [
-                fmt_mil(linha["meses"][mes]) for linha in matriz["linhas"]
-            ]
-        colunas[f"Acum. {ano}"] = [fmt_mil(linha["acumulado"]) for linha in matriz["linhas"]]
-        colunas["Média/mês"] = [fmt_mil(linha["media"]) for linha in matriz["linhas"]]
-        colunas[f"Total {ano - 1}"] = [
-            fmt_mil(linha["ano_anterior"]) if linha["ano_anterior"] else "—"
-            for linha in matriz["linhas"]
-        ]
-        tabela = pd.DataFrame(colunas)
-        total = {"Categoria": "TOTAL"}
-        for mes in matriz["meses"]:
-            total[graficos.MESES_PT.get(mes, mes)] = fmt_mil(
-                sum(linha["meses"][mes] for linha in matriz["linhas"])
-            )
-        total[f"Acum. {ano}"] = fmt_mil(sum(l["acumulado"] for l in matriz["linhas"]))
-        total["Média/mês"] = fmt_mil(
-            sum(l["acumulado"] for l in matriz["linhas"]) // max(len(matriz["meses"]), 1)
-        )
-        total[f"Total {ano - 1}"] = fmt_mil(sum(l["ano_anterior"] for l in matriz["linhas"]))
-        tabela = pd.concat([tabela, pd.DataFrame([total])], ignore_index=True)
-        st.dataframe(tabela, width="stretch", hide_index=True)
+        st.markdown(_matriz_mes_a_mes(matriz, ano), unsafe_allow_html=True)
         st.markdown(
-            "<p class='nota'>Valores em R$ mil. A poupança aparece como categoria própria e "
-            "não entra no total de despesas.</p>",
+            "<p class='nota'>Valores em R$ mil. O fundo escurece com o peso do mês "
+            "<b>dentro da própria categoria</b> — a leitura é ao longo da linha, não "
+            "entre linhas. O contorno marca o mês mais pesado de cada conta. A poupança "
+            "aparece como categoria própria e não entra no total de despesas.</p>",
             unsafe_allow_html=True,
         )
+
+    # ---- explodir uma categoria -------------------------------------------
+    st.markdown("### Abrir uma categoria")
+    st.caption(
+        "A matriz acima para na categoria. Aqui ela se abre: onde dentro de "
+        "**Alimentação** o dinheiro foi, mês a mês."
+    )
+    nomes = [linha["categoria"] for linha in matriz["linhas"]]
+    if nomes:
+        c1, c2 = st.columns([2, 1.2])
+        escolhida = c1.selectbox("Categoria", nomes, key="explodir")
+        escopo = c2.radio(
+            "Período", [f"Ano {ano}", f"Só {graficos.rotulo_mes(competencia)}"],
+            horizontal=True, key="escopo_explodir",
+        )
+        alvo = next(
+            (c for c in categorias if c["categoria"] == escolhida),
+            None,
+        )
+        categoria_id = alvo["categoria_id"] if alvo else None
+        if categoria_id is None:
+            with engine.connect() as conn:
+                plano = repo.plano_de_contas(conn, natureza="despesa")
+            categoria_id = next((c["id"] for c in plano if c["nome"] == escolhida), None)
+
+        if categoria_id:
+            do_ano = escopo.startswith("Ano")
+            with engine.connect() as conn:
+                aberto = analytics.serie_por_subcategoria(conn, categoria_id, ano, pessoa=pessoa)
+                fatias = analytics.por_subcategoria(
+                    conn, categoria_id,
+                    **({"ano": ano} if do_ano else {"competencia": competencia}),
+                    pessoa=pessoa,
+                )
+            if not fatias:
+                st.caption("Nada lançado nesta categoria no período.")
+            else:
+                total = sum(f["total"] for f in fatias)
+                esquerda, direita = st.columns([1.6, 1])
+                with esquerda:
+                    if do_ano and aberto["linhas"]:
+                        st.markdown(_matriz_mes_a_mes(aberto, ano), unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            "".join(
+                                _barra_categoria(
+                                    {"categoria": f["subcategoria"], "realizado": f["total"],
+                                     "meta": 0, "estourou": False, "meta_e_piso": False,
+                                     "abaixo_do_piso": False},
+                                    max(f["total"] for f in fatias),
+                                )
+                                for f in fatias
+                            ),
+                            unsafe_allow_html=True,
+                        )
+                with direita:
+                    st.dataframe(
+                        pd.DataFrame([
+                            {
+                                "Subcategoria": f["subcategoria"],
+                                "Total": fmt_brl(f["total"]),
+                                "%": f"{f['total'] / total * 100:.0f}%" if total else "—",
+                                "Lanç.": f["qtd"],
+                            }
+                            for f in fatias
+                        ]),
+                        width="stretch", hide_index=True,
+                    )
+                sem_detalhe = next((f for f in fatias if not f["detalhada"]), None)
+                if sem_detalhe:
+                    st.caption(
+                        f"⚠️ {fmt_brl(sem_detalhe['total'])} em "
+                        f"{sem_detalhe['qtd']} lançamento(s) ainda **sem subcategoria** — "
+                        "é o que falta detalhar para esta abertura ficar completa."
+                    )
 
     st.markdown("### Ano a ano")
     if len(anual) > 1 or (anual and anual[0]["ano"] != date.today().year):

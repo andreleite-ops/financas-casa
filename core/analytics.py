@@ -33,6 +33,23 @@ def _id_poupanca(conn) -> int | None:
     ).scalar()
 
 
+def meses_decorridos(ano: int) -> int:
+    """Quantos meses do ano já aconteceram.
+
+    É este o divisor de qualquer média mensal. Dividir pelos meses que têm
+    algum lançamento contava setembro a dezembro, que a planilha já traz
+    agendados: 823 mil de despesa até agosto viravam uma "média" de 68 mil,
+    quando a média real do que já se gastou é 103 mil. Ano passado divide por
+    doze, porque doze meses aconteceram.
+    """
+    hoje = date.today()
+    if ano < hoje.year:
+        return 12
+    if ano > hoje.year:
+        return 1
+    return hoje.month
+
+
 def receitas_nao_recorrentes(
     conn, competencia: str | None = None, ano: int | None = None, pessoa: str | None = None
 ) -> int:
@@ -64,29 +81,43 @@ def _base(competencia: str | None = None, ano: int | None = None, pessoa: str | 
 
 
 def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa: str | None = None) -> dict:
-    """Cards do topo: receitas, despesas correntes, poupanca e sobra."""
-    poupanca_id = _id_poupanca(conn)
+    """Cards do topo: receitas, despesas correntes, poupanca e sobra.
+
+    Uma consulta só. Eram tres — esta, a que buscava o id da poupanca e a que
+    somava a venda de bens —, e `resumo` e chamado varias vezes por tela: a
+    Visao Geral gastava 27 idas ao banco, quase quatro segundos de espera com o
+    Supabase em Sao Paulo. Trazendo o nome da categoria e da subcategoria na
+    propria linha, a separacao acontece aqui, sem voltar ao banco.
+    """
     consulta = (
         sa.select(
             db.categorias.c.natureza,
+            db.categorias.c.nome.label("categoria"),
             db.transacoes.c.categoria_id,
             # natureza declarada pela origem; decide o lado quando falta categoria
             db.transacoes.c.natureza.label("natureza_origem"),
+            db.subcategorias.c.nome.label("subcategoria"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
-            db.transacoes.outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            db.transacoes
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
         .where(*_base(competencia, ano, pessoa))
         .group_by(
             db.categorias.c.natureza,
+            db.categorias.c.nome,
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza,
+            db.subcategorias.c.nome,
         )
     )
-    receitas = despesas = poupanca = sem_classe = 0
+    receitas = despesas = poupanca = sem_classe = nao_recorrentes = 0
     for linha in conn.execute(consulta):
         total = int(linha.total or 0)
+        if linha.subcategoria in SUBCATEGORIAS_NAO_RECORRENTES:
+            nao_recorrentes += total
         if linha.categoria_id is None:
             sem_classe += total
             # sem categoria o sinal decide, a menos que a origem tenha dito de
@@ -96,14 +127,13 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
                 receitas += total
             else:
                 despesas += -total
-        elif linha.categoria_id == poupanca_id:
+        elif linha.categoria == CATEGORIA_POUPANCA:
             poupanca += -total
         elif linha.natureza == "receita":
             receitas += total
         else:
             despesas += -total
 
-    nao_recorrentes = receitas_nao_recorrentes(conn, competencia, ano, pessoa)
     return {
         "receitas": receitas,
         "despesas": despesas,
@@ -147,6 +177,12 @@ def por_categoria(
 
 
 def por_subcategoria(conn, categoria_id: int, competencia=None, ano=None, pessoa=None) -> list[dict]:
+    """Abertura de uma categoria pelas subcategorias dela.
+
+    Junção externa de propósito: o que está na categoria sem subcategoria é
+    justamente o que falta detalhar, e escondê-lo faria a soma das partes ficar
+    menor que o total sem explicação nenhuma.
+    """
     consulta = (
         sa.select(
             db.subcategorias.c.nome,
@@ -154,7 +190,7 @@ def por_subcategoria(conn, categoria_id: int, competencia=None, ano=None, pessoa
             sa.func.count(db.transacoes.c.id).label("qtd"),
         )
         .select_from(
-            db.transacoes.join(
+            db.transacoes.outerjoin(
                 db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id
             )
         )
@@ -162,19 +198,68 @@ def por_subcategoria(conn, categoria_id: int, competencia=None, ano=None, pessoa
         .group_by(db.subcategorias.c.nome)
     )
     linhas = [
-        {"subcategoria": linha.nome, "total": abs(int(linha.total or 0)), "qtd": linha.qtd}
+        {
+            "subcategoria": linha.nome or "— sem subcategoria —",
+            "detalhada": linha.nome is not None,
+            "total": abs(int(linha.total or 0)),
+            "qtd": linha.qtd,
+        }
         for linha in conn.execute(consulta)
     ]
     return sorted(linhas, key=lambda linha: -linha["total"])
 
 
+def serie_por_subcategoria(conn, categoria_id: int, ano: int, pessoa=None) -> dict:
+    """Subcategoria × mês dentro de uma categoria — a categoria explodida."""
+    consulta = (
+        sa.select(
+            db.transacoes.c.competencia,
+            db.subcategorias.c.nome,
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+        )
+        .select_from(
+            db.transacoes.outerjoin(
+                db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id
+            )
+        )
+        .where(*_base(ano=ano, pessoa=pessoa), db.transacoes.c.categoria_id == categoria_id)
+        .group_by(db.transacoes.c.competencia, db.subcategorias.c.nome)
+    )
+    matriz: dict[str, dict[str, int]] = {}
+    meses: set[str] = set()
+    for linha in conn.execute(consulta):
+        mes = linha.competencia[5:7]
+        meses.add(mes)
+        nome = linha.nome or "— sem subcategoria —"
+        matriz.setdefault(nome, {})[mes] = abs(int(linha.total or 0))
+
+    ordem = sorted(meses)
+    decorridos = meses_decorridos(ano)
+    linhas = []
+    for nome, valores in matriz.items():
+        acumulado = sum(valores.values())
+        linhas.append({
+            "categoria": nome,
+            "meses": {mes: valores.get(mes, 0) for mes in ordem},
+            "acumulado": acumulado,
+            "media": acumulado // max(decorridos, 1),
+            "ano_anterior": 0,
+        })
+    linhas.sort(key=lambda linha: -linha["acumulado"])
+    return {"meses": ordem, "linhas": linhas}
+
+
 def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
-    """Receitas x despesas x poupanca por mes do ano."""
-    poupanca_id = _id_poupanca(conn)
+    """Receitas x despesas x poupanca por mes do ano.
+
+    O nome da categoria vem junto, para a poupanca ser separada aqui em vez de
+    custar outra ida ao banco so para descobrir o id dela.
+    """
     consulta = (
         sa.select(
             db.transacoes.c.competencia,
             db.categorias.c.natureza,
+            db.categorias.c.nome.label("categoria"),
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza.label("natureza_origem"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
@@ -186,6 +271,7 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
         .group_by(
             db.transacoes.c.competencia,
             db.categorias.c.natureza,
+            db.categorias.c.nome,
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza,
         )
@@ -196,7 +282,7 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
             linha.competencia, {"competencia": linha.competencia, "receitas": 0, "despesas": 0, "poupanca": 0}
         )
         total = int(linha.total or 0)
-        if linha.categoria_id == poupanca_id and poupanca_id is not None:
+        if linha.categoria == CATEGORIA_POUPANCA:
             alvo["poupanca"] += -total
         elif linha.natureza == "receita" or (
             linha.categoria_id is None
@@ -247,6 +333,7 @@ def tabela_mes_a_mes(conn, ano: int, pessoa: str | None = None) -> dict:
     }
 
     ordem_meses = sorted(meses)
+    meses_ja_decorridos = meses_decorridos(ano)
     linhas = []
     for categoria, valores in matriz.items():
         acumulado = sum(valores.values())
@@ -255,7 +342,10 @@ def tabela_mes_a_mes(conn, ano: int, pessoa: str | None = None) -> dict:
                 "categoria": categoria,
                 "meses": {mes: valores.get(mes, 0) for mes in ordem_meses},
                 "acumulado": acumulado,
-                "media": acumulado // max(len(valores), 1),
+                # divide pelos meses que já aconteceram, não pelos meses em
+                # que esta categoria teve gasto: uma conta que só apareceu em
+                # dois meses tem média baixa no ano, e é isso que se quer saber
+                "media": acumulado // max(meses_ja_decorridos, 1),
                 "ano_anterior": anterior.get(categoria, 0),
             }
         )
@@ -263,22 +353,78 @@ def tabela_mes_a_mes(conn, ano: int, pessoa: str | None = None) -> dict:
     return {"meses": ordem_meses, "linhas": linhas, "ano": ano}
 
 
+def meses_com_despesa(conn) -> set[str]:
+    """Competências que já têm algum gasto lançado.
+
+    Serve para a tela abrir num mês que aconteceu. A planilha traz lançamento
+    agendado até dezembro, então o mês mais recente da base costuma ser um mês
+    vazio de despesa.
+    """
+    consulta = (
+        sa.select(db.transacoes.c.competencia)
+        .where(*_base(), db.transacoes.c.valor_centavos < 0)
+        .distinct()
+    )
+    return {linha.competencia for linha in conn.execute(consulta)}
+
+
 def comparativo_anual(conn, pessoa: str | None = None) -> list[dict]:
-    """Um registro por ano, para o quadro ano a ano."""
-    anos = [
-        int(linha.competencia[:4])
-        for linha in conn.execute(
-            sa.select(db.transacoes.c.competencia)
-            .where(db.transacoes.c.ativo == sa.true())
-            .distinct()
+    """Um registro por ano, para o quadro ano a ano.
+
+    Uma consulta para todos os anos. Chamar `resumo` num laço custava quatro
+    idas ao banco por ano — e o quadro existe justamente para quando houver
+    muitos anos.
+    """
+    ano_sql = sa.func.substr(db.transacoes.c.competencia, 1, 4).label("ano")
+    consulta = (
+        sa.select(
+            ano_sql,
+            db.categorias.c.natureza,
+            db.categorias.c.nome.label("categoria"),
+            db.transacoes.c.categoria_id,
+            db.transacoes.c.natureza.label("natureza_origem"),
+            db.subcategorias.c.nome.label("subcategoria"),
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
-    ]
-    saida = []
-    for ano in sorted(set(anos)):
-        dados = resumo(conn, ano=ano, pessoa=pessoa)
-        dados["ano"] = ano
-        saida.append(dados)
-    return saida
+        .select_from(
+            db.transacoes
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
+        )
+        .where(*_base(pessoa=pessoa))
+        .group_by(
+            ano_sql, db.categorias.c.natureza, db.categorias.c.nome,
+            db.transacoes.c.categoria_id, db.transacoes.c.natureza,
+            db.subcategorias.c.nome,
+        )
+    )
+    por_ano: dict[int, dict] = {}
+    for linha in conn.execute(consulta):
+        ano = int(linha.ano)
+        alvo = por_ano.setdefault(ano, {
+            "ano": ano, "receitas": 0, "despesas": 0, "poupanca": 0,
+            "nao_classificado": 0, "receitas_nao_recorrentes": 0,
+        })
+        total = int(linha.total or 0)
+        if linha.subcategoria in SUBCATEGORIAS_NAO_RECORRENTES:
+            alvo["receitas_nao_recorrentes"] += total
+        if linha.categoria_id is None:
+            alvo["nao_classificado"] += total
+            lado = linha.natureza_origem or ("receita" if total > 0 else "despesa")
+            alvo["receitas" if lado == "receita" else "despesas"] += (
+                total if lado == "receita" else -total
+            )
+        elif linha.categoria == CATEGORIA_POUPANCA:
+            alvo["poupanca"] += -total
+        elif linha.natureza == "receita":
+            alvo["receitas"] += total
+        else:
+            alvo["despesas"] += -total
+
+    for alvo in por_ano.values():
+        alvo["sobra"] = alvo["receitas"] - alvo["despesas"] - alvo["poupanca"]
+        alvo["renda_recorrente"] = alvo["receitas"] - alvo["receitas_nao_recorrentes"]
+    return [por_ano[ano] for ano in sorted(por_ano)]
 
 
 def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
@@ -386,14 +532,23 @@ def lancamentos(
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
 
 
-def orcamento(conn, competencia: str, metas: dict[int, float], renda_base: int | None = None) -> list[dict]:
-    """Realizado x meta por categoria de despesa (a meta e % da renda)."""
+def orcamento(
+    conn, competencia: str, metas: dict[int, float], renda_base: int | None = None,
+    resumo_do_mes: dict | None = None,
+) -> list[dict]:
+    """Realizado x meta por categoria de despesa (a meta e % da renda).
+
+    `resumo_do_mes` evita recalcular o que a tela ja tem em maos: sem ele, esta
+    funcao sozinha refazia o resumo duas vezes e respondia por nove das vinte e
+    sete consultas da Visao Geral.
+    """
+    do_mes = resumo_do_mes or resumo(conn, competencia=competencia)
     if renda_base is None:
-        renda_base = resumo(conn, competencia=competencia)["receitas"]
+        renda_base = do_mes["receitas"]
     gastos = {linha["categoria_id"]: linha for linha in por_categoria(conn, competencia=competencia)}
     poupanca_id = _id_poupanca(conn)
     if poupanca_id:
-        total_poupanca = resumo(conn, competencia=competencia)["poupanca"]
+        total_poupanca = do_mes["poupanca"]
         gastos.setdefault(
             poupanca_id,
             {"categoria_id": poupanca_id, "categoria": CATEGORIA_POUPANCA, "total": total_poupanca, "qtd": 0},

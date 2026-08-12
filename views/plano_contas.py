@@ -7,7 +7,7 @@ import streamlit as st
 from core import repo
 
 
-def _bloco(engine, categoria: dict) -> None:
+def _bloco(engine, categoria: dict, uso: dict) -> None:
     with st.container(border=True):
         titulo = categoria["nome"] if categoria["ativa"] else f"{categoria['nome']} (inativa)"
         st.markdown(f"**{titulo}**")
@@ -21,6 +21,11 @@ def _bloco(engine, categoria: dict) -> None:
             )
         else:
             st.caption("Sem subcategorias.")
+        if uso["lancamentos"]:
+            st.markdown(
+                f"<span class='nota'>{uso['lancamentos']} lançamento(s) classificado(s) "
+                "aqui</span>", unsafe_allow_html=True,
+            )
 
         with st.expander("Editar"):
             c1, c2 = st.columns([2, 1])
@@ -50,6 +55,51 @@ def _bloco(engine, categoria: dict) -> None:
                 else:
                     st.error("Digite o nome da subcategoria.")
 
+            if subs:
+                st.markdown("**Apagar subcategoria**")
+                alvo = st.selectbox(
+                    "Qual", subs, format_func=lambda s: s["nome"],
+                    key=f"delsubsel{categoria['id']}", label_visibility="collapsed",
+                )
+                if st.button("Apagar subcategoria", key=f"delsub{categoria['id']}"):
+                    if repo.excluir_subcategoria(engine, alvo["id"]):
+                        st.success(f"“{alvo['nome']}” apagada.")
+                        st.rerun()
+                    else:
+                        st.error(
+                            f"“{alvo['nome']}” tem lançamentos classificados nela. "
+                            "Reclassifique-os primeiro, na tela Classificação."
+                        )
+
+            st.divider()
+            # apagar de vez só quando nada depende dela: senão o total do mês
+            # mudaria sozinho e ninguém saberia por quê
+            if uso["pode_apagar"]:
+                st.markdown("**Apagar esta categoria**")
+                st.caption(
+                    "Nada depende dela — nenhum lançamento, regra ou tradução. "
+                    "Some junto com suas subcategorias."
+                )
+                if st.button("Apagar categoria", key=f"delcat{categoria['id']}",
+                             type="primary"):
+                    repo.excluir_categoria(engine, categoria["id"])
+                    st.session_state["msg_plano"] = f"Categoria “{categoria['nome']}” apagada."
+                    st.rerun()
+            else:
+                impedimentos = []
+                if uso["lancamentos"]:
+                    impedimentos.append(f"{uso['lancamentos']} lançamento(s)")
+                if uso["regras"]:
+                    impedimentos.append(f"{uso['regras']} regra(s)")
+                if uso["traducoes"]:
+                    impedimentos.append(f"{uso['traducoes']} tradução(ões) de rótulo")
+                st.caption(
+                    f"**Não dá para apagar:** {', '.join(impedimentos)} dependem desta "
+                    "categoria. Apagar deixaria esses lançamentos sem gaveta e mudaria o "
+                    "total do mês sem ninguém pedir. Para tirá-la do caminho, desmarque "
+                    "**Ativa** acima — ela some das listas e o histórico fica de pé."
+                )
+
 
 def render(engine, usuario: dict) -> None:
     st.caption(
@@ -57,9 +107,18 @@ def render(engine, usuario: dict) -> None:
         "Renomear uma categoria preserva o histórico já classificado nela."
     )
 
+    if st.session_state.pop("msg_plano", None):
+        st.success(st.session_state.get("msg_plano", "Salvo."), icon="🗂️")
+
     with engine.connect() as conn:
         receitas = repo.plano_de_contas(conn, natureza="receita")
         despesas = repo.plano_de_contas(conn, natureza="despesa")
+        # o uso de cada categoria numa passada só, para o bloco saber se pode
+        # oferecer o botão de apagar sem consultar o banco categoria a categoria
+        usos = {
+            c["id"]: repo.uso_da_categoria(conn, c["id"])
+            for c in (*receitas, *despesas)
+        }
 
     aba_desp, aba_rec = st.tabs(
         [f"Despesas ({len(despesas)})", f"Receitas ({len(receitas)})"]
@@ -69,7 +128,7 @@ def render(engine, usuario: dict) -> None:
         colunas = st.columns(2)
         for i, categoria in enumerate(despesas):
             with colunas[i % 2]:
-                _bloco(engine, categoria)
+                _bloco(engine, categoria, usos[categoria['id']])
         with st.expander("➕ Nova categoria de despesa"):
             nome = st.text_input("Nome", key="nova_desp")
             if st.button("Criar categoria de despesa"):
@@ -84,7 +143,7 @@ def render(engine, usuario: dict) -> None:
         colunas = st.columns(2)
         for i, categoria in enumerate(receitas):
             with colunas[i % 2]:
-                _bloco(engine, categoria)
+                _bloco(engine, categoria, usos[categoria['id']])
         with st.expander("➕ Nova categoria de receita"):
             nome = st.text_input("Nome", key="nova_rec")
             if st.button("Criar categoria de receita"):

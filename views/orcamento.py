@@ -50,6 +50,32 @@ def render(engine, usuario: dict) -> None:
         "meta, não como sobra — é o que garante que ela aconteça."
     )
 
+    # o histórico como ponto de partida: a casa já mostrou, mês a mês, quanto
+    # cada conta come. Não é a meta — é o retrato de onde se está, e é dele que
+    # se decide o que mudar. Um orçamento que começa em zero não é preenchido.
+    with engine.connect() as conn:
+        sugestao = repo.metas_pela_media(conn, ano, renda_base)
+    if sugestao:
+        c1, c2 = st.columns([3, 1.2])
+        total_sugerido = sum(sugestao.values())
+        c1.info(
+            f"**Sugestão a partir do que vocês gastam:** as médias de {ano} somam "
+            f"{total_sugerido:.0f}% da renda considerada. Use como ponto de partida e "
+            "ajuste o que quiser mudar — quem decide a meta são vocês, o histórico só "
+            "diz de onde se está saindo.",
+            icon="📊",
+        )
+        if c2.button("Preencher com as médias", width="stretch"):
+            for categoria_id, pct in sugestao.items():
+                st.session_state[f"meta{categoria_id}"] = float(pct)
+            st.session_state["msg_orcamento"] = (
+                f"{len(sugestao)} metas preenchidas com a média de {ano}. "
+                "Nada foi salvo ainda — revise e clique em salvar."
+            )
+            st.rerun()
+    if st.session_state.pop("msg_orcamento", None):
+        st.success(st.session_state.get("msg_orcamento", ""), icon="📊")
+
     with st.form("metas"):
         novos: dict[int, float] = {}
         cabecalho = st.columns([2.1, 0.9, 1.1, 1.9, 1.1])
@@ -75,8 +101,12 @@ def render(engine, usuario: dict) -> None:
             colunas[0].markdown(categoria["nome"])
             novos[categoria["id"]] = colunas[1].number_input(
                 categoria["nome"], min_value=0.0, max_value=100.0, step=0.5,
-                value=float(metas.get(categoria["id"], 0.0)),
+                value=float(st.session_state.get(
+                    f"meta{categoria['id']}", metas.get(categoria["id"], 0.0)
+                )),
                 key=f"meta{categoria['id']}", label_visibility="collapsed",
+                help=(f"A média de {ano} é {sugestao[categoria['id']]:.1f}%"
+                      if categoria["id"] in sugestao else None),
             )
             meta_valor = int(round(renda_base * novos[categoria["id"]] / 100))
             colunas[2].markdown(

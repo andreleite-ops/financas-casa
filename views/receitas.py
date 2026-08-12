@@ -11,6 +11,7 @@ from core import analytics, db, repo
 from core.money import fmt_brl, fmt_mil
 from ui import graficos
 from ui.tema import CORES_PESSOA, selo_pessoa
+from views import manual
 
 
 def _cartoes_por_pessoa(por_pessoa, total):
@@ -24,82 +25,6 @@ def _cartoes_por_pessoa(por_pessoa, total):
         )
 
 
-def _lancamento_manual(engine, usuario: dict, ano: int) -> None:
-    """Uma receita por mês, digitada — o caso dos atendimentos da Rô.
-
-    Ela recebe dos pacientes em dezenas de valores pequenos, e o extrato do
-    Itaú traria os depósitos sem dizer que são atendimentos. Lançar um por um
-    seria trabalho sem retorno: um total por mês responde a mesma pergunta.
-    """
-    with engine.connect() as conn:
-        plano = repo.plano_de_contas(conn, natureza="receita")
-        ja_lancadas = repo.receitas_manuais(conn, ano)
-
-    with st.expander("➕ Lançar receita manualmente", expanded=not ja_lancadas):
-        st.caption(
-            "Para o que chega picado e não vale a pena importar linha a linha — os "
-            "atendimentos da Rô, por exemplo. Um lançamento por mês, com o total."
-        )
-        with st.form("receita_manual", clear_on_submit=True):
-            c1, c2, c3 = st.columns([1, 1, 1.2])
-            meses = [f"{ano}-{m:02d}" for m in range(1, 13)]
-            competencia = c1.selectbox(
-                "Mês", meses, index=min(date.today().month, 12) - 1,
-                help="É este mês que manda no relatório.",
-            )
-            pessoa = c2.selectbox("De quem é", db.PESSOAS, index=1)
-            valor = c3.number_input("Valor (R$)", min_value=0.0, step=100.0, format="%.2f")
-
-            c4, c5 = st.columns([1.2, 1.8])
-            categoria = c4.selectbox(
-                "Categoria", plano, format_func=lambda c: c["nome"],
-                index=next((i for i, c in enumerate(plano) if c["nome"] == "Trabalho"), 0),
-            )
-            subs = categoria["subcategorias"] if categoria else []
-            subcategoria = c5.selectbox(
-                "Subcategoria", [None, *subs],
-                format_func=lambda s: "— nenhuma —" if s is None else s["nome"],
-            ) if subs else None
-            descricao = st.text_input(
-                "Descrição", value="ATENDIMENTOS",
-                help="O que é. Cai na descrição do lançamento, como num extrato.",
-            )
-
-            if st.form_submit_button("Lançar", type="primary"):
-                if valor <= 0:
-                    st.error("Informe um valor maior que zero.")
-                else:
-                    repo.lancar_receita_manual(
-                        engine,
-                        competencia=competencia,
-                        valor_centavos=int(round(valor * 100)),
-                        pessoa=pessoa,
-                        categoria_id=categoria["id"],
-                        subcategoria_id=subcategoria["id"] if subcategoria else None,
-                        descricao=descricao,
-                        usuario=usuario["nome"],
-                    )
-                    st.success(
-                        f"{fmt_brl(int(round(valor * 100)))} lançado em {competencia} "
-                        f"para {pessoa}."
-                    )
-                    st.rerun()
-
-        if ja_lancadas:
-            st.markdown(f"**Já lançado à mão em {ano}**")
-            for item in ja_lancadas:
-                linha, botao = st.columns([5, 1])
-                linha.markdown(
-                    f"{item['competencia']} &nbsp; {selo_pessoa(item['pessoa'])} &nbsp; "
-                    f"{item['descricao']} — **{fmt_brl(item['valor_centavos'])}** "
-                    f"<span class='nota'>({item['subcategoria'] or item['categoria'] or '—'})</span>",
-                    unsafe_allow_html=True,
-                )
-                if botao.button("Apagar", key=f"del_manual_{item['id']}"):
-                    repo.excluir_transacao(engine, item["id"])
-                    st.rerun()
-
-
 def render(engine, usuario: dict) -> None:
     with engine.connect() as conn:
         competencias = repo.competencias_disponiveis(conn)
@@ -109,7 +34,7 @@ def render(engine, usuario: dict) -> None:
             "aqui embaixo.",
             icon="📥",
         )
-        _lancamento_manual(engine, usuario, date.today().year)
+        manual.formulario(engine, usuario, date.today().year, "receita")
         return
 
     anos = sorted({int(c[:4]) for c in competencias}, reverse=True)
@@ -133,7 +58,7 @@ def render(engine, usuario: dict) -> None:
         itens = analytics.lancamentos(conn, **filtro, natureza="receita", limite=400)
 
     _cartoes_por_pessoa(por_pessoa, total)
-    _lancamento_manual(engine, usuario, ano)
+    manual.formulario(engine, usuario, ano, "receita")
 
     if not matriz["linhas"]:
         st.caption(

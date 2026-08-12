@@ -10,6 +10,7 @@ import streamlit as st
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
 from parsers import instituicoes, pdf, tabular
+from views import manual
 from parsers.base import ErroDeLeitura
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
@@ -674,6 +675,26 @@ def _aba_critica(engine, usuario: dict) -> None:
         )
 
 
+def _aba_manual(engine, usuario: dict) -> None:
+    """Despesa e receita que não passam por extrato nenhum.
+
+    Os euros comprados em espécie saem da conta como um saque e viram uma
+    viagem — o extrato não sabe disso, só quem gastou sabe.
+    """
+    st.caption(
+        "Nem todo dinheiro passa por extrato. Aqui entra o que só você sabe: gasto em "
+        "espécie, a sua parte de uma conta dividida, o recebimento que chega picado."
+    )
+    ano = date.today().year
+    manual.formulario(engine, usuario, ano, "despesa")
+    manual.formulario(engine, usuario, ano, "receita")
+    st.caption(
+        "O lançamento vai para uma conta própria, **Lançamento manual**, separada dos "
+        "bancos — assim a crítica planilha × extratos não cobra um comprovante que não "
+        "existe."
+    )
+
+
 def _aba_contas(engine) -> None:
     with engine.connect() as conn:
         contas = repo.listar_contas(conn)
@@ -768,6 +789,7 @@ def render(engine, usuario: dict) -> None:
         "🗓️ O que falta carregar",
         f"🔁 Duplicidades ({pendentes_dup})" if pendentes_dup else "🔁 Duplicidades",
         "🔍 Crítica planilha × extratos",
+        "✍️ Lançar à mão",
         "🏦 Contas e cartões",
         "🗂️ Histórico",
     ])
@@ -780,6 +802,8 @@ def render(engine, usuario: dict) -> None:
     with abas[3]:
         _aba_critica(engine, usuario)
     with abas[4]:
-        _aba_contas(engine)
+        _aba_manual(engine, usuario)
     with abas[5]:
+        _aba_contas(engine)
+    with abas[6]:
         _aba_historico(engine)

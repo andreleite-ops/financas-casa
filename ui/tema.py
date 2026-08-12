@@ -170,6 +170,38 @@ CSS = f"""
   .resumo .desce {{ color: {CRITICO}; }}
   .resumo .neutro {{ color: {CINZA}; font-weight: 500; }}
 
+  /* ==================== matriz categoria × mês ====================
+     Mapa de calor: o fundo de cada célula fica mais escuro quanto maior o
+     gasto daquele mês DENTRO da categoria. A comparação é dentro da linha, e
+     não entre linhas — a pergunta que ela responde é "em que mês esta conta
+     pesou", que é diferente de "qual conta é a maior". Renderizada em HTML e
+     não como dataframe: o dataframe rola por dentro e corta as últimas
+     categorias justo quando são elas que se quer ver. */
+  .matriz {{ width: 100%; border-collapse: collapse; background: {BRANCO};
+            font-variant-numeric: tabular-nums; font-size: .8rem; }}
+  .matriz thead th {{ background: {AREIA}; color: {VINHO_ESCURO}; font-weight: 700;
+       font-size: .66rem; text-transform: uppercase; letter-spacing: .05em;
+       padding: .5rem .4rem; text-align: right; white-space: nowrap;
+       border-bottom: 1px solid {LINHA}; }}
+  .matriz thead th.cat {{ text-align: left; padding-left: .8rem; }}
+  .matriz thead th.fecha {{ border-left: 2px solid {LINHA}; }}
+  .matriz td {{ padding: .38rem .4rem; text-align: right; color: {PRETO};
+       border-bottom: 1px solid {AREIA}; white-space: nowrap; }}
+  .matriz td.cat {{ text-align: left; font-weight: 600; font-size: .78rem;
+       padding-left: .8rem; max-width: 190px; overflow: hidden;
+       text-overflow: ellipsis; }}
+  .matriz td.fecha {{ border-left: 2px solid {LINHA}; background: {AREIA_CLARA};
+       font-weight: 600; }}
+  .matriz td.zero {{ color: #C9C2B6; }}
+  /* o mês mais pesado da categoria ganha contorno, não outra cor: numa rampa
+     de um matiz só, cor é intensidade e mais nada */
+  .matriz td.pico {{ outline: 1.5px solid {VINHO}; outline-offset: -1.5px;
+       border-radius: 3px; font-weight: 700; }}
+  .matriz tr.total td {{ border-top: 2px solid {VINHO_CLARO}; border-bottom: none;
+       background: {AREIA} !important; font-weight: 700; font-size: .85rem;
+       color: {PRETO} !important; }}
+  .matriz tbody tr:hover td {{ background: #FBF7F0; }}
+
   .pill {{ display: inline-block; font-size: .7rem; font-weight: 600; padding: .1rem .5rem;
           border-radius: 3px; color: {BRANCO}; letter-spacing: .02em; }}
   .p-andre {{ background: {VINHO_ESCURO}; }}

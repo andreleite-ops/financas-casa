@@ -7,7 +7,7 @@ from datetime import date
 
 import sqlalchemy as sa
 
-from . import ai, classify, db, dedup
+from . import ai, analytics, classify, db, dedup
 from .texto import normalizar, pessoa_na_descricao
 
 PESSOA_PADRAO = "Casal"
@@ -514,27 +514,36 @@ def conta_manual(engine) -> int:
         ).inserted_primary_key[0]
 
 
-def lancar_receita_manual(
+def lancar_manual(
     engine, *, competencia: str, valor_centavos: int, pessoa: str,
     categoria_id: int, subcategoria_id: int | None, descricao: str, usuario: str,
-    conta_id: int | None = None, dia: int = 28,
+    natureza: str = "receita", conta_id: int | None = None, dia: int = 28,
 ) -> int:
-    """Grava uma receita digitada a mao e devolve o id.
+    """Grava um lançamento digitado à mão e devolve o id.
 
-    A Rô recebe dos pacientes em dezenas de valores pequenos; lancar um por um
-    seria trabalho sem retorno, e o extrato do Itaú traria os depositos sem
-    dizer que sao atendimentos. Um total por mes responde a mesma pergunta com
-    uma linha. O dia 28 e so um lugar no calendario: quem manda no relatorio e
-    a competencia.
+    Duas necessidades, o mesmo caminho. A Rô recebe dos pacientes em dezenas de
+    valores pequenos, e um total por mês responde a mesma pergunta com uma
+    linha. E há despesa que não passa por extrato nenhum: os euros comprados em
+    espécie saem da conta como um saque e viram uma viagem, e só quem gastou
+    sabe disso.
+
+    O valor entra sempre positivo e o sinal sai da natureza — quem digita pensa
+    em "gastei 500", não em "menos quinhentos". O dia 28 é só um lugar no
+    calendário: quem manda no relatório é a competência.
     """
+    if natureza not in ("receita", "despesa"):
+        raise ValueError("natureza precisa ser receita ou despesa")
     if valor_centavos <= 0:
-        raise ValueError("receita precisa de valor positivo")
+        raise ValueError("informe um valor maior que zero")
     ano, mes = int(competencia[:4]), int(competencia[5:7])
     ultimo = calendar.monthrange(ano, mes)[1]
     data = date(ano, mes, min(dia, ultimo))
-    descricao = " ".join(str(descricao).split()) or "RECEITA MANUAL"
+    descricao = " ".join(str(descricao).split()) or (
+        "RECEITA MANUAL" if natureza == "receita" else "DESPESA MANUAL"
+    )
     descricao_norm = normalizar(descricao)
     conta = conta_id or conta_manual(engine)
+    assinado = valor_centavos if natureza == "receita" else -valor_centavos
 
     with engine.begin() as conn:
         return conn.execute(
@@ -543,7 +552,7 @@ def lancar_receita_manual(
                 competencia=competencia,
                 descricao=descricao,
                 descricao_norm=descricao_norm,
-                valor_centavos=valor_centavos,
+                valor_centavos=assinado,
                 conta_id=conta,
                 categoria_id=categoria_id,
                 subcategoria_id=subcategoria_id,
@@ -551,16 +560,31 @@ def lancar_receita_manual(
                 status="manual",
                 confianca=1.0,
                 origem="manual",
-                natureza="receita",
-                hash_dedup=dedup.hash_lancamento(conta, data, valor_centavos, descricao_norm),
+                natureza=natureza,
+                hash_dedup=dedup.hash_lancamento(conta, data, assinado, descricao_norm),
                 ativo=True,
                 classificado_por=usuario,
             )
         ).inserted_primary_key[0]
 
 
-def receitas_manuais(conn, ano: int) -> list[dict]:
-    """O que ja foi digitado a mao no ano, para a tela poder editar e apagar."""
+def lancar_receita_manual(engine, **kw) -> int:
+    """Atalho histórico; o caminho é o mesmo de lancar_manual."""
+    return lancar_manual(engine, natureza="receita", **kw)
+
+
+def lancamentos_manuais(conn, ano: int, natureza: str | None = None) -> list[dict]:
+    """O que já foi digitado à mão no ano, para a tela poder revisar e apagar."""
+    condicoes = [
+        db.transacoes.c.origem == "manual",
+        db.transacoes.c.competencia.like(f"{ano}-%"),
+        db.transacoes.c.ativo == sa.true(),
+    ]
+    if natureza:
+        condicoes.append(
+            db.transacoes.c.valor_centavos > 0 if natureza == "receita"
+            else db.transacoes.c.valor_centavos < 0
+        )
     consulta = (
         sa.select(
             db.transacoes.c.id,
@@ -575,14 +599,15 @@ def receitas_manuais(conn, ano: int) -> list[dict]:
             db.transacoes.outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
             .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
-        .where(
-            db.transacoes.c.origem == "manual",
-            db.transacoes.c.valor_centavos > 0,
-            db.transacoes.c.competencia.like(f"{ano}-%"),
-        )
+        .where(*condicoes)
         .order_by(db.transacoes.c.competencia.desc(), db.transacoes.c.id.desc())
     )
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def receitas_manuais(conn, ano: int) -> list[dict]:
+    """Atalho histórico: só as receitas digitadas à mão."""
+    return lancamentos_manuais(conn, ano, natureza="receita")
 
 
 def _dono_declarado(conn) -> dict[str, list[int]]:
@@ -995,6 +1020,84 @@ def salvar_categoria(engine, *, categoria_id=None, nome, natureza, ativa=True):
                 nome=nome.strip(), natureza=natureza, ordem=ordem, ativa=ativa
             )
         ).inserted_primary_key[0]
+
+
+def metas_pela_media(conn, ano: int, renda_base: int) -> dict[int, float]:
+    """Percentual que cada categoria vem gastando de fato, como ponto de partida.
+
+    A pergunta do André: por que digitar percentual no chute se a casa já
+    mostrou, mês a mês, quanto cada conta come? O histórico não é a meta — é o
+    retrato de onde se está, e é dele que se decide o que mudar. Um orçamento
+    que começa em zero e pede treze palpites não é preenchido.
+    """
+    if not renda_base:
+        return {}
+    meses = analytics.meses_decorridos(ano)
+    gastos = analytics.por_categoria(conn, ano=ano)
+    return {
+        linha["categoria_id"]: round(linha["total"] / meses / renda_base * 100, 1)
+        for linha in gastos
+        if linha["total"]
+    }
+
+
+def uso_da_categoria(conn, categoria_id: int) -> dict:
+    """O que depende desta categoria, antes de deixar alguém apagá-la.
+
+    Apagar categoria em uso deixaria lançamentos órfãos e o total do mês
+    mudaria sem ninguém pedir. Melhor dizer quantos são e oferecer desativar,
+    que tira do caminho sem tocar em nada.
+    """
+    def quantos(tabela, coluna):
+        return int(conn.execute(
+            sa.select(sa.func.count()).select_from(tabela).where(coluna == categoria_id)
+        ).scalar() or 0)
+
+    lancamentos = quantos(db.transacoes, db.transacoes.c.categoria_id)
+    regras_ = quantos(db.regras, db.regras.c.categoria_id)
+    traducoes = quantos(db.de_para, db.de_para.c.categoria_id)
+    return {
+        "lancamentos": lancamentos,
+        "regras": regras_,
+        "traducoes": traducoes,
+        "subcategorias": quantos(db.subcategorias, db.subcategorias.c.categoria_id),
+        "pode_apagar": not (lancamentos or regras_ or traducoes),
+    }
+
+
+def excluir_categoria(engine, categoria_id: int) -> bool:
+    """Apaga a categoria e suas subcategorias. Recusa se algo depender dela.
+
+    A recusa não é burocracia: sem ela, um clique apagaria a gaveta de dezenas
+    de lançamentos e o relatório mudaria sozinho. Categoria com uso se desativa,
+    não se apaga.
+    """
+    with engine.begin() as conn:
+        if not uso_da_categoria(conn, categoria_id)["pode_apagar"]:
+            return False
+        conn.execute(
+            sa.delete(db.subcategorias).where(db.subcategorias.c.categoria_id == categoria_id)
+        )
+        conn.execute(sa.delete(db.metas).where(db.metas.c.categoria_id == categoria_id))
+        conn.execute(sa.delete(db.categorias).where(db.categorias.c.id == categoria_id))
+    return True
+
+
+def excluir_subcategoria(engine, subcategoria_id: int) -> bool:
+    """Mesma regra, um nível abaixo: recusa se houver lançamento nela."""
+    with engine.begin() as conn:
+        em_uso = conn.execute(
+            sa.select(sa.func.count()).select_from(db.transacoes)
+            .where(db.transacoes.c.subcategoria_id == subcategoria_id)
+        ).scalar()
+        if em_uso:
+            return False
+        for tabela, coluna in ((db.regras, db.regras.c.subcategoria_id),
+                               (db.de_para, db.de_para.c.subcategoria_id)):
+            conn.execute(sa.update(tabela).where(coluna == subcategoria_id)
+                         .values(subcategoria_id=None))
+        conn.execute(sa.delete(db.subcategorias).where(db.subcategorias.c.id == subcategoria_id))
+    return True
 
 
 def cobertura(conn, competencias: list[str]) -> dict[tuple[int, str], dict]:
