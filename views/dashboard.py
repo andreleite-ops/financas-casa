@@ -186,7 +186,11 @@ def _matriz_mes_a_mes(matriz: dict, ano: int) -> str:
         "<tr class='total'><td class='cat'>TOTAL</td>"
         + "".join(f"<td>{fmt_mil(v) if v else '—'}</td>" for v in total_mes)
         + f"<td class='fecha'>{fmt_mil(acumulado)}</td>"
-        + f"<td>{fmt_mil(acumulado // max(len(meses), 1))}</td>"
+        # pelos meses decorridos, como nas linhas de cima. Dividir pelo número
+        # de colunas contava setembro e outubro, que só aparecem na tabela por
+        # causa de um agendamento de R$ 200 — e a média do TOTAL saía menor que
+        # a soma das médias das categorias, o que é impossível
+        + f"<td>{fmt_mil(acumulado // max(analytics.meses_decorridos(ano), 1))}</td>"
         + f"<td>{fmt_mil(sum(l['ano_anterior'] for l in linhas)) or '—'}</td></tr>"
     )
     return (

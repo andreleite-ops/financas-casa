@@ -193,3 +193,58 @@ def test_abertura_por_subcategoria_mostra_o_que_falta_detalhar(engine):
     assert {l["categoria"] for l in aberto["linhas"]} == {
         "Fora do Domicílio", "— sem subcategoria —"
     }
+
+
+def test_media_do_total_bate_com_a_soma_das_medias_das_categorias(engine, monkeypatch):
+    """O André pegou isto olhando: 823 no ano dava 82 de média, não 103.
+
+    A linha TOTAL dividia pelo número de colunas de mês, e havia colunas de
+    setembro e outubro só porque um agendamento de R$ 200 caiu lá. A média do
+    TOTAL saía menor que a soma das médias das categorias — o que é impossível,
+    e é justamente essa impossibilidade que este teste vigia.
+    """
+    import core.analytics as a
+    from views import dashboard
+
+    class Agosto(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 8, 10)
+
+    monkeypatch.setattr(a, "date", Agosto)
+
+    alimentacao, _ = _categoria(engine, "Alimentação")
+    transporte, _ = _categoria(engine, "Transporte")
+    # oito meses de gasto de verdade...
+    for mes in range(1, 9):
+        repo.lancar_manual(
+            engine, competencia=f"2026-{mes:02d}", valor_centavos=800_000, pessoa="Casal",
+            categoria_id=alimentacao, subcategoria_id=None, descricao="MERCADO",
+            usuario="Rô", natureza="despesa",
+        )
+    # ...e um agendamento solitário em outubro, que cria uma coluna a mais
+    repo.lancar_manual(
+        engine, competencia="2026-10", valor_centavos=20_000, pessoa="Casal",
+        categoria_id=transporte, subcategoria_id=None, descricao="PEDAGIO",
+        usuario="Rô", natureza="despesa",
+    )
+
+    with engine.connect() as conn:
+        matriz = a.tabela_mes_a_mes(conn, 2026)
+
+    assert len(matriz["meses"]) == 9        # nove colunas...
+    assert a.meses_decorridos(2026) == 8    # ...mas oito meses decorridos
+
+    soma_das_medias = sum(linha["media"] for linha in matriz["linhas"])
+    acumulado = sum(linha["acumulado"] for linha in matriz["linhas"])
+    media_do_total = acumulado // a.meses_decorridos(2026)
+    # a diferença só pode vir do arredondamento de cada linha, nunca de um
+    # divisor diferente
+    assert abs(media_do_total - soma_das_medias) < len(matriz["linhas"])
+
+    html = dashboard._matriz_mes_a_mes(matriz, 2026)
+    linha_total = html[html.index(">TOTAL<"):]
+    # 64.200,00 acumulados; em 8 meses dá 8.025,00, em 9 daria 7.133,33
+    assert ">64,2<" in linha_total     # o acumulado, para garantir que é a linha certa
+    assert ">8,0<" in linha_total      # a média pelos meses decorridos
+    assert ">7,1<" not in linha_total  # e não pelo número de colunas
