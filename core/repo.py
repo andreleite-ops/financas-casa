@@ -121,10 +121,15 @@ def _pessoa_valida(valor: str | None, padrao: str) -> str:
     for pessoa in db.PESSOAS:
         if limpo == pessoa.casefold() or limpo.startswith(pessoa.casefold()[:3]):
             return pessoa
-    if limpo in ("andre", "andré", "a"):
+    # o nome como o cartao imprime: "ANDRE L R T LEITE", "ROSANGELA LEITE".
+    # Comparar so o comeco resolve, e e o unico jeito de a coluna de portador
+    # da fatura virar a pessoa certa sem uma tabela de nomes completos.
+    if limpo.startswith(("andre", "andré")):
         return "André"
-    if limpo in ("ro", "rô", "rosana", "r"):
+    if limpo.startswith(("ro", "rô", "rosangela", "rosana")):
         return "Rô"
+    if limpo.startswith(("casal", "nos", "nós", "ambos")):
+        return "Casal"
     return padrao
 
 

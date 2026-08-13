@@ -37,7 +37,10 @@ SINONIMOS = {
     "categoria": ["categoria", "classificacao", "grupo", "tipo de gasto", "category", "conta"],
     "subcategoria": ["subcategoria", "sub categoria", "sub-categoria", "detalhamento",
                      "subgrupo", "subclassificacao"],
-    "pessoa": ["pessoa", "responsavel", "quem", "titular", "de quem", "usuario"],
+    # "portador" e o nome que a fatura de cartao usa para dizer de quem foi a
+    # compra — e num cartao adicional isso muda linha a linha
+    "pessoa": ["pessoa", "responsavel", "quem", "titular", "de quem", "usuario",
+               "portador", "nome do portador"],
     "tipo": ["tipo", "natureza", "d/c", "tipo lancamento", "operacao", "tipo de lancamento"],
     # mes de referencia, quando a planilha traz um separado da data do
     # lancamento — o INSS pago em 10/02 pode ser competencia de janeiro
@@ -221,7 +224,14 @@ def _ler_csv(conteudo: bytes) -> pd.DataFrame:
         sep = csv.Sniffer().sniff(amostra, delimiters=",;\t|").delimiter
     except csv.Error:
         sep = ";" if amostra.count(";") > amostra.count(",") else ","
-    return pd.read_csv(io.StringIO(texto), sep=sep, dtype=str, keep_default_na=False)
+    # extrato de banco costuma trazer rodapé com mais colunas que o cabeçalho —
+    # o do Bradesco termina numa linha de total com um ponto e vírgula a mais, e
+    # o leitor estrito abortava o arquivo inteiro por causa dela. A linha torta
+    # é descartada; as boas continuam valendo.
+    return pd.read_csv(
+        io.StringIO(texto), sep=sep, dtype=str, keep_default_na=False,
+        engine="python", on_bad_lines="skip",
+    )
 
 
 def _achar_cabecalho(df: pd.DataFrame) -> pd.DataFrame:

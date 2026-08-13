@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .base import Lancamento, ajustar_ano_fatura
 from . import pdf as leitor_pdf
-from . import tabular
+from . import extrato_itau as leitor_itau, tabular
 
 # Nubank exporta CSV com colunas fixas: date, title, amount (fatura) ou
 # Data, Valor, Identificador, Descricao (conta). Valor da fatura vem positivo.
@@ -26,7 +26,19 @@ def _ler_tabular_ou_pdf(conteudo: bytes, nome: str, *, tudo_despesa: bool, **kw)
     if _e_planilha(nome):
         # senha só existe para PDF; passar adiante quebraria o leitor tabular
         kw.pop("senha", None)
-        return tabular.ler(conteudo, nome, **kw)
+        df = tabular.carregar_tabela(conteudo, nome)
+        mapa = kw.pop("mapa", None) or tabular.sugerir_mapeamento(df.columns, df)
+        # fatura de cartão exporta tudo positivo: o valor é o que se gastou, e
+        # quem vem negativo é estorno ou o pagamento da própria fatura. Sem
+        # inverter, um mês inteiro de compras entrava como receita. Só que a
+        # inversão vale apenas quando o arquivo não diz o sinal por conta
+        # própria — havendo coluna de tipo (D/C) ou colunas separadas de
+        # entrada e saída, quem manda é o arquivo.
+        arquivo_diz_o_sinal = bool(
+            mapa.get("tipo") or mapa.get("entrada") or mapa.get("saida")
+        )
+        kw.setdefault("inverter_sinal", tudo_despesa and not arquivo_diz_o_sinal)
+        return tabular.extrair(df, mapa, **kw)[0]
     kw.pop("inverter_sinal", None)
     return leitor_pdf.ler(conteudo, nome, tudo_despesa=tudo_despesa, **kw)
 
@@ -61,8 +73,16 @@ def bradesco(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
 
 
 def itau(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
-    """Extrato de conta corrente Itau (inclui a Conjunta). CALIBRAR."""
-    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=False, **kw)
+    """Extrato de conta corrente Itaú, incluindo a Conjunta.
+
+    O PDF do Itaú tem leitor próprio: a data só aparece na primeira linha de
+    cada dia, o sinal é um traço no fim do número e há saldo corrido na mesma
+    linha do valor. O leitor genérico não daria conta de nenhuma das três.
+    """
+    if _e_planilha(nome):
+        return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=False, **kw)
+    kw.pop("inverter_sinal", None)
+    return leitor_itau.ler(conteudo, nome, **kw)
 
 
 def generico(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:

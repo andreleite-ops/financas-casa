@@ -1,0 +1,61 @@
+extrato mensal ag 0000 cc 00000-0 jul 2026 001|006
+TITULAR DA CONTA
+jul 2026 Minha conta00000-0Minha agência0000
+saldo em 29/06/26 saldo em 31/07/26
+01. Conta Corrente e Aplicações Automáticas
+R$ 491,76 R$ 1.439,31-
+entradas (créditos)
+Transferências, DOCs e TEDs 100% 2.900,00
+Outras entradas 0% 0,01
+total 2.900,01
+saídas (débitos)
+Transferências, DOCs e TEDs 34% 1.620,00
+Débitos automáticos efetuados 64% 3.096,92
+Outras saídas 2% 114,16
+total 4.831,08
+totalentradas totalsaídas
+(créditos) (débitos)
+R$ 2.900,01 R$ 4.831,08
+Conta Corrente|Movimentação
+A =agendamento data descrição entradas R$ saídas R$ saldo R$
+B = ações movimentadas (créditos) (débitos)
+pelaBolsa de Valores 29/06 Saldo anterior 491,76
+C = crédito a compensar
+D = débito a compensar
+01/07 DA ELETROPAULO 23049790 171,72-
+G = aplicação programada
+Res Aplic Aut Mais 171,72 1,00
+P = poupança automática SALDO APLIC AUT MAIS 319,04
+02/07 IOF 12,53-
+Res Aplic Aut Mais 12,53 1,00
+SALDO APLIC AUT MAIS 306,51
+03/07 SALDO APLIC AUT MAIS 306,51
+06/07 PIX TRANSF MONALIS06/07 670,00-
+PIX TRANSF APARECI06/07 500,00
+PIX TRANSF GABRIEL06/07 300,00
+DA CLARO BL/IT 31408941 324,80-
+DA CLARO BL/IT 58499845 373,93-
+Este material está disponível na Internet 006665 B001A 06/08/2026
+extrato mensal ag 0000 cc 00000-0 jul 2026 002|006
+data descrição entradas R$ saídas R$ saldo R$
+(créditos) (débitos)
+Res Aplic Aut Mais 306,51
+Rend Pago Aplic Aut Mais 0,01 261,21-
+10/07 PIX TRANSF TATIANA10/07 500,00
+JUROS LIMITE DA CONTA 85,53-
+DA PMSP 541120000000900 1.006,86- 853,60-
+15/07 DA PMSP 341220000000962 242,01-
+TAR PACOTE ITAU JUN/26 16,10- 1.111,71-
+16/07 PIX TRANSF ELOYZA 16/07 280,00-
+PIX TRANSF CAMILA 16/07 840,00 551,71-
+21/07 PIX TRANSF MONALIS21/07 670,00- 1.221,71-
+22/07 DA COMGAS 23705094 334,01- 1.555,72-
+27/07 DA VIVO-SP 11252675938 430,00-
+Déb Autor ASS. ESTADAO 55,90- 2.041,62-
+29/07 DA ELETROPAULO 68534386 114,03- 2.155,65-
+30/07 PIX TRANSF Natalia30/07 760,00 1.395,65-
+31/07 DA ELETROPAULO 23049790 43,66- 1.439,31-
+Saldo em C/C 1.439,31-
+Saldo final 1.439,31-
+totalizador de aplicações automáticas entrada R$ saída R$
+na conta corrente (1) 490,76 0,00
