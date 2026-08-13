@@ -1319,7 +1319,7 @@ def _hash_do_contexto(contexto: str) -> str:
 
 def salvar_analise(
     engine, *, competencia: str, texto: str, modelo: str, contexto: str,
-    usuario: str, pergunta: str | None = None,
+    usuario: str, pergunta: str | None = None, tipo: str = "mes",
 ) -> int:
     """Guarda a analise no banco, e nao so na sessao.
 
@@ -1336,16 +1336,26 @@ def salvar_analise(
                 modelo=modelo,
                 contexto_hash=_hash_do_contexto(contexto),
                 pergunta=pergunta,
+                tipo=tipo,
                 gerada_por=usuario,
             )
         ).inserted_primary_key[0]
 
 
-def ultima_analise(conn, competencia: str, contexto: str | None = None) -> dict | None:
-    """A analise mais recente do mes, com aviso quando os numeros ja mudaram."""
+def ultima_analise(
+    conn, competencia: str, contexto: str | None = None, tipo: str = "mes",
+) -> dict | None:
+    """A analise mais recente do periodo, com aviso quando os numeros mudaram."""
     linha = conn.execute(
         sa.select(db.analises)
-        .where(db.analises.c.competencia == competencia, db.analises.c.pergunta.is_(None))
+        .where(
+            db.analises.c.competencia == competencia,
+            db.analises.c.pergunta.is_(None),
+            # base antiga nao tem a coluna preenchida: o que veio antes do ano
+            # existir e analise de mes
+            sa.or_(db.analises.c.tipo == tipo, db.analises.c.tipo.is_(None))
+            if tipo == "mes" else db.analises.c.tipo == tipo,
+        )
         .order_by(db.analises.c.id.desc())
         .limit(1)
     ).fetchone()

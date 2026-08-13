@@ -703,6 +703,167 @@ def desvios_do_mes(conn, competencia: str, minimo_de_meses: int = 2) -> list[dic
     return saida
 
 
+def janela_de_doze_meses(conn, ate: str) -> list[str]:
+    """As competências da janela de análise longa, terminando em `ate`.
+
+    Enquanto houver menos de doze meses de histórico, a janela é o que existe —
+    e o texto tem de dizer isso. Passando de doze, ela anda: dezembro deixa de
+    ser um corte natural, e comparar agosto com agosto passa a valer mais do
+    que comparar agosto com janeiro.
+    """
+    todas = sorted(
+        linha.competencia
+        for linha in conn.execute(
+            sa.select(db.transacoes.c.competencia)
+            .where(db.transacoes.c.ativo == sa.true(), db.transacoes.c.competencia.isnot(None))
+            .distinct()
+        )
+    )
+    ate_ou_ultima = [c for c in todas if c <= ate]
+    return ate_ou_ultima[-12:]
+
+
+def resumo_do_ano(conn, competencia: str) -> dict:
+    """O ano até aqui: acumulado, média mensal e a posição deste mês.
+
+    A média usa a régua da casa — acumulado ÷ meses decorridos —, não a média
+    dos meses que tiveram gasto. Uma conta que só apareceu em dois meses tem de
+    puxar a média do ano para baixo, porque é isso que sobra para o orçamento.
+    """
+    ano = int(competencia[:4])
+    meses = serie_mensal(conn, ano)
+    decorridos = meses_decorridos(ano)
+    receitas = sum(m["receitas"] for m in meses)
+    despesas = sum(m["despesas"] for m in meses)
+    poupanca = sum(m["poupanca"] for m in meses)
+
+    por_despesa = sorted(meses, key=lambda m: -m["despesas"])
+    posicao = next(
+        (i + 1 for i, m in enumerate(por_despesa) if m["competencia"] == competencia), None
+    )
+    do_mes = next((m for m in meses if m["competencia"] == competencia), None)
+    return {
+        "ano": ano,
+        "meses_com_dados": len(meses),
+        "meses_decorridos": decorridos,
+        "receitas": receitas,
+        "despesas": despesas,
+        "poupanca": poupanca,
+        "media_despesa": despesas // max(decorridos, 1),
+        "media_receita": receitas // max(decorridos, 1),
+        "taxa_de_poupanca": round(100 * poupanca / receitas, 1) if receitas else 0.0,
+        "posicao_do_mes": posicao,
+        "despesa_do_mes": do_mes["despesas"] if do_mes else 0,
+    }
+
+
+def contexto_do_ano(conn, ate: str) -> str:
+    """Os números da leitura longa: padrão, sazonalidade e o que é fixo.
+
+    O mês responde "para onde foi o dinheiro". Só a série responde "isto
+    acontece todo ano nesta época" — e é essa a diferença entre reagir ao mês e
+    planejar o ano.
+    """
+    from .money import fmt_brl
+
+    competencias = janela_de_doze_meses(conn, ate)
+    if not competencias:
+        return f"Sem lançamentos até {ate}."
+
+    ano = int(ate[:4])
+    resumo_ano = resumo_do_ano(conn, ate)
+    fechada = len(competencias) >= 12
+
+    linhas = [
+        f"Janela: {competencias[0]} a {competencias[-1]} "
+        f"({len(competencias)} {'meses' if len(competencias) > 1 else 'mês'} com lançamento)",
+    ]
+    if not fechada:
+        linhas.append(
+            "ATENÇÃO: menos de doze meses de histórico. Dá para descrever o que houve; "
+            "NÃO dá para afirmar sazonalidade — para isso é preciso ver o mesmo mês "
+            "repetir em anos diferentes. Diga isso ao falar de padrão anual."
+        )
+
+    linhas += [
+        "",
+        "Acumulado do ano:",
+        f"- receitas {fmt_brl(resumo_ano['receitas'])}, "
+        f"despesas {fmt_brl(resumo_ano['despesas'])}, "
+        f"poupança {fmt_brl(resumo_ano['poupanca'])}",
+        f"- média mensal (acumulado ÷ {resumo_ano['meses_decorridos']} meses decorridos): "
+        f"receitas {fmt_brl(resumo_ano['media_receita'])}, "
+        f"despesas {fmt_brl(resumo_ano['media_despesa'])}",
+        f"- taxa de poupança sobre a receita do ano: {resumo_ano['taxa_de_poupanca']:.1f}%",
+        "",
+        "Mês a mês:",
+    ]
+    for mes in serie_mensal(conn, ano):
+        if mes["competencia"] not in competencias:
+            continue
+        linhas.append(
+            f"- {mes['competencia']}: receitas {fmt_brl(mes['receitas'])}, "
+            f"despesas {fmt_brl(mes['despesas'])}, poupança {fmt_brl(mes['poupanca'])}"
+        )
+
+    tabela = tabela_mes_a_mes(conn, ano)
+    if tabela["linhas"]:
+        linhas += [
+            "",
+            "Gasto por categoria, mês a mês (é aqui que a sazonalidade aparece — "
+            "meses vazios significam que não houve gasto naquele mês):",
+        ]
+        cabecalho = " | ".join(tabela["meses"])
+        linhas.append(f"  categoria: {cabecalho} | média/mês | pico")
+        for linha in tabela["linhas"][:14]:
+            if linha["categoria"] == CATEGORIA_TRANSFERENCIA:
+                continue
+            valores = [linha["meses"].get(mes, 0) for mes in tabela["meses"]]
+            pico = max(zip(valores, tabela["meses"]), default=(0, "—"))
+            linhas.append(
+                f"  {linha['categoria']}: "
+                + " | ".join(fmt_brl(v) for v in valores)
+                + f" | {fmt_brl(linha['media'])} | maior em {pico[1]}"
+            )
+
+    fixos = compromissos_recorrentes(conn, ate)
+    if fixos:
+        total_fixo = sum(item["media"] for item in fixos)
+        linhas += [
+            "",
+            f"Compromissos que se repetem (3 meses ou mais): {fmt_brl(total_fixo)} por mês "
+            "somados — é o piso do orçamento, o que não muda decidindo mês a mês:",
+        ]
+        for item in fixos[:15]:
+            linhas.append(
+                f"- {item['estabelecimento']}: {fmt_brl(item['media'])}/mês em "
+                f"{item['meses']} meses"
+            )
+
+    anterior = [item for item in comparativo_anual(conn) if item.get("ano") == ano - 1]
+    if anterior:
+        linhas += ["", "Ano anterior, para comparar:"]
+        for item in anterior:
+            linhas.append(
+                f"- {item['ano']}: receitas {fmt_brl(item.get('receitas', 0))}, "
+                f"despesas {fmt_brl(item.get('despesas', 0))}"
+            )
+
+    faltando = [
+        competencia for competencia in competencias
+        if cobertura_da_classificacao(conn, competencia)["percentual_classificado"] < 95
+    ]
+    if faltando:
+        linhas += [
+            "",
+            "COBERTURA: estes meses ainda não estão classificados por inteiro — "
+            + ", ".join(faltando)
+            + ". Os totais deles são parciais e as comparações com os outros meses "
+            "ficam prejudicadas. Diga isso antes de apontar tendência.",
+        ]
+    return "\n".join(linhas)
+
+
 def contexto_para_ia(conn, competencia: str) -> str:
     """Resumo numerico que alimenta a analise escrita.
 
@@ -823,6 +984,25 @@ def contexto_para_ia(conn, competencia: str) -> str:
                 f"- {item['estabelecimento']}: {fmt_brl(item['media'])}/mês, "
                 f"visto em {item['meses']} meses"
             )
+
+    # o mês sozinho não diz se foi um mês caro: diz quanto se gastou. Sem o
+    # acumulado e a média ao lado, "gastamos 126 mil" não tem régua nenhuma.
+    do_ano = resumo_do_ano(conn, competencia)
+    linhas += [
+        "",
+        f"O ano até aqui ({do_ano['ano']}, {do_ano['meses_com_dados']} meses com lançamento):",
+        f"- acumulado: receitas {fmt_brl(do_ano['receitas'])}, "
+        f"despesas {fmt_brl(do_ano['despesas'])}, poupança {fmt_brl(do_ano['poupanca'])}",
+        f"- média mensal (acumulado ÷ {do_ano['meses_decorridos']} meses decorridos): "
+        f"{fmt_brl(do_ano['media_despesa'])} de despesa, "
+        f"{fmt_brl(do_ano['media_receita'])} de receita",
+        f"- taxa de poupança no ano: {do_ano['taxa_de_poupanca']:.1f}% da receita",
+    ]
+    if do_ano["posicao_do_mes"]:
+        linhas.append(
+            f"- este mês é o {do_ano['posicao_do_mes']}º mais caro entre os "
+            f"{do_ano['meses_com_dados']} meses com lançamento"
+        )
     return "\n".join(linhas)
 
 

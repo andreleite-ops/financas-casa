@@ -399,3 +399,105 @@ def test_diagnostico_mostra_o_formato_da_chave_e_nunca_a_chave(monkeypatch):
     assert dados["tem_chave"] is True
     assert "chave-secreta" not in dados["formato_da_chave"]
     assert "sk-ant-" in dados["formato_da_chave"]
+
+
+# ---------------------------------------------------------------------------
+# a leitura longa: padrão e sazonalidade
+# ---------------------------------------------------------------------------
+def test_o_mes_fecha_situando_se_no_ano(engine, conn):
+    """"Gastamos 126 mil" não diz nada sem a média ao lado."""
+    alimentacao = _categoria_id(conn, "Alimentação")
+    for mes in (1, 2, 3):
+        _inserir(conn, date(2026, mes, 10), "SUPERMERCADO", -100_000, alimentacao)
+    _inserir(conn, date(2026, 4, 10), "SUPERMERCADO", -300_000, alimentacao)
+
+    texto = analytics.contexto_para_ia(conn, "2026-04")
+
+    assert "O ano até aqui" in texto
+    assert "média mensal" in texto
+    assert "mais caro" in texto
+
+
+def test_media_do_ano_usa_os_meses_decorridos_e_nao_os_meses_com_gasto(engine, conn):
+    """A régua da casa: total ÷ mês atual. Uma conta que só apareceu em dois
+    meses tem de puxar a média do ano para baixo — é o que sobra ao orçamento."""
+    alimentacao = _categoria_id(conn, "Alimentação")
+    _inserir(conn, date(2026, 1, 10), "SUPERMERCADO", -100_000, alimentacao)
+    _inserir(conn, date(2026, 2, 10), "SUPERMERCADO", -100_000, alimentacao)
+
+    do_ano = analytics.resumo_do_ano(conn, "2026-02")
+
+    assert do_ano["despesas"] == 200_000
+    assert do_ano["media_despesa"] == 200_000 // analytics.meses_decorridos(2026)
+
+
+def test_janela_longa_anda_e_fica_nos_ultimos_doze_meses(engine, conn):
+    alimentacao = _categoria_id(conn, "Alimentação")
+    for ano, mes in [(2025, m) for m in range(1, 13)] + [(2026, m) for m in range(1, 4)]:
+        _inserir(conn, date(ano, mes, 10), "SUPERMERCADO", -10_000, alimentacao)
+
+    janela = analytics.janela_de_doze_meses(conn, "2026-03")
+
+    assert len(janela) == 12
+    assert janela[0] == "2025-04" and janela[-1] == "2026-03"
+
+
+def test_com_menos_de_um_ano_o_texto_proibe_falar_de_sazonalidade(engine, conn):
+    """Concentração se vê com poucos meses; sazonalidade, não — ela exige o
+    mesmo mês repetindo em anos diferentes."""
+    alimentacao = _categoria_id(conn, "Alimentação")
+    for mes in (1, 2, 3):
+        _inserir(conn, date(2026, mes, 10), "SUPERMERCADO", -100_000, alimentacao)
+
+    texto = analytics.contexto_do_ano(conn, "2026-03")
+
+    assert "NÃO dá para afirmar sazonalidade" in texto
+    assert "Gasto por categoria, mês a mês" in texto
+
+
+def test_leitura_do_ano_aponta_o_mes_de_pico_de_cada_categoria(engine, conn):
+    alimentacao = _categoria_id(conn, "Alimentação")
+    lazer = _categoria_id(conn, "Lazer & Viagens")
+    for mes in (1, 2, 3, 4, 5, 6):
+        _inserir(conn, date(2026, mes, 10), "SUPERMERCADO", -100_000, alimentacao)
+    _inserir(conn, date(2026, 7, 10), "PACOTE DE VIAGEM", -800_000, lazer)
+
+    texto = analytics.contexto_do_ano(conn, "2026-07")
+
+    assert "maior em 07" in texto
+    assert "Lazer & Viagens" in texto
+
+
+def test_leitura_do_ano_avisa_quais_meses_estao_incompletos(engine, conn):
+    alimentacao = _categoria_id(conn, "Alimentação")
+    _inserir(conn, date(2026, 1, 10), "SUPERMERCADO", -100_000, alimentacao)
+    _inserir(conn, date(2026, 2, 10), "PIX SEM NOME", -100_000)          # pendente
+
+    texto = analytics.contexto_do_ano(conn, "2026-02")
+
+    assert "COBERTURA" in texto
+    assert "2026-02" in texto
+
+
+def test_analise_do_ano_fica_separada_da_do_mes(engine, conn, monkeypatch):
+    """As duas convivem na mesma competência sem uma sobrescrever a outra."""
+    _ligar_ia(monkeypatch, "texto qualquer")
+    repo.salvar_analise(engine, competencia="2026-08", texto="leitura do mês",
+                        modelo="m", contexto="ctx", usuario="André", tipo="mes")
+    repo.salvar_analise(engine, competencia="2026-08", texto="leitura do ano",
+                        modelo="m", contexto="ctx-ano", usuario="Rô", tipo="ano")
+
+    with engine.connect() as leitura:
+        do_mes = repo.ultima_analise(leitura, "2026-08", tipo="mes")
+        do_ano = repo.ultima_analise(leitura, "2026-08", tipo="ano")
+    assert do_mes["texto"] == "leitura do mês"
+    assert do_ano["texto"] == "leitura do ano"
+
+
+def test_prompt_do_ano_pede_padrao_e_desconfia_de_sazonalidade(engine, conn, monkeypatch):
+    cliente = _ligar_ia(monkeypatch, "ok")
+    ai.analisar_ano(analytics.contexto_do_ano(conn, "2026-08"))
+
+    prompt = cliente.prompts[0]
+    assert "sazonalidade" in prompt
+    assert "piso do orçamento" in prompt

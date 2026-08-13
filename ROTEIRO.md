@@ -209,6 +209,14 @@ dinheiro) e onde os valores divergem.
 A tela **Análise IA** tem três abas, e as três só falam dos números já
 apurados — a IA não consulta o banco e não inventa valor nenhum:
 
+- **Ano & padrões** — a visão longa, que é onde padrão e sazonalidade aparecem:
+  matriz categoria × mês com o mês de pico de cada uma, compromissos que se
+  repetem (o piso do orçamento) e comparação com o ano anterior. Enquanto
+  houver menos de doze meses, o texto é proibido de chamar concentração de
+  sazonalidade — para isso é preciso ver o mesmo mês repetir em anos
+  diferentes. Passando de doze meses, a janela anda: vira "últimos 12 meses"
+  em vez de ano-calendário. A leitura mensal também fecha situando o mês no
+  ano, porque "gastamos X" não diz nada sem a média ao lado.
 - **Leitura do mês** — o texto do mês, gravado no banco com autor, data e a
   impressão digital dos números que o geraram. Quando alguém classifica ou
   importa depois, a tela avisa que o texto envelheceu em vez de mostrá-lo como

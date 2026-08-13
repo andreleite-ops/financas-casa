@@ -281,10 +281,45 @@ def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
         "3) três sugestões de economia, cada uma com o valor que liberaria por mês. "
         "Prefira compromisso recorrente a gasto avulso: cortar assinatura vale o ano, "
         "cortar um jantar vale uma semana;\n"
-        "4) como está a poupança e a sobra do mês.\n\n"
+        "4) como está a poupança e a sobra do mês;\n"
+        "5) feche situando o mês no ano: use 'O ano até aqui' para dizer se este mês "
+        "puxa a média para cima ou para baixo, e o que isso projeta para o ano se o "
+        "ritmo continuar. Um mês sozinho não diz se foi caro — a média diz.\n\n"
         f"{REGRAS}\n\n{contexto}"
     )
     return _perguntar(prompt, modelo)
+
+
+def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE) -> str:
+    """A leitura longa: padrão, sazonalidade e o que é piso do orçamento.
+
+    Pergunta diferente da do mês, e por isso vale uma chamada própria. O mês
+    responde "para onde foi o dinheiro"; só a série responde "isto acontece
+    todo ano nesta época" — e é essa a diferença entre reagir ao mês e planejar
+    o ano.
+    """
+    if not disponivel():
+        return SEM_CHAVE
+    prompt = (
+        "Leia a série de meses abaixo e escreva a visão longa das contas desta casa, "
+        "em no máximo 6 parágrafos curtos:\n"
+        "1) o retrato do período: quanto entrou, quanto saiu, quanto ficou, e se a "
+        "trajetória melhora ou piora ao longo dos meses;\n"
+        "2) o que se repete — categorias estáveis mês a mês, que formam o piso do "
+        "orçamento — e quanto esse piso custa;\n"
+        "3) o que oscila, e em quais meses. Aponte concentração ('quase tudo de "
+        "Lazer & Viagens está em dois meses') em vez de tratar como se fosse "
+        "distribuído. Só chame de sazonalidade o que se repetir no mesmo mês em anos "
+        "diferentes; havendo um ano só, diga que ainda é cedo para afirmar isso;\n"
+        "4) as três categorias em que vale gastar atenção no próximo ano, com o "
+        "valor anual de cada uma;\n"
+        "5) o que a série sugere para as metas do ano que vem, em percentual da "
+        "renda, a partir do que realmente aconteceu;\n"
+        "6) o que ainda não dá para afirmar por falta de dado classificado ou de "
+        "histórico.\n\n"
+        f"{REGRAS}\n\n{contexto}"
+    )
+    return _perguntar(prompt, modelo, max_tokens=2400)
 
 
 def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE) -> str:

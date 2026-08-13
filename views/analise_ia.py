@@ -44,11 +44,13 @@ def render(engine, usuario: dict) -> None:
             icon="🔌",
         )
 
-    aba_mes, aba_pergunta, aba_sub = st.tabs(
-        ["Leitura do mês", "Perguntar sobre o mês", "Completar subcategorias"]
+    aba_mes, aba_ano, aba_pergunta, aba_sub = st.tabs(
+        ["Leitura do mês", "Ano & padrões", "Perguntar sobre o mês", "Completar subcategorias"]
     )
     with aba_mes:
         _leitura_do_mes(engine, competencia, usuario, ligada)
+    with aba_ano:
+        _leitura_do_ano(engine, competencia, usuario, ligada)
     with aba_pergunta:
         _perguntar(engine, competencia, usuario, ligada)
     with aba_sub:
@@ -154,6 +156,84 @@ def _mostrar_falha(texto: str) -> None:
     st.error(texto, icon="🚫")
     with st.expander("Estado da configuração"):
         st.json(ai.diagnostico())
+
+
+def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> None:
+    """A visão longa: o que se repete, o que oscila e em que meses.
+
+    Vale uma chamada própria, e não um parágrafo a mais na do mês: a pergunta é
+    outra. O mês responde para onde foi o dinheiro; a série responde o que
+    acontece todo ano nesta época — e é dela que sai meta, não do último mês.
+    """
+    with engine.connect() as conn:
+        janela = analytics.janela_de_doze_meses(conn, competencia)
+        do_ano = analytics.resumo_do_ano(conn, competencia)
+        contexto = analytics.contexto_do_ano(conn, competencia)
+        anterior = repo.ultima_analise(conn, competencia, contexto, tipo="ano")
+
+    if not janela:
+        st.info("Sem meses lançados até esta competência.", icon="📭")
+        return
+
+    colunas = st.columns(4)
+    colunas[0].metric("Receitas no ano", fmt_brl(do_ano["receitas"]))
+    colunas[1].metric("Despesas no ano", fmt_brl(do_ano["despesas"]))
+    colunas[2].metric(
+        f"Média mensal ({do_ano['meses_decorridos']} meses)", fmt_brl(do_ano["media_despesa"])
+    )
+    colunas[3].metric("Poupança / receita", f"{do_ano['taxa_de_poupanca']:.1f}%")
+
+    if len(janela) < 12:
+        st.caption(
+            f"Janela de {janela[0]} a {janela[-1]} — {len(janela)} meses. Com menos de "
+            "doze, dá para ver concentração, não sazonalidade: para afirmar que algo "
+            "acontece todo ano nesta época é preciso ver o mesmo mês repetir em anos "
+            "diferentes."
+        )
+    else:
+        st.caption(f"Últimos 12 meses: {janela[0]} a {janela[-1]}.")
+
+    if not ligada:
+        with st.expander("Ver os números da leitura do ano"):
+            st.code(contexto, language="text")
+        return
+
+    gerar = st.button(
+        "Ler o ano" if anterior is None else "Ler o ano de novo",
+        type="primary", key="ia_gerar_ano",
+    )
+
+    if anterior and not gerar:
+        if anterior["desatualizada"]:
+            st.info("Os números mudaram desde este texto. Gere de novo para valer.", icon="🕓")
+        st.markdown(anterior["texto"])
+        st.caption(
+            f"Escrita por {anterior['gerada_por']} em "
+            f"{anterior['gerada_em']:%d/%m/%Y às %H:%M}"
+        )
+        with st.expander("Números usados"):
+            st.code(contexto, language="text")
+        return
+
+    if not gerar:
+        st.caption(
+            "A leitura do ano olha a matriz categoria × mês, os compromissos que se "
+            "repetem, o comparativo com o ano anterior e o que ainda falta classificar."
+        )
+        return
+
+    with st.spinner("Lendo o ano…"):
+        texto = ai.analisar_ano(contexto)
+    if _falhou(texto):
+        _mostrar_falha(texto)
+        return
+    repo.salvar_analise(
+        engine, competencia=competencia, texto=texto, modelo=ai.MODELO_ANALISE,
+        contexto=contexto, usuario=usuario.get("nome", "—"), tipo="ano",
+    )
+    st.markdown(texto)
+    with st.expander("Números usados"):
+        st.code(contexto, language="text")
 
 
 def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:

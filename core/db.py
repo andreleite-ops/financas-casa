@@ -171,7 +171,8 @@ analises = sa.Table(
     # mostrar texto velho como se ainda valesse — e evita pagar de novo por
     # uma analise identica.
     sa.Column("contexto_hash", sa.String(64)),
-    sa.Column("pergunta", sa.Text),               # nulo = a analise do mes
+    sa.Column("tipo", sa.String(10), server_default="mes"),   # mes | ano
+    sa.Column("pergunta", sa.Text),               # preenchido = pergunta livre
     sa.Column("gerada_por", sa.String(20)),
     sa.Column("gerada_em", sa.DateTime, server_default=sa.func.now()),
 )
