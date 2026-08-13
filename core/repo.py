@@ -114,22 +114,55 @@ def _indice_categorias(conn) -> tuple[dict[str, int], dict[tuple[int, str], int]
     return cats, subs
 
 
+# Como cada pessoa pode aparecer escrita na coluna de portador da fatura.
+# Comparação é por palavra inteira, nunca por começo: "RO" é a Rô, mas
+# "ROBERTO" e "RODRIGO" são terceiros, e "ANDREA" não é o André. Prefixo
+# parecia resolver e na verdade atribuía o gasto de estranhos à casa.
+APELIDOS_PESSOA = {
+    "andre": "André", "andré": "André", "a": "André",
+    "ro": "Rô", "rô": "Rô", "r": "Rô",
+    "casal": "Casal", "nos": "Casal", "nós": "Casal",
+    "ambos": "Casal", "c": "Casal",
+}
+
+
+def _apelidos_configurados() -> dict[str, str]:
+    """Nomes completos como o cartão os imprime, vindos do segredo do app.
+
+    O repositório é público: nome completo de ninguém entra no código. A
+    fatura, porém, imprime o portador por extenso, e sem essa tradução o gasto
+    fica com a pessoa errada. Por isso o de-para mora no segredo
+    APELIDOS_PESSOA ("nome como sai na fatura=Rô;outro nome=André"), que só
+    existe na instalação da casa.
+    """
+    bruto = db._segredo("APELIDOS_PESSOA") or ""
+    mapa: dict[str, str] = {}
+    for par in bruto.split(";"):
+        if "=" not in par:
+            continue
+        chave, _, pessoa = par.partition("=")
+        pessoa = pessoa.strip()
+        if pessoa in db.PESSOAS:
+            mapa[chave.strip().casefold()] = pessoa
+    return mapa
+
+
 def _pessoa_valida(valor: str | None, padrao: str) -> str:
     if not valor:
         return padrao
     limpo = str(valor).strip().casefold()
+    configurados = _apelidos_configurados()
     for pessoa in db.PESSOAS:
-        if limpo == pessoa.casefold() or limpo.startswith(pessoa.casefold()[:3]):
+        if limpo == pessoa.casefold():
             return pessoa
-    # o nome como o cartao imprime: "ANDRE L R T LEITE", "ROSANGELA LEITE".
-    # Comparar so o comeco resolve, e e o unico jeito de a coluna de portador
-    # da fatura virar a pessoa certa sem uma tabela de nomes completos.
-    if limpo.startswith(("andre", "andré")):
-        return "André"
-    if limpo.startswith(("ro", "rô", "rosangela", "rosana")):
-        return "Rô"
-    if limpo.startswith(("casal", "nos", "nós", "ambos")):
-        return "Casal"
+    # o nome inteiro primeiro (o segredo pode traduzir "fulano de tal leite"),
+    # depois só a primeira palavra ("ANDRE TITULAR" -> "andre")
+    primeira = limpo.split()[0] if limpo.split() else limpo
+    for candidato in (limpo, primeira):
+        if candidato in configurados:
+            return configurados[candidato]
+        if candidato in APELIDOS_PESSOA:
+            return APELIDOS_PESSOA[candidato]
     return padrao
 
 

@@ -5,8 +5,13 @@ de lancamento (data + descricao + valor no fim). Funciona para a maioria das
 faturas brasileiras; cada instituicao ajusta detalhes no seu proprio modulo.
 
 Faturas de cartao trazem o valor sem sinal - tudo e gasto. Por isso
-`credito_por_padrao=False` faz todo valor virar saida, e as poucas linhas de
+`tudo_despesa=True` faz todo valor virar saida, e as poucas linhas de
 estorno/pagamento sao reconhecidas por palavra-chave.
+
+Extrato de conta corrente e o caso oposto (`tudo_despesa=False`): entra e sai
+dinheiro na mesma coluna. Ali o sinal vem da marca D/C, do traco impresso
+antes ou depois do numero e, so no que sobrar, das palavras da linha
+(`CREDITOS`).
 """
 
 from __future__ import annotations
@@ -30,9 +35,20 @@ LINHA_LANCAMENTO = re.compile(
     r"^\s*(?P<data>\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+[A-Za-z]{3}\.?)\s+"
     r"(?P<desc>.+?)\s+"
     rf"(?P<sinal>[-+]?)\s*(?:R\$\s*)?(?P<valor>{_MOEDA})"
+    r"(?P<sinal_fim>[-+]?)"          # extrato costuma pôr o sinal depois do número
     r"(?:\s*(?P<marca>[DC])\b)?"
-    rf"(?:\s+(?:R\$\s*)?(?P<saldo>{_MOEDA})\s*(?:[DC]\b)?)?"
+    rf"(?:\s+(?:R\$\s*)?(?P<saldo>{_MOEDA})[-+]?\s*(?:[DC]\b)?)?"
     r"\s*$"
+)
+
+# O que entra na conta corrente. Extrato de conta tem os dois sentidos e nem
+# sempre imprime D/C ou sinal: sem esta lista, "PIX RECEBIDO SALARIO" entrava
+# como despesa e o mês inteiro de receita virava gasto.
+CREDITOS = re.compile(
+    r"\b(PIX RECEBIDO|RECEBIMENTO PIX|TED RECEBIDA|TED RECEBIDO|DOC RECEBIDO|"
+    r"TRANSFERENCIA RECEBIDA|TRANSF RECEBIDA|DEPOSITO|CREDITO EM CONTA|"
+    r"CREDITO DE|SALARIO|PROVENTOS|RENDIMENTO|REND PAGO|RESGATE|DIVIDENDOS|"
+    r"ESTORNO|DEVOLUCAO|REEMBOLSO|CASHBACK|LIQUIDO DE)\b"
 )
 
 # linhas que reduzem a fatura em vez de somar (entram como valor positivo)
@@ -109,15 +125,25 @@ def extrair_linhas(
             continue
 
         marca = (m.group("marca") or "").upper()
-        # a marca D/C do proprio banco manda mais que qualquer heuristica
+        sinal = m.group("sinal") or m.group("sinal_fim") or ""
+        entre_parenteses = "(" in m.group("valor")
+        # ordem de quem manda no sinal: a marca D/C do banco, depois o sinal
+        # impresso (antes ou depois do número), depois o texto da linha.
         if marca == "C":
             valor = centavos
         elif marca == "D":
             valor = -centavos
-        elif m.group("sinal") == "+" or ESTORNOS.search(limpa):
-            valor = centavos
-        else:
+        elif sinal == "-" or entre_parenteses:
             valor = -centavos
+        elif sinal == "+":
+            valor = centavos
+        elif tudo_despesa:
+            # fatura de cartão: tudo é gasto, menos estorno e pagamento
+            valor = centavos if ESTORNOS.search(limpa) else -centavos
+        else:
+            # extrato de conta: os dois sentidos existem e o arquivo não disse
+            # qual é. O texto da linha é o que sobra para decidir.
+            valor = centavos if CREDITOS.search(limpa) else -centavos
 
         lancamentos.append(
             Lancamento(

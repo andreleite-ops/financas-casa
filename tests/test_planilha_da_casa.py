@@ -188,8 +188,8 @@ def test_a_matriz_de_receitas_mostra_a_fonte_de_cada_um(engine):
 # venda de bem: entra no total, fica fora da renda que baliza o orçamento
 # ---------------------------------------------------------------------------
 VENDA = [
-    ("15/03/2026", "mar/26", "REC",  "VENDA APTO MAE", "520.000,00", "VENDA"),
-    ("30/04/2026", "abr/26", "DESP", "IR GANHO DE CAPITAL", "31.667,03", "IMPOSTOS"),
+    ("15/03/2026", "mar/26", "REC",  "VENDA APTO HERANCA", "400.000,00", "VENDA"),
+    ("30/04/2026", "abr/26", "DESP", "IR GANHO DE CAPITAL", "25.000,00", "IMPOSTOS"),
 ]
 
 
@@ -223,12 +223,12 @@ def test_venda_de_bem_conta_no_total_mas_nao_vira_renda(engine):
         resumo = analytics.resumo(conn, ano=2026)
 
     # o dinheiro entrou: aparece nas receitas
-    assert resumo["receitas"] == REC_ESPERADA + 52_000_000
+    assert resumo["receitas"] == REC_ESPERADA + 40_000_000
     # mas não é renda: a base do orçamento ignora a venda
-    assert resumo["receitas_nao_recorrentes"] == 52_000_000
+    assert resumo["receitas_nao_recorrentes"] == 40_000_000
     assert resumo["renda_recorrente"] == REC_ESPERADA
     # e o IR da venda é despesa, no mês em que foi recolhido
-    assert resumo["despesas"] == DESP_ESPERADA + 3_166_703
+    assert resumo["despesas"] == DESP_ESPERADA + 2_500_000
 
 
 def test_a_venda_do_apartamento_e_do_andre(engine):
@@ -239,7 +239,7 @@ def test_a_venda_do_apartamento_e_do_andre(engine):
             for linha in analytics.receitas_por_pessoa(conn, ano=2026)
         }
 
-    assert por_pessoa["André"] == 2_000_000 + 52_000_000
+    assert por_pessoa["André"] == 2_000_000 + 40_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ def test_descricao_manda_no_que_foi_o_rotulo_manda_em_de_quem_e(engine):
     """A venda do apto vinha rotulada TAG: o rótulo não pode virá-la em salário."""
     lancamentos = pd.DataFrame(
         [
-            ("2026-04-05 00:00:00", "REC", "VENDA APTO RIO ANDRÉ", "520000", "TAG"),
+            ("2026-04-05 00:00:00", "REC", "VENDA APTO HERANCA", "400000", "TAG"),
             ("2026-04-28 00:00:00", "REC", "SALARIO", "20596.21", "TAG"),
         ],
         columns=["DATA", "CATEGORIA", "BENEFICIÁRIO", "VALOR", "CLASSIFICAÇÃO"],
@@ -303,13 +303,13 @@ def test_descricao_manda_no_que_foi_o_rotulo_manda_em_de_quem_e(engine):
 
     por_tipo = {linha["tipo"]: linha for linha in matriz["linhas"]}
     # a descrição diz o que foi: venda de bem, não pró-labore
-    assert por_tipo["Venda de Bens"]["total"] == 52_000_000
+    assert por_tipo["Venda de Bens"]["total"] == 40_000_000
     assert por_tipo["Pró-labore / Salário"]["total"] == 2_059_621
     # o rótulo diz de quem é: as duas são do André
     assert {linha["pessoa"] for linha in matriz["linhas"]} == {"André"}
     # e só o salário vira base do orçamento
     assert resumo["renda_recorrente"] == 2_059_621
-    assert resumo["receitas_nao_recorrentes"] == 52_000_000
+    assert resumo["receitas_nao_recorrentes"] == 40_000_000
 
 
 # ---------------------------------------------------------------------------

@@ -123,19 +123,35 @@ def ler_valor(valor, credito: bool = False) -> int:
     return abs(centavos) if credito else centavos
 
 
+def _trocar_ano(dia: date, ano: int) -> date:
+    """29/02 de um ano bissexto vira 28/02 no ano que não é."""
+    try:
+        return dia.replace(year=ano)
+    except ValueError:
+        return dia.replace(year=ano, day=28)
+
+
 def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[Lancamento]:
     """Corrige a virada de ano em fatura que so traz dia/mes.
 
-    Compra em dezembro que aparece na fatura de janeiro pertence ao ano
-    anterior.
+    Fatura traz dia e mês; o ano é o da competência. Uma compra de dezembro na
+    fatura de janeiro é do ano anterior — e isso vale para qualquer mês, não só
+    dezembro: a fatura de janeiro carrega parcelas compradas em novembro, em
+    setembro, em março. Ler "05/11" como novembro do ano da fatura jogava a
+    parcela dez meses para a frente, para um mês que ainda nem existe.
+
+    A régua é a distância até a competência: mês muito à frente é do ano
+    passado; mês muito atrás, do ano que vem. Um mês de folga fica de pé, que é
+    a compra feita depois do fechamento e cobrada na fatura seguinte.
     """
     if not competencia:
         return lancamentos
     ano, mes = int(competencia[:4]), int(competencia[5:7])
     for lan in lancamentos:
-        if mes == 1 and lan.data.month == 12 and lan.data.year == ano:
-            lan.data = lan.data.replace(year=ano - 1)
-        elif mes == 12 and lan.data.month == 1 and lan.data.year == ano:
-            lan.data = lan.data.replace(year=ano + 1)
+        distancia = (lan.data.year - ano) * 12 + lan.data.month - mes
+        if distancia > 1:
+            lan.data = _trocar_ano(lan.data, lan.data.year - 1)
+        elif distancia < -10:
+            lan.data = _trocar_ano(lan.data, lan.data.year + 1)
         lan.competencia = competencia
     return lancamentos

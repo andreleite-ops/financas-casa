@@ -71,6 +71,16 @@ def _parece_coluna_de_sinal(valores) -> bool:
     return reconhecidos / len(amostra) >= 0.8
 
 
+def coluna_diz_o_sinal(valores) -> bool:
+    """A coluna marca mesmo entrada/saída, ou só se chama "tipo"?
+
+    Serve para quem precisa decidir se confia na coluna antes de usá-la: uma
+    coluna "Tipo" cheia de "à vista" e "parcelado" tem o nome certo e não diz
+    sinal nenhum.
+    """
+    return _parece_coluna_de_sinal(valores)
+
+
 def sugerir_mapeamento(colunas, amostra=None) -> dict[str, str | None]:
     """Casa cada papel com a coluna mais parecida do arquivo.
 
@@ -224,14 +234,41 @@ def _ler_csv(conteudo: bytes) -> pd.DataFrame:
         sep = csv.Sniffer().sniff(amostra, delimiters=",;\t|").delimiter
     except csv.Error:
         sep = ";" if amostra.count(";") > amostra.count(",") else ","
-    # extrato de banco costuma trazer rodapé com mais colunas que o cabeçalho —
+    # Extrato de banco costuma trazer rodapé com mais colunas que o cabeçalho —
     # o do Bradesco termina numa linha de total com um ponto e vírgula a mais, e
-    # o leitor estrito abortava o arquivo inteiro por causa dela. A linha torta
-    # é descartada; as boas continuam valendo.
-    return pd.read_csv(
+    # o leitor estrito abortava o arquivo inteiro por causa dela.
+    #
+    # Descartar toda linha torta, porém, é pior que abortar: quando a descrição
+    # de um lançamento tem o próprio separador dentro ("PIX ENVIADO; REF 12"),
+    # a linha sobra de campos e sumia calada — o arquivo abria, os totais
+    # fechavam menos e ninguém ficava sabendo. Aqui a linha torta só é aceitada
+    # quando o que sobra está vazio (é rodapé). O resto fica registrado em
+    # `df.attrs["linhas_descartadas"]` para a tela do upload mostrar.
+    largura = _largura_do_cabecalho(texto, sep)
+    descartadas: list[str] = []
+
+    def _linha_torta(campos: list[str]) -> list[str] | None:
+        if largura and len(campos) > largura and not any(
+            str(c).strip() for c in campos[largura:]
+        ):
+            return campos[:largura]
+        descartadas.append(sep.join(str(c) for c in campos))
+        return None
+
+    df = pd.read_csv(
         io.StringIO(texto), sep=sep, dtype=str, keep_default_na=False,
-        engine="python", on_bad_lines="skip",
+        engine="python", on_bad_lines=_linha_torta,
     )
+    df.attrs["linhas_descartadas"] = descartadas
+    return df
+
+
+def _largura_do_cabecalho(texto: str, sep: str) -> int:
+    """Quantos campos o pandas vai esperar por linha (a primeira linha manda)."""
+    for linha in texto.splitlines():
+        if linha.strip():
+            return len(next(csv.reader([linha], delimiter=sep), []))
+    return 0
 
 
 def _achar_cabecalho(df: pd.DataFrame) -> pd.DataFrame:
@@ -400,6 +437,10 @@ def extrair(
     ano_ref = ano_referencia or (int(competencia[:4]) if competencia else date.today().year)
     lancamentos: list[Lancamento] = []
     avisos: list[str] = []
+    # linha que o CSV trouxe torta e não deu para recuperar: some do arquivo,
+    # mas não do aviso — pode ser um lançamento de verdade
+    for crua in df.attrs.get("linhas_descartadas", []):
+        avisos.append(f"linha fora do formato, não importada: {str(crua)[:90]}")
 
     for pos, linha in df.iterrows():
         bruto_data = linha.get(mapa["data"], "")

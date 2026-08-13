@@ -28,6 +28,18 @@ def _ler_tabular_ou_pdf(conteudo: bytes, nome: str, *, tudo_despesa: bool, **kw)
         kw.pop("senha", None)
         df = tabular.carregar_tabela(conteudo, nome)
         mapa = kw.pop("mapa", None) or tabular.sugerir_mapeamento(df.columns, df)
+        # "Tipo" no cabeçalho não quer dizer D/C: na fatura do cartão essa
+        # coluna costuma trazer "à vista"/"parcelado"/"Forma de pagamento".
+        # Confirmando pelo conteúdo — e apagando o papel quando o conteúdo não
+        # confirma — a coluna deixa de mandar no sinal e deixa de desligar a
+        # inversão da fatura, que era o caminho para um mês inteiro de compras
+        # entrar como receita.
+        col_tipo = mapa.get("tipo")
+        if col_tipo is not None and (
+            col_tipo not in df.columns
+            or not tabular.coluna_diz_o_sinal(df[col_tipo])
+        ):
+            mapa = {**mapa, "tipo": None}
         # fatura de cartão exporta tudo positivo: o valor é o que se gastou, e
         # quem vem negativo é estorno ou o pagamento da própria fatura. Sem
         # inverter, um mês inteiro de compras entrava como receita. Só que a

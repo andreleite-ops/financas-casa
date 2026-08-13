@@ -9,7 +9,8 @@ import streamlit as st
 
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
-from parsers import instituicoes, pdf, tabular
+from parsers import extrato_itau, instituicoes, pdf, tabular
+from parsers import pdf as leitor_pdf
 from views import manual
 from parsers.base import ErroDeLeitura
 from ui.graficos import MESES_PT as MESES_CURTOS
@@ -302,7 +303,43 @@ def _aba_enviar(engine, usuario: dict) -> None:
                 "CSV/Excel — ela passa pela conferência de colunas."
             )
             return
-        _importar(engine, conta, lancamentos, arquivo.name, usuario, "extrato", competencia, [])
+        avisos = _conferencia_do_extrato(parser, conteudo, senha, lancamentos)
+        _importar(
+            engine, conta, lancamentos, arquivo.name, usuario, "extrato", competencia, avisos
+        )
+
+
+def _conferencia_do_extrato(parser, conteudo, senha, lancamentos) -> list[str]:
+    """Compara o lido com o total que o próprio extrato imprime.
+
+    O extrato do Itaú declara, no cabeçalho, quanto entrou e quanto saiu no
+    mês. Nenhuma outra conferência é tão boa: ela pega linha perdida, linha
+    contada duas vezes e sinal trocado de uma vez só — e antes de gravar.
+    """
+    if parser != "itau" or not lancamentos:
+        return []
+    try:
+        texto = leitor_pdf.texto_do_pdf(conteudo, senha=senha)
+        conferencia = extrato_itau.conferir(texto, lancamentos)
+    except Exception:                      # a conferência é um extra, nunca o obstáculo
+        return []
+
+    if conferencia.get("confere") is None:
+        return []
+    if conferencia["confere"]:
+        st.success(
+            "Confere com o total impresso no extrato: entradas "
+            f"{fmt_brl(conferencia['entradas'])}, saídas {fmt_brl(conferencia['saidas'])}.",
+            icon="✅",
+        )
+        return []
+    return [
+        "o lido não bate com o total impresso no extrato — entradas "
+        f"{fmt_brl(conferencia['entradas'])} contra "
+        f"{fmt_brl(conferencia['entradas_declaradas'])}, saídas "
+        f"{fmt_brl(conferencia['saidas'])} contra "
+        f"{fmt_brl(conferencia['saidas_declaradas'])}. Confira antes de classificar."
+    ]
 
 
 def _diagnostico_pdf(conteudo: bytes, senha, competencia, conta) -> None:

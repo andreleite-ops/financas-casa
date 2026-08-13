@@ -396,8 +396,8 @@ def test_gasto_da_casa_nao_pode_ficar_com_uma_pessoa_so(engine):
 
     Na planilha da casa, que junta as contas do casal, a maioria das linhas não
     diz de quem é o gasto. Atribuir todas a uma pessoa fazia o relatório por
-    pessoa errar por um fator de vinte: R$ 713 mil da casa apareciam como
-    despesa da Rô.
+    pessoa errar por mais de vinte vezes: quase tudo o que a casa gastou no
+    ano aparecia como despesa de uma pessoa só.
     """
     import sqlalchemy as sa
 

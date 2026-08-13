@@ -19,15 +19,15 @@ Atualizado em 10/08/2026, fim do dia.
 
 ### O número de referência
 
-A tabela dinâmica da própria planilha é a verdade. Para 2026:
+A tabela dinâmica da própria planilha é a verdade: DESP e REC de 2026 conferem
+**mês a mês, ao centavo**, e um teste automático refaz essa conferência antes
+de cada mudança no leitor (`tests/test_planilha_da_casa.py`, com números
+inventados — os de verdade ficam no app, nunca aqui).
 
-| | Planilha | App |
-|---|---|---|
-| DESP | 823.037,28 | 823.037,28 |
-| REC | 1.904.765,63 | 1.904.765,63 |
-
-Confere mês a mês, ao centavo, e um teste automático refaz essa conferência
-antes de cada mudança no leitor (`tests/test_planilha_da_casa.py`).
+> Este repositório é **público**. Nada de valor real, nome completo, número de
+> conta ou de instalação de concessionária entra em arquivo versionado — nem
+> em comentário de código, nem em teste, nem neste roteiro. Para conferir os
+> totais, abra o app.
 
 ### Como o dinheiro se divide
 
@@ -59,8 +59,8 @@ planilha de verdade:
 1. **A aba lida era a errada** — a pasta começa pela *Tabela Dinâmica*. O
    leitor agora descarta pelo nome qualquer aba de resumo.
 2. **A data do Excel vinha com hora** (`2026-01-05 00:00:00`) e caía no leitor
-   genérico, que lia 5 de janeiro como 1º de maio. Maio inchava para 486 mil,
-   novembro e dezembro sumiam.
+   genérico, que lia 5 de janeiro como 1º de maio. Maio inchava, novembro e
+   dezembro sumiam.
 3. **Estorno virava receita** — valor negativo dentro de `DESP` é abatimento
    de gasto, não entrada.
 4. **`Z195,82`** entrava como 195,82. Valor com letra agora é apontado e fica
@@ -71,12 +71,12 @@ planilha de verdade:
 6. **`RO` era lido como Rondônia** e sumia do fim da descrição. Eram 92
    lançamentos perdendo a marca da Rô.
 7. **O gasto da casa virava dívida de uma pessoa** — 1.643 lançamentos sem
-   dono declarado herdavam a resposta de "de quem é este arquivo". R$ 713 mil
-   apareciam como despesa da Rô, que de fato tem R$ 35.371,57.
+   dono declarado herdavam a resposta de "de quem é este arquivo", e o gasto do
+   ano inteiro aparecia como despesa da Rô: um erro de mais de vinte vezes.
 8. **A tela de classificação travava** — o plano de contas era relido com uma
    consulta por categoria, 18 idas ao banco a cada toque de campo.
 9. **Não havia onde lançar pensão e filhos.** Criada a categoria
-   **Filhos & Pensão**; só a pensão já são R$ 124.800 no ano.
+   **Filhos & Pensão**, que é do André e não se rateia com a casa.
 
 ---
 
@@ -102,15 +102,18 @@ vez.
 A Rô classifica com o vocabulário dela, e **13 rótulos cobrem os 441
 pendentes** — cinco deles cobrem 83%:
 
-| Rótulo | Lançamentos | Valor |
-|---|---|---|
-| CUIDADOS PESSOAIS | 133 | 26.640,65 |
-| INFRA | 67 | 13.102,68 |
-| CONTRIBUIÇÃO MENSAL | 61 | 46.712,07 |
-| CONTRIBUIÇÃO IGREJA | 56 | 73.108,72 |
-| VIAGEM | 47 | 90.732,23 |
-| TAXAS · CASA · NUN · LAZER | 63 | 58.271,10 |
-| TORANA · LILLE · RIO · SEGURO | 14 | 2.225,46 |
+| Rótulo | Lançamentos |
+|---|---|
+| CUIDADOS PESSOAIS | 133 |
+| INFRA | 67 |
+| CONTRIBUIÇÃO MENSAL | 61 |
+| CONTRIBUIÇÃO IGREJA | 56 |
+| VIAGEM | 47 |
+| TAXAS · CASA · NUN · LAZER | 63 |
+| TORANA · LILLE · RIO · SEGURO | 14 |
+
+(Os valores de cada rótulo estão na própria tela do de-para, que é onde eles
+podem ficar: o app é privado, este arquivo não.)
 
 O de-para traduz cada rótulo **uma vez** e guarda a tradução, então a próxima
 importação já entra classificada. Parar na categoria resolve o relatório (é a
@@ -134,8 +137,8 @@ que caiu:
 
 É isso que impede a dupla contagem: a mesma receita, lançada por ela na
 planilha e por mim num extrato, cai na mesma pessoa pelos dois caminhos. Na
-carga inicial isso separa 1.250.911,96 do André, 96.670,00 da Rô e 37.183,67 do
-casal — soma exata do REC da dinâmica.
+carga inicial isso separa as três fontes sem sobra: TAG, BIOS e aluguel somam,
+ao centavo, o REC da dinâmica — a conferência aparece na tela de receitas.
 
 ### 1.4 O que ainda merece olhada
 - **Meses futuros** — a planilha tem lançamentos de setembro a dezembro de 2026
@@ -152,14 +155,27 @@ casal — soma exata do REC da dinâmica.
 
 ---
 
-## Etapa 2 — Leitura dos extratos reais
+## Etapa 2 — Leitura dos extratos reais *(calibrada)*
 
-Os leitores de **Visa XP, BTG, Bradesco e Itaú** estão implementados sobre o
-motor genérico, mas nunca viram o layout de verdade desses bancos. O do
-**Nubank** segue o formato conhecido de exportação (`date,title,amount`).
+**Bradesco (CSV), Itaú (PDF), Nubank (XLSX) e XP (XLSX)** já foram lidos contra
+arquivos no formato de verdade, e cada um confere com um número que o próprio
+arquivo declara — não com um número que eu escolhi:
 
-**O preparo já está feito, e mudou o que preciso de você.** Ao subir um PDF, a
-tela agora mostra, antes de gravar qualquer coisa:
+| Arquivo | Conferência |
+|---|---|
+| Bradesco | entradas − saídas reproduz a variação do saldo impresso |
+| Itaú | bate com o total de entradas e saídas que o extrato imprime |
+| XP | soma a linha de total da fatura |
+| Nubank | compras somam a fatura; o pagamento entra separado |
+
+No Itaú essa conferência agora aparece **na tela do upload**, antes de gravar:
+se o lido não bater com o impresso, o aviso sai junto com o resumo. É a melhor
+rede que existe — pega linha perdida, linha contada duas vezes e sinal trocado
+de uma vez só.
+
+O **BTG** ainda não viu layout real e segue no motor genérico.
+
+Ao subir um PDF, a tela mostra, antes de gravar qualquer coisa:
 
 - quantos lançamentos reconheceu, de quantas linhas de texto
 - **quais linhas pareciam lançamento e ficaram de fora** — são elas que dizem
@@ -233,6 +249,25 @@ conferir a Visão Geral e ler a análise.
 - **Não confiar em número apresentado sem conferir contra a origem.** Mais de
   uma vez um número de base de teste foi mostrado como se fosse da base real. A
   tabela dinâmica da planilha é a única verdade; quando divergir, ela ganha.
+- **Coluna chamada "Tipo" não quer dizer D/C.** Na fatura ela costuma trazer
+  "à vista"/"parcelado". Antes bastava existir para desligar a inversão do
+  cartão — e o mês inteiro de compras entrava como receita. Hoje o conteúdo é
+  conferido; o nome da coluna sozinho não vale nada.
+- **Linha de CSV torta não some calada.** Descrição com o próprio separador
+  dentro sobra de colunas. Só é aceita quando o que sobra está vazio (rodapé);
+  o resto vira aviso na tela. Descartar em silêncio fazia o arquivo abrir, o
+  total fechar menos e ninguém ficar sabendo.
+- **Fatura de janeiro traz parcela de qualquer mês do ano passado.** Não só de
+  dezembro. Ler "05/11" como novembro do ano da fatura jogava a parcela dez
+  meses para a frente.
+- **Nome parecido não é a mesma pessoa.** Comparar só o começo dava o gasto de
+  `ROBERTO` e `RODRIGO` para a Rô e o de `ANDREA` para o André. A comparação é
+  por palavra inteira; nome completo de portador vai no segredo
+  `APELIDOS_PESSOA`, nunca no código.
+- **Este repositório é público.** Valor real, nome completo, número de conta e
+  número de instalação de concessionária (luz, gás, água, telefone) não entram
+  em arquivo versionado — nem em comentário, nem em amostra de teste. O número
+  de instalação identifica o endereço tão bem quanto o endereço.
 
 ---
 
