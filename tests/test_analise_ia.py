@@ -501,3 +501,99 @@ def test_prompt_do_ano_pede_padrao_e_desconfia_de_sazonalidade(engine, conn, mon
     prompt = cliente.prompts[0]
     assert "sazonalidade" in prompt
     assert "piso do orçamento" in prompt
+
+
+# ---------------------------------------------------------------------------
+# resposta vazia: o modelo pensa antes de responder, e o pensamento consome cota
+# ---------------------------------------------------------------------------
+class _RespostaSemTexto:
+    """O que a API devolve quando o raciocínio consome todo o max_tokens."""
+
+    def __init__(self, stop_reason="max_tokens"):
+        bloco = type("Bloco", (), {"type": "thinking", "thinking": "", "text": ""})()
+        self.content = [bloco]
+        self.stop_reason = stop_reason
+
+
+class _ClienteQueDevolveVazio:
+    def __init__(self, stop_reason="max_tokens"):
+        self.stop_reason = stop_reason
+        self.chamadas: list[dict] = []
+        self.messages = self
+
+    def create(self, **kwargs):
+        self.chamadas.append(kwargs)
+        return _RespostaSemTexto(self.stop_reason)
+
+
+def test_resposta_sem_texto_vira_aviso_e_nao_analise_vazia(engine, conn, monkeypatch):
+    """A tela mostrava branco e nada explicava o porquê.
+
+    O modelo raciocina antes de responder, e o raciocínio conta no mesmo
+    max_tokens do texto. Estourando o limite, a resposta volta sem erro e sem
+    texto — o pior dos dois mundos.
+    """
+    cliente = _ClienteQueDevolveVazio()
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    texto = ai.analisar_mes("contexto qualquer")
+
+    assert ai.falhou(texto)
+    assert "espaço" in texto                       # diz o motivo, não só que falhou
+
+
+def test_analise_do_mes_pede_espaco_para_o_raciocinio(engine, conn, monkeypatch):
+    """1.600 tokens não cabem raciocínio + resposta. A cota tem de ser folgada."""
+    cliente = _ClienteQueDevolveVazio()
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    ai.analisar_mes("contexto")
+    ai.analisar_ano("contexto")
+
+    assert all(chamada["max_tokens"] >= 8000 for chamada in cliente.chamadas)
+
+
+def test_recusa_do_modelo_tambem_vira_aviso(engine, conn, monkeypatch):
+    cliente = _ClienteQueDevolveVazio(stop_reason="refusal")
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    assert ai.falhou(ai.analisar_mes("contexto"))
+
+
+def test_aviso_de_falha_nunca_e_gravado_como_analise(engine, conn, monkeypatch):
+    """Gravar o erro faria a tela mostrá-lo depois como o texto do mês."""
+    cliente = _ClienteQueDevolveVazio()
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    texto = ai.analisar_mes(analytics.contexto_para_ia(conn, "2026-08"))
+    assert ai.falhou(texto)
+
+    with engine.connect() as leitura:
+        assert repo.ultima_analise(leitura, "2026-08") is None
+
+
+def test_sdk_antigo_sem_output_config_continua_funcionando(engine, conn, monkeypatch):
+    """O parâmetro de esforço é novo; sem ele a chamada ainda vale."""
+
+    class _ClienteAntigo:
+        def __init__(self):
+            self.chamadas = []
+            self.messages = self
+
+        def create(self, **kwargs):
+            if "output_config" in kwargs:
+                raise TypeError("unexpected keyword argument 'output_config'")
+            self.chamadas.append(kwargs)
+            bloco = type("Bloco", (), {"type": "text", "text": "análise do mês"})()
+            return type("R", (), {"content": [bloco], "stop_reason": "end_turn"})()
+
+    cliente = _ClienteAntigo()
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    assert ai.analisar_mes("contexto") == "análise do mês"
+    assert len(cliente.chamadas) == 1

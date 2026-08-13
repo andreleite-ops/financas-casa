@@ -144,7 +144,7 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
 
 
 def _falhou(texto: str) -> bool:
-    return texto.startswith("**Não consegui falar com a IA")
+    return ai.falhou(texto)
 
 
 def _mostrar_falha(texto: str) -> None:

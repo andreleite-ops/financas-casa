@@ -12,20 +12,32 @@ import os
 from dataclasses import dataclass
 
 MODELO_CLASSIFICACAO = "claude-haiku-4-5-20251001"
-MODELO_ANALISE = "claude-sonnet-5"
+# Sonnet dá conta da leitura do mês, que só interpreta números já apurados.
+# Trocar por um modelo mais forte (claude-opus-5) é uma linha no segredo
+# MODELO_ANALISE, sem mexer no código.
+MODELO_PADRAO_ANALISE = "claude-sonnet-5"
 LOTE = 40
 
 
 def _chave_api() -> str | None:
-    chave = os.environ.get("ANTHROPIC_API_KEY")
-    if chave:
-        return chave
+    return _segredo("ANTHROPIC_API_KEY")
+
+
+def _segredo(chave: str) -> str | None:
+    valor = os.environ.get(chave)
+    if valor:
+        return valor
     try:
         import streamlit as st
 
-        return st.secrets.get("ANTHROPIC_API_KEY")
+        return st.secrets.get(chave)
     except Exception:
         return None
+
+
+# lido uma vez, no boot do app: trocar de modelo é editar o segredo e dar
+# Reboot, que é o mesmo gesto de qualquer outra mudança de configuração
+MODELO_ANALISE = _segredo("MODELO_ANALISE") or MODELO_PADRAO_ANALISE
 
 
 def disponivel() -> bool:
@@ -188,11 +200,39 @@ def diagnostico() -> dict:
     }
 
 
-def _perguntar(prompt: str, modelo: str, max_tokens: int = 1600) -> str:
+# Toda mensagem de falha começa assim, para a tela reconhecê-la e não gravar
+# um erro no lugar da análise do mês.
+MARCA_DE_FALHA = "**Não consegui"
+
+
+def falhou(texto: str) -> bool:
+    """A resposta é aviso de erro, não análise? Então não vale mostrar nem gravar."""
+    return not texto.strip() or texto.lstrip().startswith(MARCA_DE_FALHA)
+
+
+def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000) -> str:
+    """Uma pergunta, uma resposta — com espaço de sobra para o raciocínio.
+
+    `max_tokens` limita o raciocínio **e** o texto final, somados. Os modelos
+    atuais pensam antes de responder, e com 1.600 o pensamento consumia a cota
+    inteira: a chamada voltava sem erro nenhum e sem texto nenhum, e a tela
+    ficava em branco sem nada explicando o porquê. Aqui a folga é grande e o
+    esforço é médio — a análise lê números já apurados, não precisa do
+    raciocínio mais caro.
+    """
+    parametros = dict(
+        model=modelo,
+        max_tokens=max_tokens,
+        output_config={"effort": "medium"},
+        messages=[{"role": "user", "content": prompt}],
+    )
     try:
-        resposta = _cliente().messages.create(
-            model=modelo, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}]
-        )
+        try:
+            resposta = _cliente().messages.create(**parametros)
+        except TypeError:
+            # SDK mais antigo não conhece output_config; a chamada vale sem ele
+            parametros.pop("output_config", None)
+            resposta = _cliente().messages.create(**parametros)
     except Exception as exc:
         # o nome da exceção sozinho não permite diagnóstico nenhum: "chave
         # inválida", "modelo inexistente" e "sem crédito" chegavam todos como
@@ -206,7 +246,23 @@ def _perguntar(prompt: str, modelo: str, max_tokens: int = 1600) -> str:
             "Se falar em *model*, o nome do modelo mudou e eu ajusto no código."
         )
     texto = texto_da_resposta(resposta)
-    return texto or "A IA respondeu vazio. Tente de novo."
+    if texto:
+        return texto
+
+    # sem texto: dizer o motivo, que é o que permite corrigir
+    motivo = getattr(resposta, "stop_reason", None)
+    if motivo == "max_tokens":
+        return (
+            f"{MARCA_DE_FALHA} escrever a resposta inteira.**\n\n"
+            "O modelo gastou todo o espaço raciocinando e não sobrou texto. "
+            "Tente de novo; se repetir, o mês tem números demais para uma resposta só."
+        )
+    if motivo == "refusal":
+        return f"{MARCA_DE_FALHA} — o modelo recusou responder a este pedido.**"
+    return (
+        f"{MARCA_DE_FALHA} uma resposta com texto.**\n\n"
+        f"A IA devolveu blocos vazios (motivo: `{motivo}`). Tente de novo."
+    )
 
 
 def sugerir_subcategorias(
@@ -319,7 +375,7 @@ def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE) -> str:
         "histórico.\n\n"
         f"{REGRAS}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo, max_tokens=2400)
+    return _perguntar(prompt, modelo, max_tokens=20000)
 
 
 def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE) -> str:
@@ -340,4 +396,4 @@ def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALIS
         f"{REGRAS}\n\n"
         f"PERGUNTA: {pergunta.strip()}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo, max_tokens=1200)
+    return _perguntar(prompt, modelo, max_tokens=8000)
