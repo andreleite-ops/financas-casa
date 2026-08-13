@@ -288,6 +288,20 @@ def test_nubank_compra_positiva_vira_despesa_e_pagamento_vira_credito():
     assert estorno > 0
 
 
+def test_nubank_conserta_o_acento_embaralhado_da_exportacao():
+    """A exportação do Nubank vem em UTF-8 lido como latin-1.
+
+    Nenhum acento dela chega inteiro: "Ajuste a crédito" sai "Ajuste a
+    crÃ©dito". Consertar só na tela não bastaria — a memória de
+    estabelecimentos guarda a descrição, e as duas grafias virariam chaves
+    diferentes para a mesma coisa.
+    """
+    lancamentos = _ler("nubank_fatura.xlsx", "nubank", "cartao", "2026-03")
+    ajuste = next(l for l in lancamentos if l.descricao.startswith("Ajuste"))
+    assert ajuste.descricao == "Ajuste a crédito"
+    assert ajuste.valor_centavos > 0                      # ajuste a crédito entra
+
+
 def test_nubank_reconhece_o_layout_pelas_colunas_e_nao_pelo_nome_do_arquivo():
     """O arquivo chega com qualquer nome; o que identifica é date/title/amount."""
     caminho = AMOSTRAS / "nubank_fatura.xlsx"

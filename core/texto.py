@@ -32,6 +32,28 @@ def sem_acento(txt: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", txt) if not unicodedata.combining(c))
 
 
+# "crÃ©dito" no lugar de "crédito": o arquivo foi gravado em UTF-8 e lido como
+# se fosse latin-1. A exportação do Nubank vem assim — nenhum acento dela chega
+# inteiro. Desfazer o engano é reencodar em latin-1 e decodificar em UTF-8;
+# quando o problema é outro, a conta falha e o texto original fica de pé.
+_SUSPEITA_DE_MOJIBAKE = re.compile(r"[ÃÂ][\x80-\xbf -ÿ]")
+
+
+def corrigir_acentuacao(txt: str) -> str:
+    """Conserta o acento que veio embaralhado do arquivo de origem.
+
+    Vale consertar na entrada, e não só na tela: a memória de estabelecimentos
+    guarda a descrição, e "crÃ©dito" e "crédito" viram chaves diferentes para a
+    mesma coisa.
+    """
+    if not txt or not _SUSPEITA_DE_MOJIBAKE.search(txt):
+        return txt
+    try:
+        return txt.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return txt
+
+
 def normalizar(descricao: str) -> str:
     """Forma canonica para casar regras: maiuscula, sem acento, sem ruido."""
     if not descricao:

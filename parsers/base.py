@@ -9,7 +9,7 @@ from datetime import date, datetime
 from dateutil import parser as dateparser
 
 from core.money import para_centavos
-from core.texto import normalizar
+from core.texto import corrigir_acentuacao, normalizar
 
 
 @dataclass
@@ -41,7 +41,7 @@ class Lancamento:
             self.data = self.data.date()
         if not self.competencia:
             self.competencia = self.data.strftime("%Y-%m")
-        self.descricao = " ".join(str(self.descricao).split())
+        self.descricao = corrigir_acentuacao(" ".join(str(self.descricao).split()))
 
     @property
     def descricao_norm(self) -> str:
