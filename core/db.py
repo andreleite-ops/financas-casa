@@ -160,6 +160,22 @@ duplicidades = sa.Table(
     sa.Column("criada_em", sa.DateTime, server_default=sa.func.now()),
 )
 
+analises = sa.Table(
+    "analises", metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("competencia", sa.String(7), nullable=False, index=True),
+    sa.Column("texto", sa.Text, nullable=False),
+    sa.Column("modelo", sa.String(60)),
+    # impressao digital dos numeros que geraram o texto. Com ela a tela sabe
+    # dizer "esta analise e de antes das ultimas classificacoes" em vez de
+    # mostrar texto velho como se ainda valesse — e evita pagar de novo por
+    # uma analise identica.
+    sa.Column("contexto_hash", sa.String(64)),
+    sa.Column("pergunta", sa.Text),               # nulo = a analise do mes
+    sa.Column("gerada_por", sa.String(20)),
+    sa.Column("gerada_em", sa.DateTime, server_default=sa.func.now()),
+)
+
 _engine = None
 
 

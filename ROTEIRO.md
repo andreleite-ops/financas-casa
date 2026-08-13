@@ -206,8 +206,28 @@ dinheiro) e onde os valores divergem.
    `ANTHROPIC_API_KEY = "sk-ant-..."`
 4. **Save** › **Reboot app**
 
-Liga duas coisas: a classificação por IA do que as regras não pegam, e a tela
-de análise mensal escrita.
+A tela **Análise IA** tem três abas, e as três só falam dos números já
+apurados — a IA não consulta o banco e não inventa valor nenhum:
+
+- **Leitura do mês** — o texto do mês, gravado no banco com autor, data e a
+  impressão digital dos números que o geraram. Quando alguém classifica ou
+  importa depois, a tela avisa que o texto envelheceu em vez de mostrá-lo como
+  se ainda valesse. Ficando na sessão, o mesmo mês seria pago de novo a cada
+  reboot, e a Rô não veria o que o André gerou.
+- **Perguntar sobre o mês** — pergunta livre ("por que agosto ficou caro?"),
+  respondida só com esses números. Quando a resposta não estiver neles, ela diz
+  o que falta classificar em vez de preencher com plausibilidade.
+- **Completar subcategorias** — para o que foi classificado só até a categoria.
+  A categoria escolhida por gente não entra em jogo: a pergunta é estreita
+  ("dentro de Saúde, isto é Farmácia ou Consulta?"), as sugestões aparecem para
+  conferência e nome que não existe naquela categoria é descartado.
+
+**A trava que importa:** antes de qualquer conclusão, a tela e o prompt dizem
+quanto do mês está classificado. Uma análise sobre um mês 21% classificado
+descreve 21% do mês — e sem esse aviso ela seria lida como se descrevesse o
+mês inteiro.
+
+Liga também a classificação por IA do que as regras não pegam (camada 3).
 
 ---
 

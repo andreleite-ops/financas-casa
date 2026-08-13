@@ -125,31 +125,137 @@ def sugerir_categorias(
     return sugestoes
 
 
-def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
-    """Texto da tela Analise IA a partir do resumo numerico ja calculado."""
-    if not disponivel():
-        return (
-            "**Análise por IA não configurada.**\n\n"
-            "Para ligar, adicione `ANTHROPIC_API_KEY` em `.streamlit/secrets.toml`. "
-            "Todo o resto do sistema funciona sem ela — os números das outras telas "
-            "não dependem da IA."
-        )
-    prompt = (
-        "Você é o consultor financeiro de um casal brasileiro (André e Rô) que controla "
-        "as contas da casa. Analise os números abaixo e escreva em português do Brasil, "
-        "em no máximo 5 parágrafos curtos, com números concretos:\n"
-        "1) onde o dinheiro está indo neste mês;\n"
-        "2) o que fugiu do padrão em relação aos meses anteriores;\n"
-        "3) 3 sugestões práticas e específicas de economia, com o valor que cada uma "
-        "liberaria por mês;\n"
-        "4) como está a poupança em relação à meta.\n"
-        "Seja direto e evite conselhos genéricos. Não invente dados que não estão abaixo.\n\n"
-        f"{contexto}"
-    )
+SEM_CHAVE = (
+    "**Análise por IA não configurada.**\n\n"
+    "Para ligar, adicione `ANTHROPIC_API_KEY` em `.streamlit/secrets.toml` (ou em "
+    "Settings › Secrets, no Streamlit Cloud). Todo o resto do sistema funciona sem "
+    "ela — os números das outras telas não dependem da IA."
+)
+
+# As regras que valem para qualquer coisa escrita pela IA aqui. A primeira é a
+# que mais importa: enquanto a fila de classificação não estiver vazia, os
+# totais por categoria são parciais, e uma frase segura sobre um número parcial
+# é pior do que nenhuma frase.
+REGRAS = (
+    "Regras que você não pode quebrar:\n"
+    "- Use SOMENTE os números fornecidos. Não estime, não complete, não suponha "
+    "valores que não estão escritos. Se algo não está nos dados, diga que não está.\n"
+    "- Olhe a COBERTURA DA CLASSIFICAÇÃO antes de qualquer conclusão. Se menos de "
+    "95% do gasto estiver classificado, diga isso na primeira linha e trate os "
+    "totais por categoria como parciais — fale em 'do que já está classificado'.\n"
+    "- Transferências entre contas do casal não são gasto nem receita; venda de bem "
+    "não é renda do mês. Não some nem uma coisa nem outra ao orçamento.\n"
+    "- Nunca escreva que alguém gastou demais sem citar o número e a média de "
+    "comparação.\n"
+    "- Português do Brasil, direto, sem conselho genérico de manual de finanças. "
+    "Eles são André e Rô; o que não tem dono declarado é do Casal."
+)
+
+
+def _perguntar(prompt: str, modelo: str, max_tokens: int = 1600) -> str:
     try:
         resposta = _cliente().messages.create(
-            model=modelo, max_tokens=1600, messages=[{"role": "user", "content": prompt}]
+            model=modelo, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}]
         )
         return resposta.content[0].text
     except Exception as exc:
-        return f"Não consegui gerar a análise agora ({type(exc).__name__}). Tente novamente."
+        return f"Não consegui falar com a IA agora ({type(exc).__name__}). Tente de novo."
+
+
+def sugerir_subcategorias(
+    itens: list[tuple[int, str, int, str, list[str]]],
+    modelo: str = MODELO_CLASSIFICACAO,
+) -> list[SugestaoIA]:
+    """Só a subcategoria, com a categoria já decidida por gente.
+
+    Cada item é (índice, descrição, valor, categoria escolhida, subcategorias
+    possíveis). A categoria não está em jogo: quem a escolheu foi a Rô ou o
+    André, e a IA não a revisa. A pergunta é mais estreita que a da camada 3 —
+    "dentro de Saúde, isto é Farmácia ou Consulta?" — e por isso acerta mais.
+    """
+    if not itens or not disponivel():
+        return []
+
+    blocos = []
+    for i, descricao, valor, categoria, opcoes in itens:
+        blocos.append(
+            f'{i}. "{descricao}" (R$ {abs(valor) / 100:.2f}) — categoria: {categoria}; '
+            f"opções: {' | '.join(opcoes)}"
+        )
+    prompt = (
+        "Cada lançamento abaixo já tem categoria escolhida por uma pessoa. Escolha "
+        "apenas a SUBCATEGORIA, entre as opções listadas para aquele lançamento.\n\n"
+        + "\n".join(blocos)
+        + "\n\nResponda APENAS um array JSON: "
+        '[{"i": 0, "subcategoria": "Farmácia", "confianca": 0.9}]\n'
+        "Use exatamente um dos nomes listados como opção daquele item. Quando a "
+        "descrição não permitir escolher (PIX, código sem nome, nome genérico), "
+        "devolva confianca abaixo de 0.7 — é melhor deixar para a pessoa decidir do "
+        "que chutar."
+    )
+
+    try:
+        resposta = _cliente().messages.create(
+            model=modelo, max_tokens=4000, messages=[{"role": "user", "content": prompt}]
+        )
+        dados = _extrair_json(resposta.content[0].text)
+    except Exception:
+        return []
+
+    sugestoes: list[SugestaoIA] = []
+    for item in dados:
+        try:
+            if not item.get("subcategoria"):
+                continue
+            sugestoes.append(
+                SugestaoIA(
+                    indice=int(item["i"]),
+                    categoria="",                       # a categoria não está em jogo
+                    subcategoria=str(item["subcategoria"]).strip(),
+                    confianca=float(item.get("confianca", 0.5)),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sugestoes
+
+
+def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
+    """Texto da tela Analise IA a partir do resumo numerico ja calculado."""
+    if not disponivel():
+        return SEM_CHAVE
+    prompt = (
+        "Você acompanha as contas de uma casa brasileira e escreve a leitura do mês "
+        "para o casal que a mantém. Escreva no máximo 5 parágrafos curtos, com "
+        "números concretos:\n"
+        "1) onde o dinheiro foi neste mês;\n"
+        "2) o que fugiu do padrão — use a seção 'Fora do padrão', que já traz a "
+        "comparação com a média do ano;\n"
+        "3) três sugestões de economia, cada uma com o valor que liberaria por mês. "
+        "Prefira compromisso recorrente a gasto avulso: cortar assinatura vale o ano, "
+        "cortar um jantar vale uma semana;\n"
+        "4) como está a poupança e a sobra do mês.\n\n"
+        f"{REGRAS}\n\n{contexto}"
+    )
+    return _perguntar(prompt, modelo)
+
+
+def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE) -> str:
+    """Pergunta livre sobre o mês, respondida só com os números do contexto.
+
+    Vale mais que a análise pronta quando a dúvida é específica ("por que agosto
+    ficou tão caro?"). A trava é a mesma: o que não está nos números não pode
+    ser respondido, e dizer "isto não está nos dados" é uma resposta melhor do
+    que uma frase plausível.
+    """
+    if not disponivel():
+        return SEM_CHAVE
+    prompt = (
+        "Responda à pergunta do casal sobre as contas da casa, em no máximo 3 "
+        "parágrafos curtos, usando apenas os números abaixo. Se a resposta não "
+        "estiver neles, diga exatamente o que falta classificar ou importar para "
+        "que ela possa ser respondida.\n\n"
+        f"{REGRAS}\n\n"
+        f"PERGUNTA: {pergunta.strip()}\n\n{contexto}"
+    )
+    return _perguntar(prompt, modelo, max_tokens=1200)

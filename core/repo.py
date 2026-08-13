@@ -1306,3 +1306,185 @@ def apagar_upload(engine, upload_id: int) -> int:
             conn.execute(sa.delete(db.transacoes).where(db.transacoes.c.id.in_(ids)))
         conn.execute(sa.delete(db.uploads).where(db.uploads.c.id == upload_id))
     return len(ids)
+
+
+# --------------------------------------------------------------------------
+# analise por IA: o texto do mes e a subcategoria que faltou
+# --------------------------------------------------------------------------
+def _hash_do_contexto(contexto: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(contexto.encode("utf-8")).hexdigest()
+
+
+def salvar_analise(
+    engine, *, competencia: str, texto: str, modelo: str, contexto: str,
+    usuario: str, pergunta: str | None = None,
+) -> int:
+    """Guarda a analise no banco, e nao so na sessao.
+
+    Duas razoes. A primeira: o Andre gera, a Ro abre depois e ve o mesmo texto,
+    em vez de gerar de novo. A segunda: a analise custa uma chamada paga por
+    vez, e reboot do Streamlit apaga a sessao inteira — sem gravar, o mesmo mes
+    seria pago varias vezes por dia.
+    """
+    with engine.begin() as conn:
+        return conn.execute(
+            sa.insert(db.analises).values(
+                competencia=competencia,
+                texto=texto,
+                modelo=modelo,
+                contexto_hash=_hash_do_contexto(contexto),
+                pergunta=pergunta,
+                gerada_por=usuario,
+            )
+        ).inserted_primary_key[0]
+
+
+def ultima_analise(conn, competencia: str, contexto: str | None = None) -> dict | None:
+    """A analise mais recente do mes, com aviso quando os numeros ja mudaram."""
+    linha = conn.execute(
+        sa.select(db.analises)
+        .where(db.analises.c.competencia == competencia, db.analises.c.pergunta.is_(None))
+        .order_by(db.analises.c.id.desc())
+        .limit(1)
+    ).fetchone()
+    if linha is None:
+        return None
+    registro = dict(linha._mapping)
+    registro["desatualizada"] = bool(
+        contexto is not None
+        and registro.get("contexto_hash")
+        and registro["contexto_hash"] != _hash_do_contexto(contexto)
+    )
+    return registro
+
+
+def perguntas_anteriores(conn, competencia: str, limite: int = 10) -> list[dict]:
+    consulta = (
+        sa.select(db.analises)
+        .where(db.analises.c.competencia == competencia, db.analises.c.pergunta.isnot(None))
+        .order_by(db.analises.c.id.desc())
+        .limit(limite)
+    )
+    return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def sem_subcategoria(conn, competencia: str | None = None, limite: int = 200) -> list[dict]:
+    """Classificado ate a categoria, faltando a subcategoria.
+
+    E o que sobra quando alguem classifica em volume: a categoria resolve o
+    relatorio (e ela que soma), e a subcategoria fica para depois. Este e o
+    "depois".
+    """
+    condicoes = [
+        db.transacoes.c.ativo == sa.true(),
+        db.transacoes.c.categoria_id.isnot(None),
+        db.transacoes.c.subcategoria_id.is_(None),
+    ]
+    if competencia:
+        condicoes.append(db.transacoes.c.competencia == competencia)
+    consulta = (
+        sa.select(
+            db.transacoes.c.id,
+            db.transacoes.c.data,
+            db.transacoes.c.descricao,
+            db.transacoes.c.valor_centavos,
+            db.transacoes.c.categoria_id,
+            db.categorias.c.nome.label("categoria"),
+        )
+        .select_from(
+            db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(*condicoes)
+        .order_by(db.transacoes.c.valor_centavos)
+        .limit(limite)
+    )
+    return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def sugerir_subcategorias(conn, competencia: str | None = None, limite: int = 60) -> list[dict]:
+    """Pergunta a IA so a subcategoria, com a categoria ja escolhida por gente.
+
+    Nada e gravado aqui: devolve as sugestoes para a tela mostrar lado a lado
+    com o lancamento. Aplicar e um segundo passo, com o dedo de quem confere.
+    """
+    itens = sem_subcategoria(conn, competencia=competencia, limite=limite)
+    if not itens:
+        return []
+
+    opcoes = {
+        cat["id"]: [sub["nome"] for sub in cat["subcategorias"] if sub["ativa"]]
+        for cat in plano_de_contas(conn)
+    }
+
+    entrada = []
+    posicoes = {}
+    for i, item in enumerate(itens):
+        possiveis = opcoes.get(item["categoria_id"]) or []
+        if not possiveis:
+            continue                       # categoria sem subcategoria cadastrada
+        posicoes[i] = item
+        entrada.append((i, item["descricao"], item["valor_centavos"], item["categoria"], possiveis))
+    if not entrada:
+        return []
+
+    validas = {
+        (cat_id, nome.casefold()): nome
+        for cat_id, nomes in opcoes.items()
+        for nome in nomes
+    }
+
+    sugeridas = []
+    for sugestao in ai.sugerir_subcategorias(entrada):
+        item = posicoes.get(sugestao.indice)
+        if item is None or not sugestao.subcategoria:
+            continue
+        # a IA pode inventar um nome parecido; só entra o que existe mesmo
+        # dentro daquela categoria
+        nome = validas.get((item["categoria_id"], sugestao.subcategoria.casefold()))
+        if not nome:
+            continue
+        sugeridas.append({**item, "subcategoria": nome, "confianca": sugestao.confianca})
+    return sugeridas
+
+
+def aplicar_subcategorias(engine, escolhas: dict[int, str], usuario: str) -> int:
+    """Grava as subcategorias conferidas. Nao mexe em quem ja tem uma.
+
+    A memoria de estabelecimentos nao aprende com isto de proposito: ela guarda
+    correcao de gente, e uma sugestao aceita em lote nao tem o mesmo peso de
+    alguem ter olhado aquele lancamento e decidido.
+    """
+    if not escolhas:
+        return 0
+    gravadas = 0
+    with engine.begin() as conn:
+        _, subs_idx = _indice_categorias(conn)
+        atuais = {
+            linha.id: linha.categoria_id
+            for linha in conn.execute(
+                sa.select(db.transacoes.c.id, db.transacoes.c.categoria_id).where(
+                    db.transacoes.c.id.in_(list(escolhas)),
+                    db.transacoes.c.subcategoria_id.is_(None),
+                )
+            )
+        }
+        for transacao_id, nome in escolhas.items():
+            categoria_id = atuais.get(transacao_id)
+            if categoria_id is None:
+                continue
+            subcategoria_id = subs_idx.get((categoria_id, str(nome).casefold()))
+            if not subcategoria_id:
+                continue
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id == transacao_id)
+                .values(
+                    subcategoria_id=subcategoria_id,
+                    observacao="subcategoria sugerida pela IA e conferida",
+                    classificado_por=usuario,
+                )
+            )
+            gravadas += 1
+    return gravadas

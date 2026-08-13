@@ -607,26 +607,178 @@ def orcamento(
     return sorted(saida, key=lambda linha: (-linha["percentual"], -linha["realizado"]))
 
 
+def cobertura_da_classificacao(conn, competencia: str) -> dict:
+    """Quanto do mês já está classificado — e em que profundidade.
+
+    É o primeiro número que a análise precisa saber. Um mês com metade dos
+    lançamentos na fila permite dizer "de tudo que já foi classificado, o
+    mercado é o maior gasto"; não permite dizer "o maior gasto do mês é o
+    mercado". Sem esta conta, a IA escreve a segunda frase com a confiança da
+    primeira, e quem lê decide a vida com base nela.
+    """
+    consulta = (
+        sa.select(
+            db.transacoes.c.categoria_id,
+            db.transacoes.c.subcategoria_id,
+            db.categorias.c.nome.label("categoria"),
+            sa.func.count().label("qtd"),
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+        )
+        .select_from(
+            db.transacoes.outerjoin(
+                db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id
+            )
+        )
+        .where(*_base(competencia), db.transacoes.c.valor_centavos < 0)
+        .group_by(
+            db.transacoes.c.categoria_id, db.transacoes.c.subcategoria_id, db.categorias.c.nome
+        )
+    )
+    total = classificado = com_sub = 0
+    qtd_total = qtd_sem_categoria = qtd_sem_sub = 0
+    for linha in conn.execute(consulta):
+        if linha.categoria == CATEGORIA_TRANSFERENCIA:
+            continue
+        valor, qtd = abs(int(linha.total or 0)), int(linha.qtd)
+        total += valor
+        qtd_total += qtd
+        if linha.categoria_id is None:
+            qtd_sem_categoria += qtd
+            continue
+        classificado += valor
+        if linha.subcategoria_id is None:
+            qtd_sem_sub += qtd
+        else:
+            com_sub += valor
+
+    return {
+        "gasto_total": total,
+        "gasto_classificado": classificado,
+        "gasto_sem_categoria": total - classificado,
+        "gasto_com_subcategoria": com_sub,
+        "lancamentos": qtd_total,
+        "sem_categoria": qtd_sem_categoria,
+        "sem_subcategoria": qtd_sem_sub,
+        "percentual_classificado": round(100 * classificado / total, 1) if total else 100.0,
+        "percentual_com_subcategoria": round(100 * com_sub / total, 1) if total else 100.0,
+    }
+
+
+def desvios_do_mes(conn, competencia: str, minimo_de_meses: int = 2) -> list[dict]:
+    """Categorias que fugiram do próprio histórico neste mês.
+
+    A média aqui **não** é a do orçamento (acumulado ÷ meses decorridos): é a
+    dos outros meses em que aquela categoria teve gasto. As duas respondem
+    perguntas diferentes, e usar a do orçamento aqui dizia que tudo subiu 700%
+    quando só existia um mês importado — um alarme que dispara sempre não avisa
+    nada.
+
+    Exige pelo menos dois outros meses com gasto: comparar um mês contra um
+    único outro mês é comparar dois pontos e chamar de tendência.
+    """
+    ano = int(competencia[:4])
+    mes_atual = competencia[5:7]
+    saida = []
+    for linha in tabela_mes_a_mes(conn, ano)["linhas"]:
+        if linha["categoria"] == CATEGORIA_TRANSFERENCIA:
+            continue                       # não é gasto: não tem padrão a fugir
+        no_mes = linha["meses"].get(mes_atual, 0)
+        outros = [v for mes, v in linha["meses"].items() if mes != mes_atual and v]
+        if not no_mes or len(outros) < minimo_de_meses:
+            continue
+        media = sum(outros) // len(outros)
+        if not media:
+            continue
+        variacao = round(100 * (no_mes - media) / media)
+        if abs(variacao) >= 30:
+            saida.append({
+                "categoria": linha["categoria"],
+                "no_mes": no_mes,
+                "media": media,
+                "meses_comparados": len(outros),
+                "variacao": variacao,
+                "diferenca": abs(no_mes - media),
+            })
+    saida.sort(key=lambda item: -item["diferenca"])
+    return saida
+
+
 def contexto_para_ia(conn, competencia: str) -> str:
-    """Resumo numerico que alimenta a analise escrita."""
+    """Resumo numerico que alimenta a analise escrita.
+
+    Tudo o que a IA pode dizer sai daqui — ela nao consulta o banco. Por isso
+    este texto carrega tambem o que *nao* se sabe: quanto do mes ainda esta na
+    fila, quanto esta sem subcategoria e o que ficou de fora dos totais.
+    """
     from .money import fmt_brl
 
     ano = int(competencia[:4])
     atual = resumo(conn, competencia=competencia)
+    cobertura = cobertura_da_classificacao(conn, competencia)
     linhas = [
         f"Competência: {competencia}",
         f"Receitas: {fmt_brl(atual['receitas'])}",
         f"Despesas correntes: {fmt_brl(atual['despesas'])}",
         f"Poupança/investimentos: {fmt_brl(atual['poupanca'])}",
         f"Sobra livre: {fmt_brl(atual['sobra'])}",
-        "",
-        "Gasto por categoria no mês:",
     ]
-    metas = None
+    if atual["receitas_nao_recorrentes"]:
+        linhas.append(
+            f"Dentro das receitas, {fmt_brl(atual['receitas_nao_recorrentes'])} é venda de bem "
+            "(entrada de uma vez só, não é renda do mês)."
+        )
+    if atual["transferencias"]:
+        linhas.append(
+            f"Transferências entre contas do casal no mês: {fmt_brl(atual['transferencias'])} "
+            "— dinheiro que só mudou de bolso, fora das receitas e das despesas."
+        )
+
+    linhas += [
+        "",
+        "COBERTURA DA CLASSIFICAÇÃO (leia antes de concluir qualquer coisa):",
+        f"- do gasto do mês, {cobertura['percentual_classificado']:.0f}% está classificado "
+        f"({fmt_brl(cobertura['gasto_classificado'])} de {fmt_brl(cobertura['gasto_total'])})",
+        f"- ainda na fila, sem categoria: {cobertura['sem_categoria']} lançamentos, "
+        f"{fmt_brl(cobertura['gasto_sem_categoria'])}",
+        f"- classificados só até a categoria, sem subcategoria: "
+        f"{cobertura['sem_subcategoria']} lançamentos",
+    ]
+
+    linhas += ["", "Gasto por categoria no mês:"]
     for linha in por_categoria(conn, competencia=competencia):
+        # a transferência já foi explicada acima e não é gasto: repeti-la aqui,
+        # no meio das categorias, convida a somá-la de volta
+        if linha["categoria"] == CATEGORIA_TRANSFERENCIA:
+            continue
         linhas.append(f"- {linha['categoria']}: {fmt_brl(linha['total'])} ({linha['qtd']} lançamentos)")
         for sub in por_subcategoria(conn, linha["categoria_id"], competencia=competencia)[:4]:
             linhas.append(f"    · {sub['subcategoria']}: {fmt_brl(sub['total'])}")
+
+    fora_do_padrao = desvios_do_mes(conn, competencia)
+    if fora_do_padrao:
+        linhas += ["", "Fora do padrão neste mês:"]
+        for item in fora_do_padrao[:8]:
+            sinal = "+" if item["variacao"] > 0 else ""
+            linhas.append(
+                f"- {item['categoria']}: {fmt_brl(item['no_mes'])} no mês contra "
+                f"{fmt_brl(item['media'])} de média nos outros {item['meses_comparados']} "
+                f"meses ({sinal}{item['variacao']}%)"
+            )
+    else:
+        linhas += [
+            "",
+            "Ainda não há meses suficientes para dizer o que fugiu do padrão: uma "
+            "categoria precisa de pelo menos três meses com gasto para ter média. Não "
+            "trate o valor deste mês como alto ou baixo sem essa comparação.",
+        ]
+
+    linhas += ["", "Por pessoa neste mês (sem dono declarado = Casal):"]
+    for quem in db.PESSOAS:
+        da_pessoa = resumo(conn, competencia=competencia, pessoa=quem)
+        linhas.append(
+            f"- {quem}: despesas {fmt_brl(da_pessoa['despesas'])}, "
+            f"receitas {fmt_brl(da_pessoa['receitas'])}"
+        )
 
     linhas += ["", "Evolução dos últimos meses:"]
     for mes in serie_mensal(conn, ano)[-6:]:
@@ -641,7 +793,9 @@ def contexto_para_ia(conn, competencia: str) -> str:
     if metas:
         linhas += ["", "Metas do ano (% da renda) x realizado no mês:"]
         for item in orcamento(conn, competencia, metas):
-            if item["percentual"]:
+            # meta em reais zerada = ainda não há renda lançada no mês; a linha
+            # só diria "0% de R$ 0,00" e convidaria a IA a concluir do nada
+            if item["percentual"] and item["meta"]:
                 uso = f"{item['uso']:.0f}%" if item["uso"] is not None else "—"
                 linhas.append(
                     f"- {item['categoria']}: meta {item['percentual']:.0f}% "
@@ -657,4 +811,63 @@ def contexto_para_ia(conn, competencia: str) -> str:
                 f"- {item['data']:%d/%m} {item['descricao'][:45]}: "
                 f"{fmt_brl(abs(item['valor_centavos']))} ({item['categoria'] or 'sem categoria'})"
             )
+
+    fixos = compromissos_recorrentes(conn, competencia)
+    if fixos:
+        linhas += [
+            "",
+            "Compromissos que se repetem todo mês (mesmo estabelecimento em 3 meses ou mais):",
+        ]
+        for item in fixos[:12]:
+            linhas.append(
+                f"- {item['estabelecimento']}: {fmt_brl(item['media'])}/mês, "
+                f"visto em {item['meses']} meses"
+            )
     return "\n".join(linhas)
+
+
+def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3) -> list[dict]:
+    """Gasto que aparece todo mês, pelo nome do estabelecimento.
+
+    Separa o que é escolha do mês do que é compromisso assumido. Cortar R$ 200
+    de restaurante é decisão de uma semana; cortar R$ 200 de assinatura é
+    decisão de uma vez que vale o ano inteiro — e é essa a sugestão que vale a
+    pena receber.
+    """
+    from .texto import chave_estabelecimento
+
+    ano = int(competencia[:4])
+    consulta = (
+        sa.select(
+            db.transacoes.c.descricao,
+            db.transacoes.c.competencia,
+            db.transacoes.c.valor_centavos,
+        )
+        .where(*_base(ano=ano), db.transacoes.c.valor_centavos < 0)
+    )
+    por_chave: dict[str, dict] = {}
+    for linha in conn.execute(consulta):
+        chave = chave_estabelecimento(linha.descricao)
+        if not chave or len(chave) < 4:
+            continue
+        registro = por_chave.setdefault(
+            chave, {"estabelecimento": chave, "meses": set(), "total": 0, "no_mes": 0}
+        )
+        registro["meses"].add(linha.competencia)
+        registro["total"] += abs(int(linha.valor_centavos))
+        if linha.competencia == competencia:
+            registro["no_mes"] += abs(int(linha.valor_centavos))
+
+    saida = [
+        {
+            "estabelecimento": r["estabelecimento"],
+            "meses": len(r["meses"]),
+            "total": r["total"],
+            "media": r["total"] // len(r["meses"]),
+            "no_mes": r["no_mes"],
+        }
+        for r in por_chave.values()
+        if len(r["meses"]) >= minimo_de_meses
+    ]
+    saida.sort(key=lambda item: -item["total"])
+    return saida
