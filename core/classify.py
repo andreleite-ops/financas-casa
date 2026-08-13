@@ -42,6 +42,24 @@ def _natureza_por_categoria(conn) -> dict[int, str]:
     }
 
 
+def categorias_bidirecionais(conn) -> set[int]:
+    """Categorias que aceitam os dois sinais, isentas da guarda de natureza.
+
+    Transferencia entre contas e a unica: ela existe justamente porque o mesmo
+    dinheiro aparece como credito de um lado e debito do outro. Aplicar a
+    guarda aqui recusaria metade dos lancamentos e a metade recusada voltaria a
+    ser contada como receita — que e exatamente o erro que a categoria existe
+    para evitar.
+    """
+    from .analytics import CATEGORIA_TRANSFERENCIA
+
+    return {
+        linha.id
+        for linha in conn.execute(sa.select(db.categorias.c.id, db.categorias.c.nome))
+        if linha.nome == CATEGORIA_TRANSFERENCIA
+    }
+
+
 def donos_por_categoria(conn) -> dict[int, str]:
     """categoria_id -> pessoa, para as categorias que sao de uma pessoa so.
 
@@ -97,6 +115,7 @@ def classificar_local(
     naturezas: dict[int, str],
     natureza_hint: str | None = None,
     rotulo_origem: str | None = None,
+    bidirecionais: set[int] | None = None,
 ) -> Resultado:
     """Camadas 1 e 2, sem tocar no banco nem na rede.
 
@@ -123,7 +142,8 @@ def classificar_local(
         for regra in regras:
             if not _casa(regra, texto, chave_busca):
                 continue
-            if naturezas.get(regra["categoria_id"]) != natureza_esperada:
+            if (regra["categoria_id"] not in (bidirecionais or set())
+                    and naturezas.get(regra["categoria_id"]) != natureza_esperada):
                 continue  # guarda de natureza
             status = "auto_memoria" if regra["origem"] == "aprendida" else "auto_regra"
             return Resultado(
@@ -207,6 +227,7 @@ def reclassificar_pendentes(conn, limite: int | None = None) -> int:
     regras = carregar_regras(conn)
     naturezas = _natureza_por_categoria(conn)
     donos = donos_por_categoria(conn)
+    bidirecionais = categorias_bidirecionais(conn)
     consulta = sa.select(
         db.transacoes.c.id,
         db.transacoes.c.descricao,
@@ -226,6 +247,7 @@ def reclassificar_pendentes(conn, limite: int | None = None) -> int:
             linha.descricao, linha.valor_centavos, regras, naturezas,
             natureza_hint=linha.natureza,
             rotulo_origem=linha.classificacao_origem,
+            bidirecionais=bidirecionais,
         )
         if resultado.classificado:
             valores = dict(

@@ -26,6 +26,16 @@ CATEGORIA_POUPANCA = "Poupança & Investimentos"
 # merito: o dinheiro e tao ganho quanto o salario, so nao se repete.
 SUBCATEGORIAS_NAO_RECORRENTES = ("Venda de Bens",)
 
+# Pagar a fatura do cartao nao e gasto: o gasto foram as compras, que ja estao
+# na fatura. Mas o dinheiro aparece duas vezes — como credito na fatura
+# ("Pagamento recebido") e como debito na conta corrente. Somando os dois sem
+# cuidado, a despesa do mes dobra e nasce uma receita que nunca existiu.
+#
+# Esta categoria e o lugar dos dois lados. Ela nao entra em despesas nem em
+# receitas; aparece a parte, como a poupanca, para o dinheiro continuar
+# visivel sem contaminar o resultado do mes.
+CATEGORIA_TRANSFERENCIA = "Transferências entre Contas"
+
 
 def _id_poupanca(conn) -> int | None:
     return conn.execute(
@@ -114,10 +124,15 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
         )
     )
     receitas = despesas = poupanca = sem_classe = nao_recorrentes = 0
+    transferencias = 0
     for linha in conn.execute(consulta):
         total = int(linha.total or 0)
         if linha.subcategoria in SUBCATEGORIAS_NAO_RECORRENTES:
             nao_recorrentes += total
+        if linha.categoria == CATEGORIA_TRANSFERENCIA:
+            # dinheiro andando entre contas do mesmo dono: nem gasto nem ganho
+            transferencias += total
+            continue
         if linha.categoria_id is None:
             sem_classe += total
             # sem categoria o sinal decide, a menos que a origem tenha dito de
@@ -144,6 +159,8 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
         # daqui: e esta linha que o orçamento usa como renda
         "receitas_nao_recorrentes": nao_recorrentes,
         "renda_recorrente": receitas - nao_recorrentes,
+        # o que só mudou de bolso: fica visível, fora dos dois totais
+        "transferencias": transferencias,
     }
 
 
@@ -282,6 +299,8 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
             linha.competencia, {"competencia": linha.competencia, "receitas": 0, "despesas": 0, "poupanca": 0}
         )
         total = int(linha.total or 0)
+        if linha.categoria == CATEGORIA_TRANSFERENCIA:
+            continue
         if linha.categoria == CATEGORIA_POUPANCA:
             alvo["poupanca"] += -total
         elif linha.natureza == "receita" or (
@@ -408,6 +427,8 @@ def comparativo_anual(conn, pessoa: str | None = None) -> list[dict]:
         total = int(linha.total or 0)
         if linha.subcategoria in SUBCATEGORIAS_NAO_RECORRENTES:
             alvo["receitas_nao_recorrentes"] += total
+        if linha.categoria == CATEGORIA_TRANSFERENCIA:
+            continue
         if linha.categoria_id is None:
             alvo["nao_classificado"] += total
             lado = linha.natureza_origem or ("receita" if total > 0 else "despesa")

@@ -38,6 +38,12 @@ DESPESAS: list[tuple[str, list[str]]] = [
                                 "Imposto de Renda", "Seguros (Vida / Residencial)"]),
     ("Poupança & Investimentos", ["Aporte Mensal", "Previdência Privada", "Reserva de Emergência"]),
     ("Outros", ["Saques", "Transferências a Identificar", "A Classificar"]),
+    # Nem gasto nem ganho: dinheiro andando entre contas do mesmo dono. Pagar a
+    # fatura do cartao aparece dos dois lados — credito na fatura, debito na
+    # conta — e sem um lugar proprio isso dobraria a despesa do mes e criaria
+    # uma receita que nunca existiu.
+    ("Transferências entre Contas", ["Pagamento de Fatura", "Entre Contas Próprias",
+                                     "Aplicação / Resgate"]),
 ]
 
 CONTAS_INICIAIS = [
@@ -238,6 +244,12 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
     ("PENSAO ALIMENTICIA", "Filhos & Pensão", "Pensão Alimentícia"),
     ("PENSAO", "Filhos & Pensão", "Pensão Alimentícia"),
     ("MESADA", "Filhos & Pensão", "Mesada & Ajuda"),
+    # os dois lados do pagamento de fatura
+    ("PAGAMENTO RECEBIDO", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PAGAMENTO DE FATURA", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PAGTO FATURA", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PAGAMENTO EFETUADO", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PAGAMENTO CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
     ("DARF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IRPF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IMPOSTO DE RENDA", "Financeiras & Impostos", "Imposto de Renda"),

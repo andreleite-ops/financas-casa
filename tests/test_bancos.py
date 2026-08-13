@@ -221,3 +221,50 @@ def test_nubank_reconhece_o_layout_pelas_colunas_e_nao_pelo_nome_do_arquivo():
     )
     assert lancamentos
     assert all(l.descricao for l in lancamentos)
+
+
+# ---------------------------------------------------------------------------
+# cartão e conta corrente convivendo: o pagamento da fatura não é gasto
+# ---------------------------------------------------------------------------
+def test_pagar_a_fatura_nao_dobra_a_despesa_do_mes(engine):
+    """O cenário que começa quando cartão e conta corrente entram juntos.
+
+    As compras do mês estão na fatura. O pagamento dela aparece duas vezes: como
+    crédito na própria fatura ("Pagamento recebido") e como débito na conta
+    corrente. Somando os dois sem cuidado, a despesa do mês dobra e nasce uma
+    receita que nunca existiu.
+    """
+    from datetime import date as _date
+
+    from core import analytics, repo
+    from parsers.base import Lancamento
+
+    with engine.connect() as conn:
+        cartao = next(c for c in repo.listar_contas(conn) if c["tipo"] == "cartao")
+        conta = next(c for c in repo.listar_contas(conn) if c["tipo"] == "corrente")
+
+    # a fatura: duas compras e o pagamento recebido
+    repo.importar(
+        engine, conta_id=cartao["id"], arquivo="fatura.csv", origem="extrato",
+        usuario="André", usar_ia=False,
+        lancamentos=[
+            Lancamento(_date(2026, 9, 5), "SUPERMERCADO PAO DE ACUCAR", -30_000),
+            Lancamento(_date(2026, 9, 8), "DROGARIA SAO PAULO", -20_000),
+            Lancamento(_date(2026, 9, 10), "Pagamento recebido", 50_000),
+        ],
+    )
+    # a conta corrente: o pagamento da mesma fatura
+    repo.importar(
+        engine, conta_id=conta["id"], arquivo="extrato.csv", origem="extrato",
+        usuario="André", usar_ia=False,
+        lancamentos=[Lancamento(_date(2026, 9, 10), "PAGAMENTO DE FATURA CARTAO", -50_000)],
+    )
+
+    with engine.connect() as conn:
+        resumo = analytics.resumo(conn, competencia="2026-09")
+
+    # o gasto do mês são as compras, e só elas
+    assert resumo["despesas"] == 50_000
+    assert resumo["receitas"] == 0
+    # o dinheiro que só mudou de bolso continua visível, fora dos dois totais
+    assert resumo["transferencias"] == 0      # os dois lados se anulam

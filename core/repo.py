@@ -220,6 +220,7 @@ def importar(
         regras = classify.carregar_regras(conn)
         naturezas = classify._natureza_por_categoria(conn)
         donos_de_categoria = classify.donos_por_categoria(conn)
+        bidirecionais = classify.categorias_bidirecionais(conn)
         traducoes = listar_de_para(conn)
         cats_idx, subs_idx = _indice_categorias(conn)
 
@@ -269,7 +270,8 @@ def importar(
                 natureza_esperada = lan.natureza_hint or (
                     "receita" if lan.valor_centavos > 0 else "despesa"
                 )
-                if categoria_id and naturezas.get(categoria_id) != natureza_esperada:
+                if (categoria_id and categoria_id not in bidirecionais
+                        and naturezas.get(categoria_id) != natureza_esperada):
                     categoria_id = subcategoria_id = None
                 if categoria_id and lan.subcategoria_hint:
                     subcategoria_id = subs_idx.get(
@@ -285,6 +287,7 @@ def importar(
                 lan.descricao, lan.valor_centavos, regras, naturezas,
                 natureza_hint=lan.natureza_hint,
                 rotulo_origem=lan.categoria_hint,
+                bidirecionais=bidirecionais,
             )
             if categoria_id is None and achado.classificado:
                 categoria_id = achado.categoria_id
