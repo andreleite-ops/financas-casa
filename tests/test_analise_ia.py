@@ -28,6 +28,7 @@ class _Resposta:
 @dataclass
 class _Bloco:
     text: str
+    type: str = "text"
 
 
 class _ClienteFalso:
@@ -41,6 +42,14 @@ class _ClienteFalso:
     def create(self, **kwargs):
         self.prompts.append(kwargs["messages"][0]["content"])
         return _Resposta(content=[_Bloco(text=self.texto)])
+
+
+@dataclass
+class _BlocoDePensamento:
+    """O que vem antes do texto quando o modelo pensa antes de responder."""
+
+    thinking: str = "…"
+    type: str = "thinking"
 
 
 def _ligar_ia(monkeypatch, texto: str) -> _ClienteFalso:
@@ -343,3 +352,50 @@ def test_sem_chave_a_tela_de_subcategoria_nao_chama_nada(engine, conn, monkeypat
         assert repo.sugerir_subcategorias(leitura, competencia="2026-08") == []
         # a lista do que falta continua respondendo, para a tela mostrar
         assert len(repo.sem_subcategoria(leitura, competencia="2026-08")) == 1
+
+
+# ---------------------------------------------------------------------------
+# a resposta da API: ler o texto sem tropeçar no que vem antes dele
+# ---------------------------------------------------------------------------
+def test_bloco_de_pensamento_antes_do_texto_nao_derruba_a_leitura():
+    """Foi o erro que apareceu na primeira chamada de verdade.
+
+    A resposta veio com um bloco de raciocínio na frente; ler `content[0].text`
+    às cegas estourava com AttributeError, e a tela dizia só "não consegui
+    falar com a IA" — a chave estava certa o tempo todo.
+    """
+    resposta = _Resposta(content=[_BlocoDePensamento(), _Bloco(text="O mês fechou bem.")])
+    assert ai.texto_da_resposta(resposta) == "O mês fechou bem."
+
+
+def test_falha_da_api_mostra_a_mensagem_do_erro(monkeypatch):
+    """Só o nome da exceção não permite diagnóstico: chave errada, falta de
+    crédito e modelo inexistente chegavam todos como a mesma linha."""
+    class _Explode:
+        messages = None
+
+        def create(self, **_kw):
+            raise RuntimeError("Error code: 400 - credit balance is too low")
+
+    cliente = _Explode()
+    cliente.messages = cliente
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    resposta = ai.analisar_mes("contexto")
+
+    assert "credit balance is too low" in resposta
+    assert "RuntimeError" in resposta
+
+
+def test_resposta_vazia_nao_grava_texto_em_branco(monkeypatch):
+    _ligar_ia(monkeypatch, "")
+    assert "vazio" in ai.analisar_mes("contexto")
+
+
+def test_diagnostico_mostra_o_formato_da_chave_e_nunca_a_chave(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-chave-secreta-de-verdade")
+    dados = ai.diagnostico()
+    assert dados["tem_chave"] is True
+    assert "chave-secreta" not in dados["formato_da_chave"]
+    assert "sk-ant-" in dados["formato_da_chave"]

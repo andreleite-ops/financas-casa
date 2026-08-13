@@ -129,6 +129,9 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
 
     with st.spinner("Lendo o mês…"):
         texto = ai.analisar_mes(contexto)
+    if _falhou(texto):
+        _mostrar_falha(texto)
+        return
     repo.salvar_analise(
         engine, competencia=competencia, texto=texto, modelo=ai.MODELO_ANALISE,
         contexto=contexto, usuario=usuario.get("nome", "—"),
@@ -136,6 +139,21 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
     st.markdown(texto)
     with st.expander("Números usados"):
         st.code(contexto, language="text")
+
+
+def _falhou(texto: str) -> bool:
+    return texto.startswith("**Não consegui falar com a IA")
+
+
+def _mostrar_falha(texto: str) -> None:
+    """Mostra o erro e o estado da configuração — e não grava nada.
+
+    Gravar a mensagem de erro como se fosse a análise do mês faria a tela
+    mostrá-la depois como texto do mês, e ainda marcá-la como atual.
+    """
+    st.error(texto, icon="🚫")
+    with st.expander("Estado da configuração"):
+        st.json(ai.diagnostico())
 
 
 def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
@@ -152,11 +170,15 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
             contexto = analytics.contexto_para_ia(conn, competencia)
         with st.spinner("Consultando os números…"):
             resposta = ai.responder_pergunta(contexto, pergunta)
-        repo.salvar_analise(
-            engine, competencia=competencia, texto=resposta, modelo=ai.MODELO_ANALISE,
-            contexto=contexto, usuario=usuario.get("nome", "—"), pergunta=pergunta.strip(),
-        )
-        st.markdown(resposta)
+        if _falhou(resposta):
+            _mostrar_falha(resposta)
+        else:
+            repo.salvar_analise(
+                engine, competencia=competencia, texto=resposta, modelo=ai.MODELO_ANALISE,
+                contexto=contexto, usuario=usuario.get("nome", "—"),
+                pergunta=pergunta.strip(),
+            )
+            st.markdown(resposta)
 
     with engine.connect() as conn:
         anteriores = repo.perguntas_anteriores(conn, competencia)

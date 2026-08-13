@@ -105,7 +105,7 @@ def sugerir_categorias(
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
-        dados = _extrair_json(resposta.content[0].text)
+        dados = _extrair_json(texto_da_resposta(resposta))
     except Exception:
         return []
 
@@ -152,14 +152,61 @@ REGRAS = (
 )
 
 
+def texto_da_resposta(resposta) -> str:
+    """O texto de uma resposta, ignorando blocos que não são texto.
+
+    `content[0].text` parecia bastar e não basta: a resposta pode trazer outros
+    tipos de bloco na frente, e pegar o primeiro cegamente estoura com
+    AttributeError — um erro que não diz nada a quem está olhando a tela.
+    """
+    partes = [
+        bloco.text for bloco in getattr(resposta, "content", [])
+        if getattr(bloco, "type", "") == "text" and getattr(bloco, "text", "")
+    ]
+    if partes:
+        return "\n\n".join(partes)
+    primeiro = getattr(resposta, "content", [None])[0] if getattr(resposta, "content", None) else None
+    return getattr(primeiro, "text", "") or ""
+
+
+def diagnostico() -> dict:
+    """O que a tela precisa mostrar quando a chamada falha."""
+    try:
+        import anthropic
+
+        versao = getattr(anthropic, "__version__", "?")
+    except ImportError:
+        versao = "não instalado"
+    chave = _chave_api() or ""
+    return {
+        "sdk": versao,
+        "tem_chave": bool(chave),
+        # só o formato, nunca a chave: serve para ver se colou o texto certo
+        "formato_da_chave": f"{chave[:7]}…{len(chave)} caracteres" if chave else "—",
+        "modelo_analise": MODELO_ANALISE,
+        "modelo_classificacao": MODELO_CLASSIFICACAO,
+    }
+
+
 def _perguntar(prompt: str, modelo: str, max_tokens: int = 1600) -> str:
     try:
         resposta = _cliente().messages.create(
             model=modelo, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}]
         )
-        return resposta.content[0].text
     except Exception as exc:
-        return f"Não consegui falar com a IA agora ({type(exc).__name__}). Tente de novo."
+        # o nome da exceção sozinho não permite diagnóstico nenhum: "chave
+        # inválida", "modelo inexistente" e "sem crédito" chegavam todos como
+        # uma linha igual. A mensagem do erro é o que diz qual dos três é.
+        detalhe = " ".join(str(exc).split())[:400] or type(exc).__name__
+        return (
+            "**Não consegui falar com a IA agora.**\n\n"
+            f"`{type(exc).__name__}: {detalhe}`\n\n"
+            "Se falar em *authentication*, a chave está errada ou não chegou ao app. "
+            "Se falar em *credit* ou *billing*, falta saldo na organização. "
+            "Se falar em *model*, o nome do modelo mudou e eu ajusto no código."
+        )
+    texto = texto_da_resposta(resposta)
+    return texto or "A IA respondeu vazio. Tente de novo."
 
 
 def sugerir_subcategorias(
@@ -198,7 +245,7 @@ def sugerir_subcategorias(
         resposta = _cliente().messages.create(
             model=modelo, max_tokens=4000, messages=[{"role": "user", "content": prompt}]
         )
-        dados = _extrair_json(resposta.content[0].text)
+        dados = _extrair_json(texto_da_resposta(resposta))
     except Exception:
         return []
 
