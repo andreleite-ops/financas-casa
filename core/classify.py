@@ -183,6 +183,31 @@ def classificar(conn, descricao: str, valor_centavos: int) -> Resultado:
     )
 
 
+# Palavras que dizem so COMO o dinheiro andou, nunca PARA ONDE foi. Uma
+# descricao feita so delas nao identifica estabelecimento nenhum.
+_PALAVRAS_GENERICAS = {
+    "PIX", "TED", "DOC", "QR", "CODE", "CODIGO", "DINAMICO", "ESTATICO",
+    "ENVIADO", "ENVIADA", "RECEBIDO", "RECEBIDA", "TRANSF", "TRANSFERENCIA",
+    "DEBITO", "CREDITO", "AUTOMATICO", "PAGTO", "PAGAMENTO", "ELETRON",
+    "ELETRONICO", "COBRANCA", "BOLETO", "SAQUE", "DEPOSITO", "LANC", "COD",
+    "ONLINE", "CONTA", "DA", "DE", "DO", "EM",
+}
+
+
+def chave_generica(chave: str) -> bool:
+    """A chave e so o meio de pagamento, sem nome de quem recebeu?
+
+    Existe por causa de um caso concreto: o pagamento da fatura do cartao
+    aparece no extrato como "PIX QR CODE DINAMICO". Classifica-lo como
+    transferencia esta certo — mas guardar essa chave na memoria faria **todo**
+    Pix por QR virar pagamento de fatura, e cada mercado pago por QR sumiria
+    dos gastos sem ninguem perceber. Memoria errada assim e pior que memoria
+    nenhuma: ela erra calada, todo mes.
+    """
+    palavras = [p for p in chave.split() if p]
+    return bool(palavras) and all(p in _PALAVRAS_GENERICAS for p in palavras)
+
+
 def aprender(
     conn,
     descricao: str,
@@ -190,15 +215,18 @@ def aprender(
     subcategoria_id: int | None,
     usuario: str,
     pessoa: str | None = None,
-) -> None:
+) -> bool:
     """Grava a correcao manual como memoria de estabelecimento.
 
     A chave e o estabelecimento sem parcela, data e codigo de terminal, entao a
     proxima fatura reconhece o mesmo lugar escrito de outro jeito.
+
+    Devolve False quando nao valeu guardar. O lancamento continua classificado;
+    o que nao acontece e a classificacao valer para os proximos parecidos.
     """
     chave = chave_estabelecimento(descricao)
-    if not chave or len(chave) < 3:
-        return
+    if not chave or len(chave) < 3 or chave_generica(chave):
+        return False
 
     existente = conn.execute(
         sa.select(db.regras.c.id).where(
@@ -220,6 +248,7 @@ def aprender(
                 padrao=chave, tipo_match="exato", prioridade=10, **valores
             )
         )
+    return True
 
 
 def reclassificar_pendentes(conn, limite: int | None = None) -> int:

@@ -79,13 +79,17 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                     st.warning("Escolha uma categoria antes de salvar.")
                     return
                 sub_id = next((s["id"] for s in subs if s["nome"] == sub_nome), None)
-                repo.reclassificar(
+                virou_regra = repo.reclassificar(
                     engine, item["id"], categoria_id=categoria["id"], subcategoria_id=sub_id,
                     pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
                 )
                 st.session_state["msg_classificacao"] = (
                     f"Salvo. O sistema vai reconhecer “{item['descricao'][:40]}” sozinho "
                     "na próxima importação."
+                    if virou_regra else
+                    "Salvo — só este lançamento. A descrição diz o meio de pagamento "
+                    "(PIX, TED, débito automático) e não o estabelecimento: guardá-la "
+                    "como regra faria todo lançamento parecido herdar esta classificação."
                 )
                 st.rerun()
             b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")

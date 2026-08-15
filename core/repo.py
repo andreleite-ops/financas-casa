@@ -510,7 +510,14 @@ def reclassificar(
     pessoa: str | None,
     usuario: str,
     criar_regra: bool = True,
-) -> None:
+) -> bool:
+    """Classifica um lancamento. Devolve se a correcao virou memoria.
+
+    Nem toda correcao pode virar regra: "PIX QR CODE DINAMICO" nao identifica
+    estabelecimento nenhum, e guardar essa chave faria todo Pix por QR herdar
+    esta classificacao. Quem chama usa o retorno para nao prometer na tela um
+    aprendizado que nao aconteceu.
+    """
     with engine.begin() as conn:
         linha = conn.execute(
             sa.select(db.transacoes.c.descricao).where(db.transacoes.c.id == transacao_id)
@@ -527,8 +534,11 @@ def reclassificar(
         conn.execute(
             sa.update(db.transacoes).where(db.transacoes.c.id == transacao_id).values(**valores)
         )
-        if criar_regra and linha:
-            classify.aprender(conn, linha.descricao, categoria_id, subcategoria_id, usuario, pessoa)
+        if not (criar_regra and linha):
+            return False
+        return classify.aprender(
+            conn, linha.descricao, categoria_id, subcategoria_id, usuario, pessoa
+        )
 
 
 CONTA_MANUAL = "Lançamento manual"

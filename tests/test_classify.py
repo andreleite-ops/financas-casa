@@ -115,3 +115,54 @@ def test_aprender_nao_grava_chave_curta_demais(conn):
     classify.aprender(conn, "AB", 1, None, "andre")
     depois = conn.execute(sa.select(sa.func.count()).select_from(db.regras)).scalar()
     assert depois == antes
+
+
+# ---------------------------------------------------------------------------
+# memória: o que não identifica estabelecimento não vira regra
+# ---------------------------------------------------------------------------
+def test_descricao_que_so_diz_o_meio_de_pagamento_nao_vira_memoria(engine, conn):
+    """O caso concreto: o pagamento da fatura chega como "PIX QR CODE DINAMICO".
+
+    Classificá-lo como transferência está certo. Guardar essa chave faria todo
+    Pix por QR virar pagamento de fatura — e cada mercado pago por QR sumiria
+    dos gastos, calado, todo mês.
+    """
+    import sqlalchemy as sa
+
+    from core import classify, db
+
+    categoria = conn.execute(
+        sa.select(db.categorias.c.id).where(
+            db.categorias.c.nome == "Transferências entre Contas"
+        )
+    ).scalar_one()
+
+    for generica in ("PIX QR CODE DINAMICO", "PIX ENVIADO", "DEBITO AUTOMATICO",
+                     "PAGTO ELETRON COBRANCA", "TED RECEBIDA"):
+        assert classify.aprender(conn, generica, categoria, None, "André") is False
+
+    assert conn.execute(
+        sa.select(sa.func.count()).select_from(db.regras).where(
+            db.regras.c.origem == "aprendida"
+        )
+    ).scalar() == 0
+
+
+def test_descricao_com_nome_de_estabelecimento_continua_virando_memoria(engine, conn):
+    """A trava não pode engolir o caso normal, que é o que faz a fila encolher."""
+    import sqlalchemy as sa
+
+    from core import classify, db
+
+    categoria = conn.execute(
+        sa.select(db.categorias.c.id).where(db.categorias.c.nome == "Alimentação")
+    ).scalar_one()
+
+    assert classify.aprender(conn, "PADARIA DA ESQUINA 1234", categoria, None, "André")
+    assert classify.aprender(conn, "PIX TRANSF JOAQUIM16/07", categoria, None, "André")
+    assert classify.aprender(conn, "DA ELETROPAULO 99887766", categoria, None, "André")
+
+    aprendidas = conn.execute(
+        sa.select(db.regras.c.padrao).where(db.regras.c.origem == "aprendida")
+    ).scalars().all()
+    assert len(aprendidas) == 3
