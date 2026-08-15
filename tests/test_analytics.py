@@ -137,3 +137,45 @@ def test_comparativo_anual_dois_anos(engine, conn):
     for linha in comparativo:
         assert linha["receitas"] == 500_000
         assert linha["poupanca"] == 100_000
+
+
+def test_transferencia_nao_entra_no_gasto_por_categoria(engine, conn):
+    """Pagar a fatura não é gasto — nem no gráfico, nem na meta sugerida.
+
+    O card do topo já a excluía, mas o gráfico de barras e a matriz não: o
+    pagamento da fatura aparecia como a maior despesa do ano e o total de baixo
+    não fechava com o de cima. Como a mesma função alimenta as metas sugeridas
+    pela média, a transferência viraria orçamento a perseguir.
+    """
+    from datetime import date
+
+    import sqlalchemy as sa
+
+    from core import analytics, db
+    from core.dedup import hash_lancamento
+    from core.texto import normalizar
+
+    def inserir(descricao, valor, categoria):
+        conta_id = conn.execute(sa.select(db.contas.c.id).limit(1)).scalar_one()
+        categoria_id = conn.execute(
+            sa.select(db.categorias.c.id).where(db.categorias.c.nome == categoria)
+        ).scalar_one()
+        dia = date(2026, 9, 10)
+        norm = normalizar(descricao)
+        conn.execute(
+            sa.insert(db.transacoes).values(
+                data=dia, competencia="2026-09", descricao=descricao, descricao_norm=norm,
+                valor_centavos=valor, conta_id=conta_id, categoria_id=categoria_id,
+                pessoa="Casal", status="manual", origem="extrato",
+                hash_dedup=hash_lancamento(conta_id, dia, valor, norm), ativo=True,
+            )
+        )
+
+    inserir("PAGAMENTO DE FATURA", -800_000, analytics.CATEGORIA_TRANSFERENCIA)
+    inserir("SUPERMERCADO", -50_000, "Alimentação")
+
+    categorias = analytics.por_categoria(conn, competencia="2026-09")
+    nomes = {linha["categoria"] for linha in categorias}
+
+    assert analytics.CATEGORIA_TRANSFERENCIA not in nomes
+    assert sum(linha["total"] for linha in categorias) == 50_000

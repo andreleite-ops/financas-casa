@@ -70,3 +70,57 @@ def test_dia_do_mes_respeita_meses_curtos():
     df = pd.DataFrame({"Item": ["Salário"], "fev/26": ["1.000,00"]})
     longo = tabular.desempilhar(df, "Item", dia=28)
     assert list(longo["DATA"]) == ["28/02/2026"]
+
+
+# ---------------------------------------------------------------------------
+# a tabela de baixo tem de fechar com o card de cima
+# ---------------------------------------------------------------------------
+def test_matriz_de_despesas_fecha_com_o_card_do_topo(engine, conn):
+    """Duas divergências, em direções opostas, que se somavam na tela.
+
+    A matriz incluía transferência entre contas — que o card exclui, porque
+    pagar a fatura não é gasto — e deixava de fora o que ainda não tem
+    categoria, que o card conta. Na prática o pagamento da fatura aparecia como
+    a maior "despesa" do ano e o pendente sumia da tabela.
+    """
+    from datetime import date
+
+    import sqlalchemy as sa
+
+    from core import analytics, db
+    from core.dedup import hash_lancamento
+    from core.texto import normalizar
+
+    def inserir(dia, descricao, valor, categoria=None):
+        conta_id = conn.execute(sa.select(db.contas.c.id).limit(1)).scalar_one()
+        categoria_id = None
+        if categoria:
+            categoria_id = conn.execute(
+                sa.select(db.categorias.c.id).where(db.categorias.c.nome == categoria)
+            ).scalar_one()
+        norm = normalizar(descricao)
+        conn.execute(
+            sa.insert(db.transacoes).values(
+                data=dia, competencia=dia.strftime("%Y-%m"), descricao=descricao,
+                descricao_norm=norm, valor_centavos=valor, conta_id=conta_id,
+                categoria_id=categoria_id, pessoa="Casal",
+                status="manual" if categoria_id else "pendente", origem="extrato",
+                hash_dedup=hash_lancamento(conta_id, dia, valor, norm), ativo=True,
+            )
+        )
+
+    inserir(date(2026, 8, 3), "SUPERMERCADO", -60_000, "Alimentação")
+    inserir(date(2026, 8, 4), "PIX SEM NOME", -40_000)                      # pendente
+    inserir(date(2026, 8, 10), "PAGAMENTO DE FATURA", -500_000,
+            analytics.CATEGORIA_TRANSFERENCIA)                              # não é gasto
+    inserir(date(2026, 8, 12), "SALARIO", 900_000, "Trabalho")              # receita
+
+    card = analytics.resumo(conn, competencia="2026-08")["despesas"]
+    tabela = analytics.tabela_mes_a_mes(conn, 2026)
+    soma = sum(linha["acumulado"] for linha in tabela["linhas"])
+
+    assert soma == card == 100_000
+    categorias = {linha["categoria"] for linha in tabela["linhas"]}
+    assert analytics.SEM_CATEGORIA in categorias                  # o pendente aparece
+    assert analytics.CATEGORIA_TRANSFERENCIA not in categorias    # a transferência não
+    assert "Trabalho" not in categorias                           # receita nunca entrou

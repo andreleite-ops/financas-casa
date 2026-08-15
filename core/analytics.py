@@ -178,7 +178,15 @@ def por_categoria(
         .select_from(
             db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
         )
-        .where(*_base(competencia, ano, pessoa), db.categorias.c.natureza == natureza)
+        .where(
+            *_base(competencia, ano, pessoa),
+            db.categorias.c.natureza == natureza,
+            # transferência entre contas não é gasto nem ganho: é o mesmo
+            # dinheiro mudando de bolso. Deixá-la aqui punha o pagamento da
+            # fatura como a maior barra do gráfico, virava meta de orçamento
+            # sugerida e não fechava com o card do topo, que já a exclui.
+            db.categorias.c.nome != CATEGORIA_TRANSFERENCIA,
+        )
         .group_by(db.categorias.c.id, db.categorias.c.nome)
     )
     linhas = [
@@ -315,41 +323,77 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
     return sorted(meses.values(), key=lambda linha: linha["competencia"])
 
 
-def tabela_mes_a_mes(conn, ano: int, pessoa: str | None = None) -> dict:
-    """Matriz categoria x mes, com acumulado no ano e total do ano anterior."""
-    consulta = (
+SEM_CATEGORIA = "— sem categoria —"
+
+
+def _consulta_da_matriz(ano: int, pessoa: str | None):
+    """Base da matriz de despesas: junção externa, para o pendente entrar.
+
+    Junção interna deixava de fora o que ainda não tem categoria — e era
+    justamente esse o dinheiro que fazia a tabela não fechar com o card do
+    topo, que sempre contou o pendente.
+    """
+    return (
         sa.select(
             db.categorias.c.nome,
-            db.categorias.c.id,
+            db.categorias.c.natureza,
+            db.transacoes.c.natureza.label("natureza_origem"),
+            db.transacoes.c.categoria_id,
             db.transacoes.c.competencia,
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
-            db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            db.transacoes.outerjoin(
+                db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id
+            )
         )
-        .where(*_base(ano=ano, pessoa=pessoa), db.categorias.c.natureza == "despesa")
-        .group_by(db.categorias.c.nome, db.categorias.c.id, db.transacoes.c.competencia)
+        .where(*_base(ano=ano, pessoa=pessoa))
+        .group_by(
+            db.categorias.c.nome, db.categorias.c.natureza, db.transacoes.c.natureza,
+            db.transacoes.c.categoria_id, db.transacoes.c.competencia,
+        )
     )
+
+
+def _nome_da_linha(linha) -> str | None:
+    """Em que linha da matriz este grupo entra — None quando não é despesa.
+
+    Transferência entre contas fica de fora pelo mesmo motivo que fica fora do
+    card: não é gasto, é o mesmo dinheiro mudando de bolso. Deixá-la aqui punha
+    o pagamento da fatura como a maior "despesa" do ano.
+    """
+    if linha.nome == CATEGORIA_TRANSFERENCIA:
+        return None
+    if linha.categoria_id is None:
+        total = int(linha.total or 0)
+        lado = linha.natureza_origem or ("receita" if total > 0 else "despesa")
+        return SEM_CATEGORIA if lado == "despesa" else None
+    return linha.nome if linha.natureza == "despesa" else None
+
+
+def tabela_mes_a_mes(conn, ano: int, pessoa: str | None = None) -> dict:
+    """Matriz categoria x mes, com acumulado no ano e total do ano anterior.
+
+    Fecha com o card de despesas do topo: mesma exclusão de transferências e
+    mesma inclusão do que ainda não foi classificado.
+    """
     matriz: dict[str, dict[str, int]] = {}
     meses: set[str] = set()
-    for linha in conn.execute(consulta):
+    for linha in conn.execute(_consulta_da_matriz(ano, pessoa)):
+        nome = _nome_da_linha(linha)
+        if nome is None:
+            continue
         mes = linha.competencia[5:7]
         meses.add(mes)
-        matriz.setdefault(linha.nome, {})[mes] = abs(int(linha.total or 0))
+        acumulado = matriz.setdefault(nome, {})
+        acumulado[mes] = acumulado.get(mes, 0) + abs(int(linha.total or 0))
 
-    anterior = {
-        linha.nome: abs(int(linha.total or 0))
-        for linha in conn.execute(
-            sa.select(
-                db.categorias.c.nome, sa.func.sum(db.transacoes.c.valor_centavos).label("total")
-            )
-            .select_from(
-                db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
-            )
-            .where(*_base(ano=ano - 1, pessoa=pessoa), db.categorias.c.natureza == "despesa")
-            .group_by(db.categorias.c.nome)
-        )
-    }
+    anterior: dict[str, int] = {}
+    for linha in conn.execute(_consulta_da_matriz(ano - 1, pessoa)):
+        nome = _nome_da_linha(linha)
+        if nome is None:
+            continue
+        anterior[nome] = anterior.get(nome, 0) + abs(int(linha.total or 0))
 
     ordem_meses = sorted(meses)
     meses_ja_decorridos = meses_decorridos(ano)
@@ -907,10 +951,6 @@ def contexto_para_ia(conn, competencia: str) -> str:
 
     linhas += ["", "Gasto por categoria no mês:"]
     for linha in por_categoria(conn, competencia=competencia):
-        # a transferência já foi explicada acima e não é gasto: repeti-la aqui,
-        # no meio das categorias, convida a somá-la de volta
-        if linha["categoria"] == CATEGORIA_TRANSFERENCIA:
-            continue
         linhas.append(f"- {linha['categoria']}: {fmt_brl(linha['total'])} ({linha['qtd']} lançamentos)")
         for sub in por_subcategoria(conn, linha["categoria_id"], competencia=competencia)[:4]:
             linhas.append(f"    · {sub['subcategoria']}: {fmt_brl(sub['total'])}")

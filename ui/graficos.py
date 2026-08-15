@@ -88,13 +88,21 @@ def receitas_despesas(serie: list[dict]):
             alt.Axis(labelAngle=0, **_EIXO) if com_rotulo_x
             else alt.Axis(labels=False, ticks=False, title=None, domainColor=LINHA)
         )
+        dados = df[df["serie"].isin(series)]
+        # painel inteiro zerado (o mês do cartão antes de entrar o extrato, por
+        # exemplo) degenera a escala: o Vega calcula os cortes num intervalo de
+        # largura zero e imprime "NaN" no eixo. Um teto de R$ 1 mantém o painel
+        # vazio, mas legível.
+        teto = float(dados["valor"].max() or 0)
+        escala = alt.Scale(domain=[0, 1]) if teto <= 0 else alt.Undefined
         return (
-            alt.Chart(df[df["serie"].isin(series)])
+            alt.Chart(dados)
             .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, size=18)
             .encode(
                 x=alt.X("mes:N", sort=alt.SortField("ordem"), title=None, axis=eixo_x),
                 xOffset=alt.XOffset("serie:N", sort=series),
-                y=alt.Y("valor:Q", title=titulo, axis=alt.Axis(format="~s", **_EIXO)),
+                y=alt.Y("valor:Q", title=titulo, scale=escala,
+                        axis=alt.Axis(format="~s", **_EIXO)),
                 color=cor,
                 tooltip=tooltip,
             )
