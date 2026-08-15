@@ -597,3 +597,78 @@ def test_sdk_antigo_sem_output_config_continua_funcionando(engine, conn, monkeyp
 
     assert ai.analisar_mes("contexto") == "análise do mês"
     assert len(cliente.chamadas) == 1
+
+
+# ---------------------------------------------------------------------------
+# camada 3 dentro da importação — o caminho que só roda com a chave ligada
+# ---------------------------------------------------------------------------
+def test_importar_com_ia_ligada_classifica_e_nao_quebra(engine, monkeypatch):
+    """Este caminho derrubou o app na primeira importação real com a chave.
+
+    Todos os testes de importação rodavam com `usar_ia=False`, então a camada
+    3 nunca era executada — e uma constante lida do módulo errado só apareceu
+    quando o André subiu a fatura com a IA já configurada. Erro de digitação
+    que passou porque o caminho não tinha teste, não porque era difícil.
+    """
+    from datetime import date as _date
+
+    from parsers.base import Lancamento
+
+    sugestoes = (
+        '[{"i": 0, "categoria": "Alimentação", "subcategoria": "No Domicílio", "confianca": 0.95},'
+        ' {"i": 1, "categoria": "Alimentação", "subcategoria": "Fora do Domicílio", "confianca": 0.4}]'
+    )
+    _ligar_ia(monkeypatch, sugestoes)
+
+    with engine.connect() as conn:
+        conta = repo.listar_contas(conn)[0]
+
+    resumo = repo.importar(
+        engine, conta_id=conta["id"], arquivo="fatura.pdf", origem="extrato",
+        usuario="André", usar_ia=True,
+        lancamentos=[
+            Lancamento(_date(2026, 8, 5), "ESTABELECIMENTO SEM REGRA UM", -10_000),
+            Lancamento(_date(2026, 8, 6), "ESTABELECIMENTO SEM REGRA DOIS", -20_000),
+        ],
+    )
+
+    assert resumo["importados"] == 2
+    with engine.connect() as conn:
+        linhas = {
+            linha.descricao: (linha.status, linha.confianca, linha.observacao)
+            for linha in conn.execute(
+                sa.select(
+                    db.transacoes.c.descricao, db.transacoes.c.status,
+                    db.transacoes.c.confianca, db.transacoes.c.observacao,
+                )
+            )
+        }
+    # confiança alta entra classificada
+    assert linhas["ESTABELECIMENTO SEM REGRA UM"][0] == "auto_ia"
+    # confiança baixa fica na fila, com a sugestão anotada para quem for decidir
+    status, _, observacao = linhas["ESTABELECIMENTO SEM REGRA DOIS"]
+    assert status == "pendente"
+    assert "confiança baixa" in (observacao or "")
+
+
+def test_importar_sem_chave_nao_tenta_a_ia(engine, monkeypatch):
+    """Sem chave, a importação segue por regras + fila, sem tocar na rede."""
+    from datetime import date as _date
+
+    from parsers.base import Lancamento
+
+    monkeypatch.setattr(ai, "disponivel", lambda: False)
+
+    def _explode():
+        raise AssertionError("não pode instanciar o cliente sem chave")
+
+    monkeypatch.setattr(ai, "_cliente", _explode)
+
+    with engine.connect() as conn:
+        conta = repo.listar_contas(conn)[0]
+    resumo = repo.importar(
+        engine, conta_id=conta["id"], arquivo="fatura.pdf", origem="extrato",
+        usuario="André", usar_ia=True,
+        lancamentos=[Lancamento(_date(2026, 8, 5), "ESTABELECIMENTO SEM REGRA", -10_000)],
+    )
+    assert resumo["importados"] == 1

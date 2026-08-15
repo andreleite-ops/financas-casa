@@ -471,7 +471,7 @@ def _classificar_com_ia(conn, pendentes: list[tuple[int, str, int]]) -> int:
             natureza_esperada = "receita" if valor > 0 else "despesa"
             if naturezas.get(categoria_id) != natureza_esperada:
                 continue
-            if sugestao.confianca < ai.LIMITE_CONFIANCA_IA:
+            if sugestao.confianca < classify.LIMITE_CONFIANCA_IA:
                 conn.execute(
                     sa.update(db.transacoes)
                     .where(db.transacoes.c.id == transacao_id)
