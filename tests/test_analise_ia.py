@@ -304,7 +304,13 @@ def test_subcategoria_inventada_pela_ia_e_descartada(engine, conn, monkeypatch):
 
     _ligar_ia(monkeypatch, '[{"i": 0, "subcategoria": "Remédios e afins", "confianca": 0.99}]')
     with engine.connect() as leitura:
-        assert repo.sugerir_subcategorias(leitura, competencia="2026-08") == []
+        linhas = repo.sugerir_subcategorias(leitura, competencia="2026-08")
+
+    # o nome inventado é descartado, mas o lançamento continua na tela — sem
+    # sugestão e com as opções ao lado, para ser escolhido à mão ali mesmo
+    assert len(linhas) == 1
+    assert linhas[0]["subcategoria"] is None
+    assert "Farmácia" in linhas[0]["opcoes"]
 
 
 def test_aplicar_subcategoria_nao_sobrescreve_quem_ja_tem(engine, conn):
@@ -349,8 +355,12 @@ def test_sem_chave_a_tela_de_subcategoria_nao_chama_nada(engine, conn, monkeypat
 
     monkeypatch.setattr(ai, "_cliente", _explode)
     with engine.connect() as leitura:
-        assert repo.sugerir_subcategorias(leitura, competencia="2026-08") == []
-        # a lista do que falta continua respondendo, para a tela mostrar
+        linhas = repo.sugerir_subcategorias(leitura, competencia="2026-08")
+        # sem chave não há sugestão nenhuma, mas a tela continua servindo para
+        # classificar à mão: o lançamento aparece com as opções ao lado
+        assert len(linhas) == 1
+        assert linhas[0]["subcategoria"] is None
+        assert linhas[0]["opcoes"]
         assert len(repo.sem_subcategoria(leitura, competencia="2026-08")) == 1
 
 

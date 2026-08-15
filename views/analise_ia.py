@@ -292,24 +292,15 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
         f"{len(faltando)} lançamentos com categoria e sem subcategoria neste mês, "
         f"{_reais(total)}. A categoria escolhida não é alterada."
     )
-    if not ligada:
-        st.dataframe(
-            [
-                {
-                    "Data": f"{item['data']:%d/%m}",
-                    "Descrição": item["descricao"][:50],
-                    "Categoria": item["categoria"],
-                    "Valor": fmt_brl(item["valor_centavos"]),
-                }
-                for item in faltando[:50]
-            ],
-            width="stretch", hide_index=True,
-        )
-        return
-
-    if st.button("Sugerir subcategorias (até 60 por vez)", type="primary", key="ia_subs"):
+    # sem chave a tela continua servindo: a lista de subcategorias vem do plano
+    # de contas, não da IA. Muda só o que aparece preenchido.
+    rotulo = (
+        "Sugerir subcategorias (até 60 por vez)" if ligada
+        else "Listar 60 para preencher à mão"
+    )
+    if st.button(rotulo, type="primary", key="ia_subs"):
         with engine.connect() as conn:
-            with st.spinner("Perguntando à IA…"):
+            with st.spinner("Perguntando à IA…" if ligada else "Montando a lista…"):
                 st.session_state["sugestoes_sub"] = repo.sugerir_subcategorias(
                     conn, competencia=competencia, limite=60
                 )
@@ -318,25 +309,71 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     if not sugestoes:
         return
 
+    _tabela_de_subcategorias(engine, sugestoes, usuario)
+
+
+DEIXAR_PARA_DEPOIS = "— deixar para depois —"
+CONFIANCA_PARA_PREENCHER = 0.8
+
+
+def _tabela_de_subcategorias(engine, sugestoes: list[dict], usuario: dict) -> None:
+    """Uma linha por lançamento, com a escolha ao lado — sugerida ou não.
+
+    Os que a IA não soube dizer aparecem aqui do mesmo jeito, com o campo em
+    branco. Some-los da tela obrigava a caçar o lançamento numa outra tela
+    depois; deixá-los com a lista ao lado resolve no mesmo gesto, enquanto o
+    lançamento ainda está na frente de quem olha.
+
+    A confiança alta já vem preenchida (é aceitar em bloco); a baixa vem em
+    branco de propósito — é ela que precisa de gente, e um valor preenchido
+    seria aceito no automático justamente onde a IA disse não saber.
+    """
+    sem_sugestao = [item for item in sugestoes if not item["subcategoria"]]
     st.caption(
-        "Confira antes de aplicar. Confiança baixa quer dizer que a descrição não "
-        "permitia decidir — desmarque e deixe para a fila."
+        f"{len(sugestoes)} lançamentos. Os de confiança alta já vêm preenchidos; "
+        f"confira e aplique. "
+        + (
+            f"Em {len(sem_sugestao)} a IA não soube decidir — escolha na lista ao lado."
+            if sem_sugestao else ""
+        )
     )
+
     escolhas: dict[int, str] = {}
+    cabecalho = st.columns([3, 2, 2.4, 1.1, 1])
+    for coluna, titulo in zip(cabecalho, ("Lançamento", "Categoria", "Subcategoria",
+                                          "Confiança", "Valor")):
+        coluna.caption(f"**{titulo}**")
+
     for item in sugestoes:
-        colunas = st.columns([0.5, 3, 2, 2, 1])
-        aceitar = colunas[0].checkbox(
-            "aceitar", value=item["confianca"] >= 0.8, key=f"sub_{item['id']}",
+        colunas = st.columns([3, 2, 2.4, 1.1, 1])
+        colunas[0].write(f"{item['data']:%d/%m} {item['descricao'][:38]}")
+        colunas[1].write(item["categoria"])
+
+        opcoes = [DEIXAR_PARA_DEPOIS] + list(item["opcoes"])
+        sugerida = item["subcategoria"]
+        preencher = bool(sugerida) and item["confianca"] >= CONFIANCA_PARA_PREENCHER
+        indice = opcoes.index(sugerida) if preencher and sugerida in opcoes else 0
+        escolha = colunas[2].selectbox(
+            "subcategoria", opcoes, index=indice, key=f"sub_{item['id']}",
             label_visibility="collapsed",
         )
-        colunas[1].write(f"{item['data']:%d/%m} {item['descricao'][:40]}")
-        colunas[2].write(item["categoria"])
-        colunas[3].write(f"**{item['subcategoria']}**")
-        colunas[4].write(f"{item['confianca']:.0%}")
-        if aceitar:
-            escolhas[item["id"]] = item["subcategoria"]
 
-    if st.button(f"Aplicar {len(escolhas)} subcategorias", key="ia_aplicar_subs"):
+        if sugerida and not preencher:
+            colunas[3].caption(f"IA: {sugerida} ({item['confianca']:.0%})")
+        elif sugerida:
+            colunas[3].caption(f"{item['confianca']:.0%}")
+        else:
+            colunas[3].caption("—")
+        colunas[4].caption(fmt_brl(item["valor_centavos"]))
+
+        if escolha != DEIXAR_PARA_DEPOIS:
+            escolhas[item["id"]] = escolha
+
+    st.divider()
+    if st.button(
+        f"Aplicar {len(escolhas)} subcategorias", key="ia_aplicar_subs",
+        type="primary", disabled=not escolhas,
+    ):
         gravadas = repo.aplicar_subcategorias(engine, escolhas, usuario.get("nome", "—"))
         st.session_state.pop("sugestoes_sub", None)
         st.success(f"{gravadas} subcategoria(s) preenchida(s).")

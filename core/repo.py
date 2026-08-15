@@ -1455,18 +1455,33 @@ def sugerir_subcategorias(conn, competencia: str | None = None, limite: int = 60
         for nome in nomes
     }
 
-    sugeridas = []
+    # a IA pode inventar um nome parecido; só entra o que existe mesmo dentro
+    # daquela categoria
+    por_indice: dict[int, tuple[str, float]] = {}
     for sugestao in ai.sugerir_subcategorias(entrada):
         item = posicoes.get(sugestao.indice)
         if item is None or not sugestao.subcategoria:
             continue
-        # a IA pode inventar um nome parecido; só entra o que existe mesmo
-        # dentro daquela categoria
         nome = validas.get((item["categoria_id"], sugestao.subcategoria.casefold()))
-        if not nome:
-            continue
-        sugeridas.append({**item, "subcategoria": nome, "confianca": sugestao.confianca})
-    return sugeridas
+        if nome:
+            por_indice[sugestao.indice] = (nome, sugestao.confianca)
+
+    # Devolve TODOS os candidatos, com e sem sugestão. O que a IA não soube
+    # dizer é justamente o que precisa de gente — e some da tela era o pior
+    # lugar para ele ir parar: viraria caça ao lançamento numa outra tela,
+    # depois. Aqui ele aparece com a lista de subcategorias ao lado, pronto
+    # para ser escolhido à mão no mesmo gesto.
+    saida = []
+    for i, item in posicoes.items():
+        nome, confianca = por_indice.get(i, (None, 0.0))
+        saida.append({
+            **item,
+            "subcategoria": nome,
+            "confianca": confianca,
+            "opcoes": opcoes.get(item["categoria_id"]) or [],
+        })
+    saida.sort(key=lambda linha: (linha["subcategoria"] is not None, linha["valor_centavos"]))
+    return saida
 
 
 def aplicar_subcategorias(engine, escolhas: dict[int, str], usuario: str) -> int:
