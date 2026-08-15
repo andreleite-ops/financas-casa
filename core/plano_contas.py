@@ -249,6 +249,10 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
     ("PAGAMENTO DE FATURA", "Transferências entre Contas", "Pagamento de Fatura"),
     ("PAGTO FATURA", "Transferências entre Contas", "Pagamento de Fatura"),
     ("PAGAMENTO EFETUADO", "Transferências entre Contas", "Pagamento de Fatura"),
+    # a fatura em PDF do Nubank chama o pagamento da fatura anterior de
+    # "Pagamento em 21 JUL". Sem esta regra ele fica sem categoria e, por ser
+    # entrada, é somado como receita — uma renda que nunca existiu.
+    ("PAGAMENTO EM", "Transferências entre Contas", "Pagamento de Fatura"),
     ("PAGAMENTO CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
     ("DARF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IRPF", "Financeiras & Impostos", "Imposto de Renda"),

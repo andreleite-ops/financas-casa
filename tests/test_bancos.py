@@ -522,3 +522,87 @@ def test_pagar_a_fatura_nao_dobra_a_despesa_do_mes(engine):
     assert resumo["receitas"] == 0
     # o dinheiro que só mudou de bolso continua visível, fora dos dois totais
     assert resumo["transferencias"] == 0      # os dois lados se anulam
+
+
+# ---------------------------------------------------------------------------
+# Nubank em PDF — sinal matemático, portador por bloco, cartão na linha
+# ---------------------------------------------------------------------------
+def _texto_nubank() -> str:
+    caminho = AMOSTRAS / "nubank_fatura.txt"
+    if not caminho.exists():                     # pragma: no cover
+        pytest.skip("amostra da fatura do Nubank não está no repositório")
+    return caminho.read_text(encoding="utf-8")
+
+
+def test_nubank_pdf_fecha_com_o_total_impresso_na_fatura():
+    from parsers import fatura_nubank
+
+    texto = _texto_nubank()
+    lancamentos, _ = fatura_nubank.extrair_linhas(texto, competencia="2026-08")
+    conferencia = fatura_nubank.conferir(texto, lancamentos)
+
+    assert conferencia["confere"], (
+        f"líquido lido {fmt_brl(conferencia['liquido'])} contra "
+        f"{fmt_brl(conferencia['total_declarado'])} impresso"
+    )
+
+
+def test_nubank_pdf_le_o_sinal_matematico_de_menos():
+    """O Nubank imprime −R$ com U+2212, não com o hífen do teclado.
+
+    Procurando só o hífen, o pagamento da fatura anterior entrava como gasto:
+    Num arquivo real isso somou ao mês o valor da fatura inteira do mês
+    anterior — um erro de duas vezes e meia.
+    """
+    from parsers import fatura_nubank
+
+    lancamentos, _ = fatura_nubank.extrair_linhas(_texto_nubank(), competencia="2026-08")
+    por_descricao = {l.descricao: l.valor_centavos for l in lancamentos}
+
+    assert por_descricao["Pagamento em 21 JUL"] == para_centavos("5.000,00")
+    assert por_descricao['Estorno de "Mercado do Bairro"'] > 0
+    assert por_descricao["IOF de volta de Servico Internacional"] > 0
+    assert por_descricao['IOF de "Servico Internacional"'] < 0     # este é cobrança
+
+
+def test_nubank_pdf_separa_as_compras_por_portador():
+    """A fatura vem em blocos, um por pessoa — é daí que sai o dono do gasto."""
+    from parsers import fatura_nubank
+
+    lancamentos, _ = fatura_nubank.extrair_linhas(_texto_nubank(), competencia="2026-08")
+    donos = {l.descricao: l.pessoa_hint for l in lancamentos}
+
+    assert donos["Padaria da Esquina - Parcela 3/4"] == "Primeiro Titular"
+    assert donos["Farmacia do Bairro"] == "Segunda Titular"
+
+
+def test_nubank_pdf_guarda_o_cartao_e_nao_o_deixa_na_descricao():
+    from parsers import fatura_nubank
+
+    lancamentos, _ = fatura_nubank.extrair_linhas(_texto_nubank(), competencia="2026-08")
+    padaria = next(l for l in lancamentos if "Padaria" in l.descricao)
+
+    assert padaria.descricao == "Padaria da Esquina - Parcela 3/4"    # sem os ••••
+    assert padaria.extra["cartao_final"] == "1111"
+
+
+def test_nubank_pdf_ignora_conversao_de_moeda_e_simulacao_de_parcelamento():
+    """Duas armadilhas: a linha de câmbio tem valor, e a simulação de
+    parcelamento imprime um "Total a pagar" que ninguém contratou."""
+    from parsers import fatura_nubank
+
+    texto = _texto_nubank()
+    lancamentos, _ = fatura_nubank.extrair_linhas(texto, competencia="2026-08")
+    descricoes = [l.descricao for l in lancamentos]
+
+    assert not any("Conversão" in d or "BRL" in d for d in descricoes)
+    assert not any("Total a pagar" in d for d in descricoes)
+    # o total conferido é o do resumo, não o dos 3x com juros
+    assert fatura_nubank.totais_declarados(texto)["total"] == para_centavos("1.264,56")
+
+
+def test_nubank_pdf_recusa_arquivo_que_nao_e_fatura():
+    from parsers import fatura_nubank
+
+    with pytest.raises(Exception):
+        fatura_nubank.extrair_linhas("um pdf qualquer sem lançamento nenhum")

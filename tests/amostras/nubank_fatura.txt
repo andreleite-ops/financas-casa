@@ -1,0 +1,40 @@
+Olá, Fulano.
+Esta é a sua fatura de
+agosto, no valor de
+R$ 1.264,56
+Data de vencimento: 21 AGO 2026
+Período vigente: 14 JUL a 14 AGO
+1 de 4
+TITULAR DO CARTÃO
+FATURA 21 AGO 2026 EMISSÃO E ENVIO 14 AGO 2026
+2. Parcele a sua fatura
+Total a pagar R$ 1.400,00 R$ 1.500,00
+Valor de entrada R$ 200,00 R$ 200,00
+Juros totais R$ 165,44 R$ 265,44
+3 de 4
+RESUMO DA FATURA ATUAL
+Fatura anterior R$ 5.000,00
+Pagamento recebido −R$ 5.000,00
+Total de compras de todos os cartões, 14 JUL a 14 AGO R$ 1.294,46
+IOF de compras internacionais R$ 10,00
+Outros lançamentos −R$ 39,90
+Total a pagar R$ 1.264,56
+PRÓXIMAS FATURAS
+Fechamento da próxima fatura 14 SET 2026
+4 de 4
+TITULAR DO CARTÃO
+FATURA 21 AGO 2026 EMISSÃO E ENVIO 14 AGO 2026
+TRANSAÇÕES DE 14 JUL A 14 AGO
+Primeiro Titular R$ 1.014,46
+14 JUL •••• 1111 Padaria da Esquina - Parcela 3/4 R$ 211,38
+15 JUL •••• 1111 Servico Internacional R$ 803,08
+BRL 800.00 = USD 150.00
+Conversão: BRL 5.33 = USD 1 = R$ 5,33
+15 JUL IOF de "Servico Internacional" R$ 10,00
+16 JUL IOF de volta de Servico Internacional −R$ 10,00
+TRANSAÇÕES DE 14 JUL A 14 AGO
+Compras de Segunda Titular R$ 280,00
+17 JUL •••• 2222 Farmacia do Bairro R$ 120,00
+18 JUL •••• 2222 Mercado do Bairro R$ 160,00
+19 JUL Estorno de "Mercado do Bairro" −R$ 29,90
+21 JUL Pagamento em 21 JUL −R$ 5.000,00

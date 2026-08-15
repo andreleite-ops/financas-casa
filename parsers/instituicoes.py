@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .base import Lancamento, ajustar_ano_fatura
 from . import pdf as leitor_pdf
-from . import extrato_itau as leitor_itau, tabular
+from . import extrato_itau as leitor_itau, fatura_nubank as leitor_nubank, tabular
 
 # Nubank exporta CSV com colunas fixas: date, title, amount (fatura) ou
 # Data, Valor, Identificador, Descricao (conta). Valor da fatura vem positivo.
@@ -66,7 +66,11 @@ def nubank(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
             return tabular.extrair(df, MAPA_NUBANK_FATURA, inverter_sinal=True, **kw)[0]
         mapa = tabular.sugerir_mapeamento(df.columns)
         return tabular.extrair(df, mapa, **kw)[0]
-    return leitor_pdf.ler(conteudo, nome, tudo_despesa=True, **kw)
+    # a fatura em PDF tem leitor próprio: o Nubank imprime o sinal de menos com
+    # o caractere matemático, divide as compras por portador e põe o final do
+    # cartão em cada linha — nada disso o leitor genérico enxerga
+    kw.pop("inverter_sinal", None)
+    return leitor_nubank.ler(conteudo, nome, **kw)
 
 
 def xp(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
