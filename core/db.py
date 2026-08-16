@@ -256,20 +256,56 @@ def get_engine():
     global _engine
     if _engine is None:
         url = url_do_banco()
-        kwargs = {"future": True, "pool_pre_ping": True}
+        # pool_pre_ping custa um "select 1" por conexao pega do pool, e o
+        # pooler do Supabase derruba conexao ociosa — sem ele, o erro aparece
+        # na cara de quem clicou. Reciclar antes desse limite faz o ping
+        # encontrar conexao viva quase sempre, em vez de gastar a ida
+        # descobrindo que morreu para so entao abrir outra.
+        kwargs = {"future": True, "pool_pre_ping": True, "pool_recycle": 300}
         if url.startswith("sqlite"):
             kwargs.pop("pool_pre_ping")
+            kwargs.pop("pool_recycle")
             kwargs["connect_args"] = {"check_same_thread": False}
             # o caminho pode vir de DATABASE_URL apontando para pasta inexistente
             caminho = url.split("///", 1)[-1]
             if caminho and caminho != ":memory:":
                 Path(caminho).expanduser().parent.mkdir(parents=True, exist_ok=True)
         _engine = sa.create_engine(url, **kwargs)
+        sa.event.listen(_engine, "before_cursor_execute", _contar_escrita)
         if url.startswith("sqlite"):
             @sa.event.listens_for(_engine, "connect")
             def _fk_on(dbapi_con, _):
                 dbapi_con.execute("PRAGMA foreign_keys=ON")
     return _engine
+
+
+# --------------------------------------------------------------------------
+# carimbo de versao dos dados
+# --------------------------------------------------------------------------
+# A tela guarda em cache leituras caras (o contexto da IA, o plano de contas)
+# e precisa saber quando joga-las fora. Fazer isso a mao — lembrar de limpar o
+# cache em cada ponto de gravacao do app — e o jeito de transformar cache em
+# bug: basta esquecer um, e a tela passa a mentir sobre o que acabou de ser
+# salvo, calada.
+#
+# Aqui quem invalida e a propria escrita. Toda instrucao que nao e leitura
+# passa por este contador, venha de onde vier, e o numero entra na chave do
+# cache. Nao ha ponto de gravacao para lembrar porque nao ha ponto de
+# gravacao para esquecer.
+_versao_dados = 0
+
+_LEITURAS = ("SELECT", "PRAGMA", "SHOW", "WITH", "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT")
+
+
+def _contar_escrita(conn, cursor, instrucao, parametros, contexto, muitos) -> None:
+    global _versao_dados
+    if not instrucao.lstrip().upper().startswith(_LEITURAS):
+        _versao_dados += 1
+
+
+def versao_dos_dados() -> int:
+    """Quantas escritas este processo já viu. Chave de cache, não contagem."""
+    return _versao_dados
 
 
 def resetar_engine() -> None:

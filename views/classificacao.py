@@ -6,7 +6,7 @@ import streamlit as st
 
 from core import classify, db, repo
 from core.money import fmt_brl
-from ui import destinos
+from ui import dados, destinos
 
 SEM_SUB = "— sem subcategoria —"
 ESCOLHER = {"id": None, "nome": "— escolher categoria —", "subcategorias": []}
@@ -105,16 +105,17 @@ def _destinos(plano, natureza: str) -> dict[str, tuple[int, int | None] | None]:
     return {ESCOLHER["nome"]: None, **destinos.do_plano(plano, natureza)}
 
 
-def _aba_de_para(engine, usuario: dict, plano) -> None:
+def _aba_de_para(engine, usuario: dict, plano, rotulos, traduzidos) -> None:
     """Traduz o vocabulário da Rô para o plano de contas, um rótulo por vez.
 
     Treze rótulos cobrem os 441 pendentes da carga inicial. Decidir treze vezes
     é trabalho de minutos; decidir 441 vezes é trabalho que não acontece — e a
     tradução fica guardada, então a próxima importação já entra classificada.
+
+    Os rótulos chegam prontos de quem chamou: a `render` já precisa deles para
+    escrever a contagem no título da aba, e buscá-los de novo aqui era a mesma
+    pergunta indo ao banco duas vezes no mesmo rerun.
     """
-    with engine.connect() as conn:
-        rotulos = repo.rotulos_pendentes(conn)
-        traduzidos = repo.listar_de_para(conn)
 
     st.caption(
         "A Rô classifica com o vocabulário dela — CUIDADOS PESSOAIS, INFRA, TAXAS. "
@@ -220,10 +221,16 @@ def render(engine, usuario: dict) -> None:
     if st.session_state.pop("msg_classificacao", None):
         st.success(st.session_state.get("msg_classificacao", "Salvo."), icon="🧠")
 
-    with engine.connect() as conn:
-        plano = repo.plano_de_contas(conn)
-        por_mes = repo.pendentes_por_competencia(conn)
-        donos_errados = repo.dono_pela_descricao(conn)
+    # a tela inteira lê do cache, que se invalida sozinho a cada gravação.
+    # Trocar de categoria, digitar no filtro ou trocar de aba não vão ao banco;
+    # salvar vai. Classificar cinquenta lançamentos são dezenas de reruns e
+    # pouco mais de uma dúzia de idas ao Supabase.
+    plano = dados.plano_de_contas(engine, dados.versao())
+    painel = dados.painel_de_classificacao(engine, dados.versao())
+    por_mes = painel["por_mes"]
+    donos_errados, orfaos = painel["donos_errados"], painel["orfaos"]
+    rotulos, traduzidos = painel["rotulos"], painel["traduzidos"]
+
 
     # a carga inicial atribuiu tudo ao dono do arquivo, mas a Rô escreve de quem
     # é o gasto no fim da descrição. Corrigir isso é uma decisão dele, não minha
@@ -244,8 +251,6 @@ def render(engine, usuario: dict) -> None:
 
     # o gasto da casa que ficou com uma pessoa só porque o upload perguntou
     # "de quem é este arquivo": é o que faz o relatório por pessoa mentir feio
-    with engine.connect() as conn:
-        orfaos = repo.sem_dono_declarado(conn)
     if orfaos["quantidade"]:
         c1, c2 = st.columns([3, 1])
         c1.warning(
@@ -261,8 +266,6 @@ def render(engine, usuario: dict) -> None:
             st.rerun()
 
     total_pendente = sum(por_mes.values())
-    with engine.connect() as conn:
-        rotulos = repo.rotulos_pendentes(conn)
     aba_de_para, aba_fila, aba_busca = st.tabs([
         f"🔁 De-para de rótulos ({len(rotulos)})",
         f"📌 Fila de pendências ({total_pendente})",
@@ -270,7 +273,7 @@ def render(engine, usuario: dict) -> None:
     ])
 
     with aba_de_para:
-        _aba_de_para(engine, usuario, plano)
+        _aba_de_para(engine, usuario, plano, rotulos, traduzidos)
 
     with aba_fila:
         if not total_pendente:
@@ -293,17 +296,16 @@ def render(engine, usuario: dict) -> None:
                 help="Busca na descrição e no rótulo que a planilha usou.",
             )
             if c3.button("Reaplicar regras na fila", width="stretch"):
-                with engine.begin() as conn:
-                    resolvidas = classify.reclassificar_pendentes(conn)
+                with engine.begin() as escrita:
+                    resolvidas = classify.reclassificar_pendentes(escrita)
                 st.success(f"{resolvidas} lançamento(s) resolvido(s) pelas regras atuais.")
                 st.rerun()
 
-            with engine.connect() as conn:
-                # a fila inteira numa consulta só: são centenas de linhas leves,
-                # e um teto de 200 fazia a contagem da tela mentir sobre o total
-                fila = repo.fila_pendentes(
-                    conn, limite=5000, competencia=competencia, termo=termo
-                )
+            # a fila inteira numa consulta só: são centenas de linhas leves,
+            # e um teto de 200 fazia a contagem da tela mentir sobre o total
+            fila = dados.fila_de_pendencias(
+                engine, dados.versao(), competencia, termo
+            )
             if not fila:
                 st.info("Nenhum pendente com esse filtro.", icon="🔎")
             else:
@@ -318,8 +320,7 @@ def render(engine, usuario: dict) -> None:
             "Buscar", placeholder="Ex.: iFood, Uber, mercado…",
             help="Busca na descrição do extrato.",
         )
-        with engine.connect() as conn:
-            achados = repo.buscar_transacoes(conn, termo, limite=40)
+        achados = dados.busca(engine, dados.versao(), termo)
         if not achados:
             st.caption("Nenhum lançamento encontrado.")
         else:

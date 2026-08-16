@@ -13,8 +13,8 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core import auth, db, dedup, repo, seed  # noqa: E402
-from ui import tema  # noqa: E402
+from core import auth, db, seed  # noqa: E402
+from ui import dados, tema  # noqa: E402
 from views import (  # noqa: E402
     analise_ia,
     classificacao,
@@ -54,14 +54,27 @@ def preparar():
     return engine
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _estado_da_conexao() -> dict:
+    """O aviso da barra lateral, no máximo uma vez por minuto.
+
+    Em Postgres o diagnóstico abre conexão e faz um `select 1` só para decidir
+    se mostra um aviso — duas idas ao banco em todo rerun, para uma resposta
+    que não muda entre um clique e outro. Se a conexão cair dentro do minuto,
+    a própria tela estoura e o usuário vê o erro de qualquer jeito.
+    """
+    return db.diagnostico()
+
+
 def main() -> None:
     tema.aplicar()
     usuario = auth.exigir_login()
     engine = preparar()
 
-    with engine.connect() as conn:
-        pendentes = len(repo.fila_pendentes(conn, limite=500))
-        duplicidades = len(dedup.pendentes(conn))
+    # os dois números ao lado dos botões do menu. Isto roda em **todo** rerun
+    # de **toda** tela, inclusive a cada tecla digitada num filtro: vêm do
+    # cache, e só voltam ao banco depois de alguma gravação
+    pendentes, duplicidades = dados.contadores_da_barra(engine, dados.versao())
 
     with st.sidebar:
         st.markdown(
@@ -94,7 +107,7 @@ def main() -> None:
         )
 
         st.divider()
-        estado = db.diagnostico()
+        estado = _estado_da_conexao()
         if estado["motivo"] == "sem_url":
             st.markdown(
                 "<div class='aviso-dev'><b>Base local (SQLite)</b><br>"

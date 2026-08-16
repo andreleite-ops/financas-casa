@@ -13,6 +13,7 @@ from parsers import extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
 from parsers.base import ErroDeLeitura
+from ui import dados
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
 
@@ -39,8 +40,7 @@ def _competencias_sugeridas() -> list[str]:
 
 
 def _aba_enviar(engine, usuario: dict) -> None:
-    with engine.connect() as conn:
-        contas = repo.listar_contas(conn, so_ativas=True)
+    contas = dados.contas(engine, dados.versao(), so_ativas=True)
     if not contas:
         st.warning("Nenhuma conta ativa. Cadastre uma na aba **Contas e cartões**.")
         return
@@ -469,11 +469,10 @@ def _aba_mapa(engine) -> None:
     competencias.reverse()  # mais antigo à esquerda, como num calendário
     atual = f"{hoje.year:04d}-{hoje.month:02d}"
 
-    with engine.connect() as conn:
-        contas = [c for c in repo.listar_contas(conn, so_ativas=not incluir_inativas)
-                  if c['nome'] != repo.CONTA_PLANILHA]
-        mapa = repo.cobertura(conn, competencias)
-        mapa_planilha = repo.cobertura_planilha(conn, competencias)
+    contas = [c for c in dados.contas(engine, dados.versao(), so_ativas=not incluir_inativas)
+              if c['nome'] != repo.CONTA_PLANILHA]
+    cobertura = dados.cobertura_de_uploads(engine, dados.versao(), tuple(competencias))
+    mapa, mapa_planilha = cobertura["contas"], cobertura["planilha"]
 
     if not contas:
         st.warning("Nenhuma conta cadastrada.")
@@ -488,11 +487,11 @@ def _aba_mapa(engine) -> None:
     # isso ela é uma linha à parte e não conta como arquivo faltando
     celulas_planilha = []
     for competencia in competencias:
-        dados = mapa_planilha.get(competencia)
+        celula = mapa_planilha.get(competencia)
         classe = " class='futuro'" if competencia == atual else ""
-        if dados:
+        if celula:
             celulas_planilha.append(
-                f"<td{classe}><span class='ok'>✓<small>{dados['total']}</small></span></td>"
+                f"<td{classe}><span class='ok'>✓<small>{celula['total']}</small></span></td>"
             )
         else:
             celulas_planilha.append(f"<td{classe}><span class='falta'>·</span></td>")
@@ -506,21 +505,21 @@ def _aba_mapa(engine) -> None:
     for conta in contas:
         celulas = []
         for competencia in competencias:
-            dados = mapa.get((conta["id"], competencia))
+            celula = mapa.get((conta["id"], competencia))
             if competencia == atual:
                 # mês em curso: o extrato ainda nem fechou, não conta como falta
                 celulas.append(
-                    f"<td class='futuro'><span class='ok'>✓<small>{dados['ativos']}</small>"
-                    "</span></td>" if dados else "<td class='futuro'>em curso</td>"
+                    f"<td class='futuro'><span class='ok'>✓<small>{celula['ativos']}</small>"
+                    "</span></td>" if celula else "<td class='futuro'>em curso</td>"
                 )
-            elif not dados:
+            elif not celula:
                 faltando += 1
                 celulas.append("<td><span class='falta'>·</span></td>")
-            elif dados["ativos"] == 0:
+            elif celula["ativos"] == 0:
                 celulas.append("<td><span class='dup'>!<small>duplicado</small></span></td>")
             else:
                 celulas.append(
-                    f"<td><span class='ok'>✓<small>{dados['ativos']}</small></span></td>"
+                    f"<td><span class='ok'>✓<small>{celula['ativos']}</small></span></td>"
                 )
         tipo = "cartão" if conta["tipo"] == "cartao" else "conta corrente"
         marca = "" if conta["ativa"] else " (inativa)"
@@ -555,9 +554,10 @@ def _aba_mapa(engine) -> None:
         st.success(f"Nada faltando nos últimos {meses} meses.", icon="✅")
 
 
-def _aba_duplicidades(engine, usuario: dict) -> None:
-    with engine.connect() as conn:
-        fila = dedup.pendentes(conn)
+def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:
+    # a fila chega pronta: a `render` já precisa dela para escrever a contagem
+    # no título da aba, e buscá-la de novo aqui era a mesma consulta de três
+    # tabelas indo ao banco duas vezes no mesmo rerun
 
     if not fila:
         st.success("Nenhuma duplicidade pendente.", icon="✅")
@@ -627,8 +627,7 @@ def _aba_duplicidades(engine, usuario: dict) -> None:
 
 
 def _aba_critica(engine, usuario: dict) -> None:
-    with engine.connect() as conn:
-        critica = reconcile.criticar(conn)
+    critica = dados.critica(engine, dados.versao())
 
     st.caption(
         "A planilha da Rô é a carga inicial do histórico. Quando o extrato do mesmo período "
@@ -733,8 +732,7 @@ def _aba_manual(engine, usuario: dict) -> None:
 
 
 def _aba_contas(engine) -> None:
-    with engine.connect() as conn:
-        contas = repo.listar_contas(conn)
+    contas = dados.contas(engine, dados.versao(), so_ativas=False)
 
     st.caption(
         "Contas e cartões mudam com o tempo. Desativar tira a conta das opções de upload, "
@@ -785,8 +783,7 @@ def _aba_contas(engine) -> None:
 
 
 def _aba_historico(engine) -> None:
-    with engine.connect() as conn:
-        historico = repo.listar_uploads(conn)
+    historico = dados.uploads(engine, dados.versao())
     if not historico:
         st.caption("Nenhum arquivo importado ainda.")
         return
@@ -818,8 +815,8 @@ def _aba_historico(engine) -> None:
 
 
 def render(engine, usuario: dict) -> None:
-    with engine.connect() as conn:
-        pendentes_dup = len(dedup.pendentes(conn))
+    fila_dup = dados.duplicidades(engine, dados.versao())
+    pendentes_dup = len(fila_dup)
 
     abas = st.tabs([
         "📤 Enviar arquivo",
@@ -835,7 +832,7 @@ def render(engine, usuario: dict) -> None:
     with abas[1]:
         _aba_mapa(engine)
     with abas[2]:
-        _aba_duplicidades(engine, usuario)
+        _aba_duplicidades(engine, usuario, fila_dup)
     with abas[3]:
         _aba_critica(engine, usuario)
     with abas[4]:

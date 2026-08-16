@@ -14,7 +14,7 @@ import streamlit as st
 
 from core import db, repo
 from core.money import fmt_brl
-from ui import destinos
+from ui import dados, destinos
 from ui.tema import selo_pessoa
 
 ROTULOS = {
@@ -46,9 +46,10 @@ def _destinos(plano, natureza: str) -> dict[str, tuple[int, int | None] | None]:
 
 def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
     rotulo = ROTULOS[natureza]
-    with engine.connect() as conn:
-        plano = repo.plano_de_contas(conn, natureza=natureza)
-        ja_lancados = repo.lancamentos_manuais(conn, ano, natureza=natureza)
+    # o plano vem do cache: ele muda quando alguém edita o plano de contas, e
+    # esta tela aparece dentro de duas outras (Receitas e Upload)
+    plano = dados.plano_de_contas(engine, dados.versao(), natureza=natureza)
+    ja_lancados = dados.lancamentos_manuais(engine, dados.versao(), ano, natureza)
 
     with st.expander(rotulo["titulo"], expanded=not ja_lancados):
         st.caption(rotulo["ajuda"])

@@ -661,7 +661,7 @@ def receitas_manuais(conn, ano: int) -> list[dict]:
     return lancamentos_manuais(conn, ano, natureza="receita")
 
 
-def _dono_declarado(conn) -> dict[str, list[int]]:
+def _dono_declarado(conn, donos_categoria: dict[int, str] | None = None) -> dict[str, list[int]]:
     """pessoa -> ids que deveriam ser dela e estão com outra.
 
     Duas fontes dizem de quem é o gasto sem margem para dúvida: a descrição,
@@ -669,7 +669,8 @@ def _dono_declarado(conn) -> dict[str, list[int]]:
     categoria, quando ela é de uma pessoa por natureza — pensão e gasto com os
     filhos são do André, não despesa da casa a ser rateada.
     """
-    donos_categoria = classify.donos_por_categoria(conn)
+    if donos_categoria is None:
+        donos_categoria = classify.donos_por_categoria(conn)
     consulta = sa.select(
         db.transacoes.c.id,
         db.transacoes.c.descricao,
@@ -685,9 +686,24 @@ def _dono_declarado(conn) -> dict[str, list[int]]:
     return alvos
 
 
-def dono_pela_descricao(conn) -> dict[str, int]:
+def dono_pela_descricao(conn, donos_categoria: dict[int, str] | None = None) -> dict[str, int]:
     """Quantos lançamentos têm dono declarado e estão com outra pessoa."""
-    return {pessoa: len(ids) for pessoa, ids in _dono_declarado(conn).items()}
+    return {
+        pessoa: len(ids)
+        for pessoa, ids in _dono_declarado(conn, donos_categoria).items()
+    }
+
+
+def alertas_de_dono(conn) -> tuple[dict[str, int], dict]:
+    """Os dois avisos de dono da tela de classificação, numa varredura só.
+
+    As duas perguntas precisam saber quais categorias têm dono fixo, e cada uma
+    ia buscar essa lista por conta própria. São os dois avisos do topo da mesma
+    tela: perguntar duas vezes a mesma coisa, no mesmo rerun, custa uma ida ao
+    banco que ninguém vê.
+    """
+    donos = classify.donos_por_categoria(conn)
+    return dono_pela_descricao(conn, donos), sem_dono_declarado(conn, donos)
 
 
 def corrigir_dono_pela_descricao(engine) -> int:
@@ -708,7 +724,7 @@ def corrigir_dono_pela_descricao(engine) -> int:
     return total
 
 
-def sem_dono_declarado(conn) -> dict:
+def sem_dono_declarado(conn, donos_categoria: dict[int, str] | None = None) -> dict:
     """O que está com uma pessoa só porque o upload perguntou de quem era.
 
     A planilha da casa mistura as contas do casal, e a maior parte das linhas
@@ -716,13 +732,17 @@ def sem_dono_declarado(conn) -> dict:
     relatório por pessoa mentir por um fator de vinte — o que é da casa vira
     dívida de quem enviou o arquivo. Devolve contagem e total, sem mudar nada.
     """
+    # uma varredura só para as duas respostas: pedir a lista duas vezes eram
+    # quatro idas ao banco (a consulta e os donos por categoria, cada uma
+    # repetida) para responder a mesma pergunta com números diferentes dela
+    achados = _ids_sem_dono(conn, com_valor=True, donos_categoria=donos_categoria)
     return {
-        "quantidade": len(_ids_sem_dono(conn)),
-        "despesas": sum(-v for _i, v in _ids_sem_dono(conn, com_valor=True) if v < 0),
+        "quantidade": len(achados),
+        "despesas": sum(-v for _i, v in achados if v < 0),
     }
 
 
-def _ids_sem_dono(conn, com_valor: bool = False):
+def _ids_sem_dono(conn, com_valor: bool = False, donos_categoria: dict[int, str] | None = None):
     """Despesas da planilha que estão com uma pessoa sem a descrição dizer isso.
 
     Receita fica de fora: o dono dela vem da fonte (TAG é do André, BIOS é da
@@ -750,7 +770,8 @@ def _ids_sem_dono(conn, com_valor: bool = False):
             sa.or_(db.transacoes.c.natureza.is_(None), db.transacoes.c.natureza != "receita"),
         )
     )
-    donos_categoria = classify.donos_por_categoria(conn)
+    if donos_categoria is None:
+        donos_categoria = classify.donos_por_categoria(conn)
     achados = [
         (linha.id, linha.valor_centavos)
         for linha in conn.execute(consulta)
@@ -987,6 +1008,22 @@ def fila_pendentes(
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
 
 
+def contar_pendentes(conn) -> int:
+    """Quantos estao na fila — o numero do cracha, sem trazer as linhas.
+
+    A barra lateral so quer um inteiro, e todo rerun de toda tela passa por
+    aqui. Trazer a fila inteira para contar em Python custava 25 KB de rede por
+    clique, e o teto de 500 fazia o cracha mentir a partir dali: a carga
+    inicial deixou 441 pendentes, entao o numero estava a poucos lancamentos
+    de congelar em "500" para sempre.
+    """
+    return conn.execute(
+        sa.select(sa.func.count())
+        .select_from(db.transacoes)
+        .where(db.transacoes.c.status == "pendente", db.transacoes.c.ativo == sa.true())
+    ).scalar_one()
+
+
 def pendentes_por_competencia(conn) -> dict[str, int]:
     """Quantos pendentes em cada mês — para a tela dizer onde está o trabalho."""
     consulta = (
@@ -1116,6 +1153,51 @@ def uso_da_categoria(conn, categoria_id: int) -> dict:
     }
 
 
+def usos_das_categorias(conn) -> dict[int, dict]:
+    """O mesmo de uso_da_categoria, para todas de uma vez.
+
+    A tela do plano de contas precisa disto para cada bloco na tela. Uma
+    chamada por categoria eram quatro contagens vezes dezoito categorias:
+    setenta e duas idas ao banco para desenhar uma tela que nao mudou nada.
+    Aqui sao quatro, agrupadas por categoria_id.
+
+    Categoria que nao aparece em nenhuma contagem volta com zero — some do
+    GROUP BY, nao do resultado.
+    """
+    def por_categoria(tabela, coluna) -> dict[int, int]:
+        return {
+            linha[0]: int(linha[1])
+            for linha in conn.execute(
+                sa.select(coluna, sa.func.count()).select_from(tabela).group_by(coluna)
+            )
+            if linha[0] is not None
+        }
+
+    lancamentos = por_categoria(db.transacoes, db.transacoes.c.categoria_id)
+    regras_ = por_categoria(db.regras, db.regras.c.categoria_id)
+    traducoes = por_categoria(db.de_para, db.de_para.c.categoria_id)
+    subs = por_categoria(db.subcategorias, db.subcategorias.c.categoria_id)
+
+    ids = conn.execute(sa.select(db.categorias.c.id)).scalars().all()
+    saida = {}
+    for categoria_id in ids:
+        usados = (
+            lancamentos.get(categoria_id, 0),
+            regras_.get(categoria_id, 0),
+            traducoes.get(categoria_id, 0),
+        )
+        saida[categoria_id] = {
+            "lancamentos": usados[0],
+            "regras": usados[1],
+            "traducoes": usados[2],
+            # subcategoria de proposito fora da conta: apagar a categoria apaga
+            # as subcategorias dela junto, e sempre foi assim
+            "subcategorias": subs.get(categoria_id, 0),
+            "pode_apagar": not any(usados),
+        }
+    return saida
+
+
 def excluir_categoria(engine, categoria_id: int) -> bool:
     """Apaga a categoria e suas subcategorias. Recusa se algo depender dela.
 
@@ -1234,21 +1316,42 @@ def salvar_subcategoria(engine, *, categoria_id: int, nome: str):
 
 
 def salvar_metas(engine, ano: int, percentuais: dict[int, float]) -> None:
+    """Grava as metas do ano de uma vez.
+
+    Era um SELECT e um UPDATE ou INSERT por categoria: com treze categorias de
+    despesa, vinte e seis idas ao banco num clique de "salvar" — perto de
+    quatro segundos de espera para gravar treze numeros.
+    """
+    if not percentuais:
+        return
     with engine.begin() as conn:
+        existentes = {
+            linha.categoria_id: linha.id
+            for linha in conn.execute(
+                sa.select(db.metas.c.id, db.metas.c.categoria_id).where(
+                    db.metas.c.ano == ano,
+                    db.metas.c.categoria_id.in_(list(percentuais)),
+                )
+            )
+        }
+        novas = [
+            {"ano": ano, "categoria_id": categoria_id, "percentual": pct}
+            for categoria_id, pct in percentuais.items()
+            if categoria_id not in existentes
+        ]
+        if novas:
+            conn.execute(sa.insert(db.metas), novas)
+
+        # um UPDATE por percentual distinto, e nao por categoria: quem preenche
+        # um orcamento repete o mesmo numero em varias linhas
+        por_percentual: dict[float, list[int]] = {}
         for categoria_id, pct in percentuais.items():
-            existente = conn.execute(
-                sa.select(db.metas.c.id).where(
-                    db.metas.c.ano == ano, db.metas.c.categoria_id == categoria_id
-                )
-            ).scalar()
-            if existente:
-                conn.execute(
-                    sa.update(db.metas).where(db.metas.c.id == existente).values(percentual=pct)
-                )
-            else:
-                conn.execute(
-                    sa.insert(db.metas).values(ano=ano, categoria_id=categoria_id, percentual=pct)
-                )
+            if categoria_id in existentes:
+                por_percentual.setdefault(pct, []).append(existentes[categoria_id])
+        for pct, ids in por_percentual.items():
+            conn.execute(
+                sa.update(db.metas).where(db.metas.c.id.in_(ids)).values(percentual=pct)
+            )
 
 
 def listar_metas(conn, ano: int) -> dict[int, float]:

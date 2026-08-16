@@ -352,6 +352,20 @@ def pendentes(conn) -> list[dict]:
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
 
 
+def contar_pendentes(conn) -> int:
+    """Quantas duplicidades esperam decisao — so o numero do cracha.
+
+    Mesmo motivo do contar_pendentes do repo: a barra lateral roda em todo
+    rerun de toda tela, e a consulta de cima junta tres tabelas e traz treze
+    colunas (duas delas descricoes) para virar um `len()`.
+    """
+    return conn.execute(
+        sa.select(sa.func.count())
+        .select_from(db.duplicidades)
+        .where(db.duplicidades.c.resolvida == sa.false())
+    ).scalar_one()
+
+
 def resolver(conn, dup_id: int, decisao: str, usuario: str) -> None:
     """decisao: 'excluir' apaga o lancamento novo; 'manter' ativa os dois."""
     registro = conn.execute(

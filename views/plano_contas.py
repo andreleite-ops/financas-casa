@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from core import repo
+from ui import dados
 
 
 def _bloco(engine, categoria: dict, uso: dict) -> None:
@@ -110,15 +111,16 @@ def render(engine, usuario: dict) -> None:
     if st.session_state.pop("msg_plano", None):
         st.success(st.session_state.get("msg_plano", "Salvo."), icon="🗂️")
 
-    with engine.connect() as conn:
-        receitas = repo.plano_de_contas(conn, natureza="receita")
-        despesas = repo.plano_de_contas(conn, natureza="despesa")
-        # o uso de cada categoria numa passada só, para o bloco saber se pode
-        # oferecer o botão de apagar sem consultar o banco categoria a categoria
-        usos = {
-            c["id"]: repo.uso_da_categoria(conn, c["id"])
-            for c in (*receitas, *despesas)
-        }
+    # o plano inteiro numa leitura e separado aqui: pedir por natureza eram
+    # duas viagens para a mesma tabela, com a mesma resposta dentro
+    plano = dados.plano_de_contas(engine, dados.versao())
+    receitas = [c for c in plano if c["natureza"] == "receita"]
+    despesas = [c for c in plano if c["natureza"] == "despesa"]
+    # o uso de cada categoria numa passada só, para o bloco saber se pode
+    # oferecer o botão de apagar sem consultar o banco categoria a categoria.
+    # O dicionário aqui era uma chamada por categoria — quatro contagens vezes
+    # dezoito categorias, em todo rerun desta tela.
+    usos = dados.usos_das_categorias(engine, dados.versao())
 
     aba_desp, aba_rec = st.tabs(
         [f"Despesas ({len(despesas)})", f"Receitas ({len(receitas)})"]

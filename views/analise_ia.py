@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import streamlit as st
 
-from core import ai, analytics, repo
+from core import ai, repo
 from core.money import fmt_brl
-from ui import destinos
+from ui import dados, destinos
 
 
 def _reais(centavos: int) -> str:
@@ -27,8 +27,7 @@ def _reais(centavos: int) -> str:
 
 
 def render(engine, usuario: dict) -> None:
-    with engine.connect() as conn:
-        competencias = repo.competencias_disponiveis(conn)
+    competencias = dados.competencias(engine, dados.versao())
     if not competencias:
         st.info("Sem lançamentos ainda — importe um extrato para a IA ter o que analisar.",
                 icon="📥")
@@ -65,8 +64,7 @@ def _aviso_de_cobertura(engine, competencia: str) -> None:
     precisa estar na tela, não só dentro do prompt: quem lê o texto tem de
     saber sobre o que ele fala.
     """
-    with engine.connect() as conn:
-        cobertura = analytics.cobertura_da_classificacao(conn, competencia)
+    cobertura = dados.cobertura_do_mes(engine, dados.versao(), competencia)
     if not cobertura["gasto_total"]:
         return
 
@@ -92,9 +90,11 @@ def _aviso_de_cobertura(engine, competencia: str) -> None:
 def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> None:
     _aviso_de_cobertura(engine, competencia)
 
-    with engine.connect() as conn:
-        contexto = analytics.contexto_para_ia(conn, competencia)
-        anterior = repo.ultima_analise(conn, competencia, contexto)
+    # o contexto sai do cache enquanto ninguém gravar nada: as quatro abas
+    # desta tela rodam a cada rerun, e sem isso escolher uma subcategoria lá
+    # embaixo remontava este texto e o do ano inteiro, do zero
+    contexto = dados.contexto_do_mes(engine, dados.versao(), competencia)
+    anterior = dados.analise_gravada(engine, dados.versao(), competencia, contexto)
 
     if not ligada:
         with st.expander("Ver os números que seriam enviados para a análise"):
@@ -166,11 +166,12 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
     outra. O mês responde para onde foi o dinheiro; a série responde o que
     acontece todo ano nesta época — e é dela que sai meta, não do último mês.
     """
-    with engine.connect() as conn:
-        janela = analytics.janela_de_doze_meses(conn, competencia)
-        do_ano = analytics.resumo_do_ano(conn, competencia)
-        contexto = analytics.contexto_do_ano(conn, competencia)
-        anterior = repo.ultima_analise(conn, competencia, contexto, tipo="ano")
+    contexto = dados.contexto_do_ano(engine, dados.versao(), competencia)
+    painel = dados.painel_do_ano(engine, dados.versao(), competencia)
+    janela, do_ano = painel["janela"], painel["do_ano"]
+    anterior = dados.analise_gravada(
+        engine, dados.versao(), competencia, contexto, tipo="ano"
+    )
 
     if not janela:
         st.info("Sem meses lançados até esta competência.", icon="📭")
@@ -247,8 +248,7 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
         key="ia_pergunta", disabled=not ligada,
     )
     if st.button("Perguntar", key="ia_perguntar", disabled=not ligada) and pergunta.strip():
-        with engine.connect() as conn:
-            contexto = analytics.contexto_para_ia(conn, competencia)
+        contexto = dados.contexto_do_mes(engine, dados.versao(), competencia)
         with st.spinner("Consultando os números…"):
             resposta = ai.responder_pergunta(contexto, pergunta)
         if _falhou(resposta):
@@ -261,8 +261,7 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
             )
             st.markdown(resposta)
 
-    with engine.connect() as conn:
-        anteriores = repo.perguntas_anteriores(conn, competencia)
+    anteriores = dados.perguntas_anteriores(engine, dados.versao(), competencia)
     if anteriores:
         st.divider()
         st.caption("Perguntas anteriores deste mês")
@@ -288,8 +287,7 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     if recado:
         st.success(recado, icon="✅")
 
-    with engine.connect() as conn:
-        faltando = repo.sem_subcategoria(conn, competencia=competencia, limite=500)
+    faltando = dados.sem_subcategoria(engine, dados.versao(), competencia)
     if not faltando:
         st.success("Nada sem subcategoria neste mês.", icon="✅")
         return
@@ -318,8 +316,7 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     if not sugestoes:
         return
 
-    with engine.connect() as conn:
-        plano = repo.plano_de_contas(conn)
+    plano = dados.plano_de_contas(engine, dados.versao())
     _tabela_de_subcategorias(engine, sugestoes, plano, usuario)
 
 

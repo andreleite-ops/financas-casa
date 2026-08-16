@@ -234,6 +234,45 @@ def por_subcategoria(conn, categoria_id: int, competencia=None, ano=None, pessoa
     return sorted(linhas, key=lambda linha: -linha["total"])
 
 
+def subcategorias_de_todas(conn, competencia=None, ano=None, pessoa=None) -> dict[int, list[dict]]:
+    """O mesmo de por_subcategoria, para todas as categorias de uma vez.
+
+    Existe para o contexto da IA, que abre cada categoria do mês nas
+    subcategorias dela: uma consulta por categoria eram catorze idas ao banco
+    para montar um texto. Aqui é uma, agrupada também por categoria_id.
+
+    Mantém a junção externa e a ordem por total decrescente da versão unitária
+    — quem chama corta as primeiras e precisa que sejam as maiores.
+    """
+    consulta = (
+        sa.select(
+            db.transacoes.c.categoria_id,
+            db.subcategorias.c.nome,
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+            sa.func.count(db.transacoes.c.id).label("qtd"),
+        )
+        .select_from(
+            db.transacoes.outerjoin(
+                db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id
+            )
+        )
+        .where(*_base(competencia, ano, pessoa))
+        .group_by(db.transacoes.c.categoria_id, db.subcategorias.c.nome)
+    )
+    saida: dict[int, list[dict]] = {}
+    for linha in conn.execute(consulta):
+        saida.setdefault(linha.categoria_id, []).append({
+            "subcategoria": linha.nome or "— sem subcategoria —",
+            "detalhada": linha.nome is not None,
+            "total": abs(int(linha.total or 0)),
+            "qtd": linha.qtd,
+        })
+    return {
+        categoria_id: sorted(linhas, key=lambda linha: -linha["total"])
+        for categoria_id, linhas in saida.items()
+    }
+
+
 def serie_por_subcategoria(conn, categoria_id: int, ano: int, pessoa=None) -> dict:
     """Subcategoria × mês dentro de uma categoria — a categoria explodida."""
     consulta = (
@@ -599,18 +638,21 @@ def lancamentos(
 
 def orcamento(
     conn, competencia: str, metas: dict[int, float], renda_base: int | None = None,
-    resumo_do_mes: dict | None = None,
+    resumo_do_mes: dict | None = None, gastos_do_mes: list[dict] | None = None,
 ) -> list[dict]:
     """Realizado x meta por categoria de despesa (a meta e % da renda).
 
-    `resumo_do_mes` evita recalcular o que a tela ja tem em maos: sem ele, esta
-    funcao sozinha refazia o resumo duas vezes e respondia por nove das vinte e
-    sete consultas da Visao Geral.
+    `resumo_do_mes` e `gastos_do_mes` evitam recalcular o que a tela ja tem em
+    maos: sem eles, esta funcao sozinha refazia o resumo duas vezes e respondia
+    por nove das vinte e sete consultas da Visao Geral. O gasto por categoria e
+    o mesmo que a tela ja mostra na tabela ao lado.
     """
     do_mes = resumo_do_mes or resumo(conn, competencia=competencia)
     if renda_base is None:
         renda_base = do_mes["receitas"]
-    gastos = {linha["categoria_id"]: linha for linha in por_categoria(conn, competencia=competencia)}
+    if gastos_do_mes is None:
+        gastos_do_mes = por_categoria(conn, competencia=competencia)
+    gastos = {linha["categoria_id"]: linha for linha in gastos_do_mes}
     poupanca_id = _id_poupanca(conn)
     if poupanca_id:
         total_poupanca = do_mes["poupanca"]
@@ -660,8 +702,13 @@ def cobertura_da_classificacao(conn, competencia: str) -> dict:
     mercado". Sem esta conta, a IA escreve a segunda frase com a confiança da
     primeira, e quem lê decide a vida com base nela.
     """
-    consulta = (
+    return cobertura_por_competencia(conn, [competencia])[competencia]
+
+
+def _consulta_de_cobertura(competencias: list[str]):
+    return (
         sa.select(
+            db.transacoes.c.competencia,
             db.transacoes.c.categoria_id,
             db.transacoes.c.subcategoria_id,
             db.categorias.c.nome.label("categoria"),
@@ -673,14 +720,22 @@ def cobertura_da_classificacao(conn, competencia: str) -> dict:
                 db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id
             )
         )
-        .where(*_base(competencia), db.transacoes.c.valor_centavos < 0)
+        .where(
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.competencia.in_(competencias),
+            db.transacoes.c.valor_centavos < 0,
+        )
         .group_by(
-            db.transacoes.c.categoria_id, db.transacoes.c.subcategoria_id, db.categorias.c.nome
+            db.transacoes.c.competencia, db.transacoes.c.categoria_id,
+            db.transacoes.c.subcategoria_id, db.categorias.c.nome,
         )
     )
+
+
+def _somar_cobertura(linhas) -> dict:
     total = classificado = com_sub = 0
     qtd_total = qtd_sem_categoria = qtd_sem_sub = 0
-    for linha in conn.execute(consulta):
+    for linha in linhas:
         if linha.categoria == CATEGORIA_TRANSFERENCIA:
             continue
         valor, qtd = abs(int(linha.total or 0)), int(linha.qtd)
@@ -706,6 +761,24 @@ def cobertura_da_classificacao(conn, competencia: str) -> dict:
         "percentual_classificado": round(100 * classificado / total, 1) if total else 100.0,
         "percentual_com_subcategoria": round(100 * com_sub / total, 1) if total else 100.0,
     }
+
+
+def cobertura_por_competencia(conn, competencias: list[str]) -> dict[str, dict]:
+    """A mesma cobertura, para vários meses de uma vez.
+
+    A leitura do ano pergunta isso de cada um dos doze meses da janela para
+    dizer quais ainda estão pela metade. Doze chamadas eram doze idas ao banco
+    com a mesma pergunta mudando o mês; aqui é uma, agrupada por competência.
+
+    Mês sem gasto nenhum não volta do GROUP BY e mesmo assim precisa de uma
+    resposta — a de um mês vazio, que é 100% classificado por vacuidade.
+    """
+    if not competencias:
+        return {}
+    agrupado: dict[str, list] = {mes: [] for mes in competencias}
+    for linha in conn.execute(_consulta_de_cobertura(list(competencias))):
+        agrupado.setdefault(linha.competencia, []).append(linha)
+    return {mes: _somar_cobertura(linhas) for mes, linhas in agrupado.items()}
 
 
 def desvios_do_mes(conn, competencia: str, minimo_de_meses: int = 2) -> list[dict]:
@@ -893,9 +966,12 @@ def contexto_do_ano(conn, ate: str) -> str:
                 f"despesas {fmt_brl(item.get('despesas', 0))}"
             )
 
+    # a cobertura dos doze meses numa consulta só: uma por mês eram doze idas
+    # ao banco para descobrir quais meses ainda estão pela metade
+    coberturas = cobertura_por_competencia(conn, competencias)
     faltando = [
         competencia for competencia in competencias
-        if cobertura_da_classificacao(conn, competencia)["percentual_classificado"] < 95
+        if coberturas[competencia]["percentual_classificado"] < 95
     ]
     if faltando:
         linhas += [
@@ -950,9 +1026,12 @@ def contexto_para_ia(conn, competencia: str) -> str:
     ]
 
     linhas += ["", "Gasto por categoria no mês:"]
+    # as subcategorias de todas as categorias numa consulta só: uma por
+    # categoria eram catorze idas ao banco para montar este mesmo texto
+    abertura = subcategorias_de_todas(conn, competencia=competencia)
     for linha in por_categoria(conn, competencia=competencia):
         linhas.append(f"- {linha['categoria']}: {fmt_brl(linha['total'])} ({linha['qtd']} lançamentos)")
-        for sub in por_subcategoria(conn, linha["categoria_id"], competencia=competencia)[:4]:
+        for sub in abertura.get(linha["categoria_id"], [])[:4]:
             linhas.append(f"    · {sub['subcategoria']}: {fmt_brl(sub['total'])}")
 
     fora_do_padrao = desvios_do_mes(conn, competencia)
