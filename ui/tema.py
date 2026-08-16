@@ -66,6 +66,11 @@ CSS = f"""
        border-radius: 10px; }}
   div[data-testid="stForm"] {{ border: 1px solid {LINHA}; border-radius: 10px;
         background: {AREIA_CLARA}; padding: 1.2rem; }}
+  /* o formulario de cada linha da fila de classificacao nao desenha caixa
+     nenhuma: ele existe para o campo nao recarregar a tela a cada escolha, e
+     nao para virar um painel dentro do bloco que ja tem borda */
+  div[class*="st-key-linha"] div[data-testid="stForm"] {{
+        border: none; background: transparent; padding: 0; }}
   div[data-testid="stExpander"] details {{ background: {AREIA_CLARA};
         border: 1px solid {LINHA}; border-radius: 10px; }}
   div[data-testid="stDataFrame"] {{ border: 1px solid {LINHA}; border-radius: 8px; }}

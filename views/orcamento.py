@@ -78,8 +78,9 @@ def render(engine, usuario: dict) -> None:
                     "Nada foi salvo ainda — revise e clique em salvar."
                 )
                 st.rerun()
-        if st.session_state.pop("msg_orcamento", None):
-            st.success(st.session_state.get("msg_orcamento", ""), icon="📊")
+        recado = st.session_state.pop("msg_orcamento", None)
+        if recado:
+            st.success(recado, icon="📊")
 
         with st.form("metas"):
             novos: dict[int, float] = {}

@@ -8,7 +8,6 @@ from core import classify, db, repo
 from core.money import fmt_brl
 from ui import dados, destinos
 
-SEM_SUB = "— sem subcategoria —"
 ESCOLHER = {"id": None, "nome": "— escolher categoria —", "subcategorias": []}
 
 
@@ -17,18 +16,38 @@ def _opcoes(plano, natureza: str):
 
 
 def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> None:
-    """Bloco de edição de um lançamento. Usado na fila e na busca."""
+    """Bloco de edição de um lançamento. Usado na fila e na busca.
+
+    Um campo só, "Categoria › Subcategoria", dentro de um formulário. As duas
+    coisas andam juntas e vieram da mesma medição: com dois campos encadeados,
+    a subcategoria tinha de ser recalculada a partir da categoria escolhida no
+    mesmo rerun — e isso obrigava cada toque de campo a re-executar a tela
+    inteira. Medido aqui dentro: 872ms por toque, contra 24ms na tela de metas,
+    que já usava formulário. A conta de classificar cinquenta lançamentos era
+    essa diferença, cinquenta vezes.
+
+    Com o destino achatado não há mais encadeamento, e o formulário passa a
+    caber: escolher não recarrega nada, só o Salvar recarrega. É a mesma lista
+    que a tela de de-para, o lançamento manual e a Análise IA já usam.
+    """
     natureza = "receita" if item["valor_centavos"] > 0 else "despesa"
-    categorias = _opcoes(plano, natureza)
-    if not categorias:
+    if not _opcoes(plano, natureza):
         st.error("Nenhuma categoria cadastrada para esta natureza.")
         return
-    # sem categoria ainda: exige escolha explícita, para ninguém salvar sem
-    # querer a primeira categoria da lista
-    if not item.get("categoria_id"):
-        categorias = [ESCOLHER, *categorias]
 
-    with st.container(border=True):
+    atual = (item.get("categoria_id"), item.get("subcategoria_id"))
+    lista = destinos.do_plano(plano, natureza, primeiro=item.get("categoria_id"))
+    indice = next((i for i, d in enumerate(lista.values()) if d == atual), None)
+    if indice is None:
+        # sem categoria ainda (ou numa categoria já desativada): exige escolha
+        # explícita, para ninguém salvar sem querer o primeiro destino da lista
+        lista = {ESCOLHER["nome"]: None, **lista}
+        indice = 0
+
+    # a chave vira uma classe no HTML (st-key-linha…), e é por ela que o tema
+    # apaga a moldura do formulário aqui dentro: ele existe pelo comportamento
+    # (não recarregar a tela a cada escolha), não para virar caixa dentro de caixa
+    with st.container(border=True, key=f"linha{prefixo}{item['id']}"):
         cabecalho, corpo = st.columns([1.5, 2.6])
         # o rótulo da origem é a melhor pista do que a linha é: a pensão vinha
         # como "CONTRIBUIÇÃO MENSAL", e sem mostrá-lo a descrição fica sozinha
@@ -44,44 +63,48 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
             unsafe_allow_html=True,
         )
         with corpo:
-            c1, c2, c3 = st.columns([1.3, 1.3, 0.8])
-            atual = item.get("categoria_id")
-            indice = next((i for i, c in enumerate(categorias) if c["id"] == atual), 0)
-            categoria = c1.selectbox(
-                "Categoria", categorias, index=indice,
-                format_func=lambda c: c["nome"], key=f"{prefixo}cat{item['id']}",
-            )
-            subs = [s for s in categoria["subcategorias"] if s["ativa"]]
-            opcoes_sub = [SEM_SUB, *[s["nome"] for s in subs]]
-            atual_sub = next(
-                (s["nome"] for s in subs if s["id"] == item.get("subcategoria_id")), SEM_SUB
-            )
-            sub_nome = c2.selectbox(
-                "Subcategoria", opcoes_sub, index=opcoes_sub.index(atual_sub),
-                key=f"{prefixo}sub{item['id']}",
-            )
-            pessoa = c3.selectbox(
-                "Pessoa", db.PESSOAS,
-                index=db.PESSOAS.index(item["pessoa"]) if item.get("pessoa") in db.PESSOAS else 2,
-                key=f"{prefixo}pes{item['id']}",
-            )
-            b1, b2, b3 = st.columns([1, 1.9, 0.8])
-            if b3.button("Excluir", key=f"{prefixo}del{item['id']}", width="stretch",
-                         help="Apaga este lançamento. Use quando duas fontes descreverem "
-                              "o mesmo dinheiro e você quiser ficar com uma só."):
+            # border=False porque o container acima já desenha a moldura do
+            # bloco; o formulário aqui existe pelo comportamento, não pela caixa
+            with st.form(f"{prefixo}form{item['id']}", border=False):
+                c1, c2 = st.columns([2.6, 0.8])
+                escolha = c1.selectbox(
+                    "Vai para", list(lista), index=indice,
+                    key=f"{prefixo}dest{item['id']}",
+                    help="Escolha a subcategoria quando ela importar. A categoria "
+                         "sozinha já tira o lançamento da fila.",
+                )
+                pessoa = c2.selectbox(
+                    "Pessoa", db.PESSOAS,
+                    index=(db.PESSOAS.index(item["pessoa"])
+                           if item.get("pessoa") in db.PESSOAS else 2),
+                    key=f"{prefixo}pes{item['id']}",
+                )
+                b1, b2, b3 = st.columns([1, 1.9, 0.8])
+                salvar = b1.form_submit_button("Salvar", type="primary", width="stretch")
+                b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")
+                # Excluir também é submit do formulário: fora dele, o botão
+                # apagaria o lançamento com o destino que estava na tela antes
+                # da escolha atual — e voltaria a fazer a tela recarregar a cada
+                # toque de campo, que é justamente o que se veio consertar
+                excluir = b3.form_submit_button(
+                    "Excluir", width="stretch",
+                    help="Apaga este lançamento. Use quando duas fontes descreverem "
+                         "o mesmo dinheiro e você quiser ficar com uma só.",
+                )
+
+            if excluir:
                 repo.excluir_transacao(engine, item["id"])
                 st.session_state["msg_classificacao"] = (
                     f"Lançamento de {item['data']:%d/%m/%Y} — {item['descricao'][:40]} — excluído."
                 )
                 st.rerun()
-            if b1.button("Salvar", key=f"{prefixo}ok{item['id']}", type="primary",
-                         width="stretch"):
-                if categoria["id"] is None:
+            if salvar:
+                destino = lista[escolha]
+                if destino is None:
                     st.warning("Escolha uma categoria antes de salvar.")
                     return
-                sub_id = next((s["id"] for s in subs if s["nome"] == sub_nome), None)
                 virou_regra = repo.reclassificar(
-                    engine, item["id"], categoria_id=categoria["id"], subcategoria_id=sub_id,
+                    engine, item["id"], categoria_id=destino[0], subcategoria_id=destino[1],
                     pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
                 )
                 st.session_state["msg_classificacao"] = (
@@ -93,7 +116,6 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                     "como regra faria todo lançamento parecido herdar esta classificação."
                 )
                 st.rerun()
-            b2.caption("Ao salvar, a correção vira memória e vale para as próximas faturas.")
 
 
 def _destinos(plano, natureza: str) -> dict[str, tuple[int, int | None] | None]:
@@ -218,8 +240,11 @@ def _listar(engine, usuario, fila, plano) -> None:
 
 
 def render(engine, usuario: dict) -> None:
-    if st.session_state.pop("msg_classificacao", None):
-        st.success(st.session_state.get("msg_classificacao", "Salvo."), icon="🧠")
+    # o `pop` tira o recado; ler de novo pelo `get` só devolvia o texto padrão,
+    # e a frase que explica se a correção virou memória nunca chegava à tela
+    recado = st.session_state.pop("msg_classificacao", None)
+    if recado:
+        st.success(recado, icon="🧠")
 
     # a tela inteira lê do cache, que se invalida sozinho a cada gravação.
     # Trocar de categoria, digitar no filtro ou trocar de aba não vão ao banco;

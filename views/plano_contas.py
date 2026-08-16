@@ -108,8 +108,9 @@ def render(engine, usuario: dict) -> None:
         "Renomear uma categoria preserva o histórico já classificado nela."
     )
 
-    if st.session_state.pop("msg_plano", None):
-        st.success(st.session_state.get("msg_plano", "Salvo."), icon="🗂️")
+    recado = st.session_state.pop("msg_plano", None)
+    if recado:
+        st.success(recado, icon="🗂️")
 
     # o plano inteiro numa leitura e separado aqui: pedir por natureza eram
     # duas viagens para a mesma tabela, com a mesma resposta dentro
