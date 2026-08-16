@@ -14,6 +14,7 @@ import streamlit as st
 
 from core import db, repo
 from core.money import fmt_brl
+from ui import destinos
 from ui.tema import selo_pessoa
 
 ROTULOS = {
@@ -40,17 +41,7 @@ def _destinos(plano, natureza: str) -> dict[str, tuple[int, int | None] | None]:
     Dois campos encadeados obrigam a escolher, esperar a tela recarregar e só
     então ver as subcategorias. Aqui o destino inteiro é uma escolha.
     """
-    saida: dict[str, tuple[int, int | None] | None] = {"— escolher —": None}
-    for categoria in plano:
-        if categoria["natureza"] != natureza or not categoria["ativa"]:
-            continue
-        saida[categoria["nome"]] = (categoria["id"], None)
-        for sub in categoria["subcategorias"]:
-            if sub["ativa"]:
-                saida[f"    ↳ {categoria['nome']} › {sub['nome']}"] = (
-                    categoria["id"], sub["id"]
-                )
-    return saida
+    return {"— escolher —": None, **destinos.do_plano(plano, natureza)}
 
 
 def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
@@ -61,7 +52,7 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
 
     with st.expander(rotulo["titulo"], expanded=not ja_lancados):
         st.caption(rotulo["ajuda"])
-        destinos = _destinos(plano, natureza)
+        lista = _destinos(plano, natureza)
 
         with st.form(f"manual_{natureza}", clear_on_submit=True):
             c1, c2, c3 = st.columns([1, 1, 1.2])
@@ -83,14 +74,14 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                 key=f"m_valor_{natureza}",
                 help="Digite sempre positivo. O sinal sai da natureza do lançamento.",
             )
-            escolha = st.selectbox("Vai para", list(destinos), key=f"m_dest_{natureza}")
+            escolha = st.selectbox("Vai para", list(lista), key=f"m_dest_{natureza}")
             descricao = st.text_input(
                 "Descrição", value=rotulo["descricao"], key=f"m_desc_{natureza}",
                 help="Como vai aparecer nas listas, igual à descrição de um extrato.",
             )
 
             if st.form_submit_button("Lançar", type="primary"):
-                destino = destinos[escolha]
+                destino = lista[escolha]
                 if valor <= 0:
                     st.error("Informe um valor maior que zero.")
                 elif destino is None:

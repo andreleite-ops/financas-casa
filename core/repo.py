@@ -1412,6 +1412,11 @@ def sem_subcategoria(conn, competencia: str | None = None, limite: int = 200) ->
             db.transacoes.c.valor_centavos,
             db.transacoes.c.categoria_id,
             db.categorias.c.nome.label("categoria"),
+            # a natureza vem da categoria, nao do sinal: um estorno dentro de
+            # uma despesa entra com valor positivo e continua sendo despesa.
+            # Pelo sinal, a tela ofereceria a lista de receitas para trocar o
+            # grupo dele.
+            db.categorias.c.natureza,
         )
         .select_from(
             db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
@@ -1484,42 +1489,79 @@ def sugerir_subcategorias(conn, competencia: str | None = None, limite: int = 60
     return saida
 
 
-def aplicar_subcategorias(engine, escolhas: dict[int, str], usuario: str) -> int:
-    """Grava as subcategorias conferidas. Nao mexe em quem ja tem uma.
+def aplicar_destinos(
+    engine, escolhas: dict[int, tuple[int, int | None]], usuario: str
+) -> dict[str, int]:
+    """Grava o destino conferido de cada lancamento da revisao de subcategorias.
 
-    A memoria de estabelecimentos nao aprende com isto de proposito: ela guarda
-    correcao de gente, e uma sugestao aceita em lote nao tem o mesmo peso de
-    alguem ter olhado aquele lancamento e decidido.
+    A escolha e o par (categoria, subcategoria) porque o grupo tambem sai
+    errado: o lancamento foi classificado em volume, caiu em Casa e era Lazer.
+    Obrigar a corrigir isso noutra tela seria caçar o lançamento de novo,
+    depois — e o "depois" e justamente o que esta tela existe para evitar.
+
+    As duas correcoes nao tem o mesmo peso, e por isso nao terminam igual:
+
+    - so preencher a subcategoria e aceitar uma sugestao dentro da categoria
+      que gente ja escolheu; nao vira memoria, senao a IA estaria ensinando o
+      sistema com o proprio palpite.
+    - trocar a categoria e correcao de gente contra o que estava gravado. Vale
+      como memoria, do mesmo jeito que a tela de classificacao: a proxima
+      fatura ja reconhece o estabelecimento no grupo certo.
+
+    Devolve quantos foram gravados, quantos mudaram de categoria e quantos
+    viraram memoria — a tela conta isso de volta para quem conferiu.
     """
     if not escolhas:
-        return 0
-    gravadas = 0
+        return {"gravadas": 0, "categorias": 0, "memorias": 0}
+    contas = {"gravadas": 0, "categorias": 0, "memorias": 0}
     with engine.begin() as conn:
-        _, subs_idx = _indice_categorias(conn)
         atuais = {
-            linha.id: linha.categoria_id
+            linha.id: linha
             for linha in conn.execute(
-                sa.select(db.transacoes.c.id, db.transacoes.c.categoria_id).where(
+                sa.select(
+                    db.transacoes.c.id,
+                    db.transacoes.c.categoria_id,
+                    db.transacoes.c.descricao,
+                    db.transacoes.c.pessoa,
+                ).where(
                     db.transacoes.c.id.in_(list(escolhas)),
                     db.transacoes.c.subcategoria_id.is_(None),
                 )
             )
         }
-        for transacao_id, nome in escolhas.items():
-            categoria_id = atuais.get(transacao_id)
-            if categoria_id is None:
+        for transacao_id, destino in escolhas.items():
+            atual = atuais.get(transacao_id)
+            if atual is None:
                 continue
-            subcategoria_id = subs_idx.get((categoria_id, str(nome).casefold()))
-            if not subcategoria_id:
+            categoria_id, subcategoria_id = destino
+            if not categoria_id:
                 continue
+            trocou = categoria_id != atual.categoria_id
+            if not trocou and subcategoria_id is None:
+                continue                      # nao mudou nada: nao gasta escrita
+            valores = dict(
+                categoria_id=categoria_id,
+                subcategoria_id=subcategoria_id,
+                classificado_por=usuario,
+                observacao=(
+                    "categoria corrigida na revisão de subcategorias" if trocou
+                    else "subcategoria sugerida pela IA e conferida"
+                ),
+            )
+            if trocou:
+                valores["status"] = "manual"
+                valores["confianca"] = 1.0
             conn.execute(
                 sa.update(db.transacoes)
                 .where(db.transacoes.c.id == transacao_id)
-                .values(
-                    subcategoria_id=subcategoria_id,
-                    observacao="subcategoria sugerida pela IA e conferida",
-                    classificado_por=usuario,
-                )
+                .values(**valores)
             )
-            gravadas += 1
-    return gravadas
+            contas["gravadas"] += 1
+            if trocou:
+                contas["categorias"] += 1
+                if classify.aprender(
+                    conn, atual.descricao, categoria_id, subcategoria_id,
+                    usuario, atual.pessoa,
+                ):
+                    contas["memorias"] += 1
+    return contas

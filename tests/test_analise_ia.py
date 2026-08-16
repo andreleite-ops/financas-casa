@@ -313,23 +313,29 @@ def test_subcategoria_inventada_pela_ia_e_descartada(engine, conn, monkeypatch):
     assert "Farmácia" in linhas[0]["opcoes"]
 
 
+def _sub_id(conn, categoria_id: int, nome: str) -> int:
+    return conn.execute(
+        sa.select(db.subcategorias.c.id).where(
+            db.subcategorias.c.categoria_id == categoria_id, db.subcategorias.c.nome == nome
+        )
+    ).scalar_one()
+
+
 def test_aplicar_subcategoria_nao_sobrescreve_quem_ja_tem(engine, conn):
     saude = _categoria_id(conn, "Saúde")
     opcoes = _subcategorias(conn, saude)
-    ja_tem = conn.execute(
-        sa.select(db.subcategorias.c.id).where(
-            db.subcategorias.c.categoria_id == saude, db.subcategorias.c.nome == opcoes[0]
-        )
-    ).scalar_one()
+    ja_tem = _sub_id(conn, saude, opcoes[0])
+    outra = _sub_id(conn, saude, opcoes[1])
     com_sub = _inserir(conn, date(2026, 8, 5), "CONSULTA", -20_000, saude, ja_tem)
     sem_sub = _inserir(conn, date(2026, 8, 6), "DROGARIA", -12_000, saude)
     conn.commit()
 
-    gravadas = repo.aplicar_subcategorias(
-        engine, {com_sub: opcoes[1], sem_sub: opcoes[1]}, "André"
+    contas = repo.aplicar_destinos(
+        engine, {com_sub: (saude, outra), sem_sub: (saude, outra)}, "André"
     )
 
-    assert gravadas == 1
+    assert contas["gravadas"] == 1
+    assert contas["categorias"] == 0
     with engine.connect() as leitura:
         depois = {
             linha.id: linha.subcategoria_id
@@ -340,7 +346,88 @@ def test_aplicar_subcategoria_nao_sobrescreve_quem_ja_tem(engine, conn):
             )
         }
     assert depois[com_sub] == ja_tem                       # intocado
-    assert depois[sem_sub] is not None and depois[sem_sub] != ja_tem
+    assert depois[sem_sub] == outra
+
+
+def test_trocar_a_categoria_na_revisao_corrige_e_vira_memoria(engine, conn):
+    """O grupo errado só reaparece aqui — e corrigir aqui tem que valer.
+
+    Foi o caso concreto: classificado em volume, o lançamento caiu na
+    categoria errada e voltou nesta tela só porque faltava subcategoria.
+    """
+    saude = _categoria_id(conn, "Saúde")
+    lazer = _categoria_id(conn, "Lazer & Viagens")
+    destino = _sub_id(conn, lazer, _subcategorias(conn, lazer)[0])
+    errado = _inserir(conn, date(2026, 8, 7), "CINEMA IBIRAPUERA", -6_000, saude)
+    conn.commit()
+
+    contas = repo.aplicar_destinos(engine, {errado: (lazer, destino)}, "André")
+
+    assert contas == {"gravadas": 1, "categorias": 1, "memorias": 1}
+    with engine.connect() as leitura:
+        linha = leitura.execute(
+            sa.select(
+                db.transacoes.c.categoria_id, db.transacoes.c.subcategoria_id,
+                db.transacoes.c.status,
+            ).where(db.transacoes.c.id == errado)
+        ).one()
+        assert linha.categoria_id == lazer
+        assert linha.subcategoria_id == destino
+        assert linha.status == "manual"                    # correção de gente
+        # a próxima fatura já reconhece o mesmo estabelecimento no grupo certo
+        regra = leitura.execute(
+            sa.select(db.regras.c.categoria_id, db.regras.c.origem).where(
+                db.regras.c.padrao == "CINEMA IBIRAPUERA"
+            )
+        ).one()
+        assert (regra.categoria_id, regra.origem) == (lazer, "aprendida")
+
+
+def test_preencher_so_a_subcategoria_nao_vira_memoria(engine, conn):
+    """Aceitar a sugestão da IA não é a IA ensinar o sistema.
+
+    A categoria continua a mesma, escolhida por gente; guardar isso como
+    memória faria o palpite do modelo virar regra para as próximas faturas.
+    """
+    saude = _categoria_id(conn, "Saúde")
+    sub = _sub_id(conn, saude, _subcategorias(conn, saude)[0])
+    linha_id = _inserir(conn, date(2026, 8, 8), "DROGARIA SAO PAULO", -9_000, saude)
+    conn.commit()
+
+    contas = repo.aplicar_destinos(engine, {linha_id: (saude, sub)}, "André")
+
+    assert contas == {"gravadas": 1, "categorias": 0, "memorias": 0}
+    with engine.connect() as leitura:
+        assert leitura.execute(
+            sa.select(sa.func.count()).select_from(db.regras).where(
+                db.regras.c.origem == "aprendida"
+            )
+        ).scalar_one() == 0
+
+
+def test_a_lista_de_destinos_oferece_o_plano_da_natureza_certa(engine, conn):
+    """O campo da tela: categoria e subcategoria numa escolha só.
+
+    A natureza vem da categoria do lançamento, não do sinal — senão um estorno
+    dentro de uma despesa apareceria com a lista de receitas para escolher.
+    """
+    from ui import destinos
+
+    saude = _categoria_id(conn, "Saúde")
+    _inserir(conn, date(2026, 8, 9), "ESTORNO PLANO", 5_000, saude)
+
+    item = repo.sem_subcategoria(conn, competencia="2026-08")[0]
+    assert item["natureza"] == "despesa"                    # veio da categoria
+
+    lista = destinos.do_plano(
+        repo.plano_de_contas(conn), item["natureza"], primeiro=item["categoria_id"]
+    )
+    rotulos = list(lista)
+    assert rotulos[0] == "Saúde"                            # a categoria atual na frente
+    assert all(cat_id for cat_id, _ in lista.values())
+    # o plano inteiro está ali: dá para trocar de grupo sem sair da tela
+    assert any(rotulo.startswith("    ↳ Lazer & Viagens › ") for rotulo in rotulos)
+    assert not any(rotulo.startswith("Salário") for rotulo in rotulos)
 
 
 def test_sem_chave_a_tela_de_subcategoria_nao_chama_nada(engine, conn, monkeypatch):

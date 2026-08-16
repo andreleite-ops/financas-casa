@@ -13,6 +13,7 @@ import streamlit as st
 
 from core import ai, analytics, repo
 from core.money import fmt_brl
+from ui import destinos
 
 
 def _reais(centavos: int) -> str:
@@ -281,6 +282,12 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     estreita — dentro de Saúde, isto é Farmácia ou Consulta? — porque a
     categoria já foi decidida por gente e não está em jogo.
     """
+    # o recado de quem acabou de aplicar: st.success antes do rerun some junto
+    # com a tela que o escreveu, e o resultado da gravação nunca era lido
+    recado = st.session_state.pop("msg_subcategorias", None)
+    if recado:
+        st.success(recado, icon="✅")
+
     with engine.connect() as conn:
         faltando = repo.sem_subcategoria(conn, competencia=competencia, limite=500)
     if not faltando:
@@ -290,7 +297,9 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     total = sum(abs(item["valor_centavos"]) for item in faltando)
     st.caption(
         f"{len(faltando)} lançamentos com categoria e sem subcategoria neste mês, "
-        f"{_reais(total)}. A categoria escolhida não é alterada."
+        f"{_reais(total)}. A sugestão da IA fica dentro da categoria já escolhida, "
+        "mas a lista ao lado tem o plano inteiro: se o grupo veio errado, "
+        "corrija aqui mesmo."
     )
     # sem chave a tela continua servindo: a lista de subcategorias vem do plano
     # de contas, não da IA. Muda só o que aparece preenchido.
@@ -309,24 +318,29 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     if not sugestoes:
         return
 
-    _tabela_de_subcategorias(engine, sugestoes, usuario)
+    with engine.connect() as conn:
+        plano = repo.plano_de_contas(conn)
+    _tabela_de_subcategorias(engine, sugestoes, plano, usuario)
 
 
 DEIXAR_PARA_DEPOIS = "— deixar para depois —"
 CONFIANCA_PARA_PREENCHER = 0.8
 
 
-def _tabela_de_subcategorias(engine, sugestoes: list[dict], usuario: dict) -> None:
-    """Uma linha por lançamento, com a escolha ao lado — sugerida ou não.
+def _tabela_de_subcategorias(engine, sugestoes: list[dict], plano, usuario: dict) -> None:
+    """Uma linha por lançamento, com o destino ao lado — sugerido ou não.
+
+    O campo é um só, "Categoria › Subcategoria", com o plano inteiro dentro
+    dele e o bloco da categoria atual no topo. A classificação em volume erra
+    o grupo de vez em quando (foi para Casa e era Lazer), e essa linha só
+    reaparece aqui, faltando subcategoria. Oferecer só as subcategorias do
+    grupo errado obrigaria a corrigir o grupo noutra tela, depois — e "depois"
+    é o que esta tela existe para evitar.
 
     Os que a IA não soube dizer aparecem aqui do mesmo jeito, com o campo em
-    branco. Some-los da tela obrigava a caçar o lançamento numa outra tela
-    depois; deixá-los com a lista ao lado resolve no mesmo gesto, enquanto o
-    lançamento ainda está na frente de quem olha.
-
-    A confiança alta já vem preenchida (é aceitar em bloco); a baixa vem em
-    branco de propósito — é ela que precisa de gente, e um valor preenchido
-    seria aceito no automático justamente onde a IA disse não saber.
+    branco. A confiança alta já vem preenchida (é aceitar em bloco); a baixa
+    vem em branco de propósito — é ela que precisa de gente, e um valor
+    preenchido seria aceito no automático justamente onde a IA disse não saber.
     """
     sem_sugestao = [item for item in sugestoes if not item["subcategoria"]]
     st.caption(
@@ -338,23 +352,36 @@ def _tabela_de_subcategorias(engine, sugestoes: list[dict], usuario: dict) -> No
         )
     )
 
-    escolhas: dict[int, str] = {}
-    cabecalho = st.columns([3, 2, 2.4, 1.1, 1])
-    for coluna, titulo in zip(cabecalho, ("Lançamento", "Categoria", "Subcategoria",
+    escolhas: dict[int, tuple[int, int | None]] = {}
+    trocas = 0
+    larguras = [2.6, 1.6, 3.4, 1.2, 1]
+    cabecalho = st.columns(larguras)
+    for coluna, titulo in zip(cabecalho, ("Lançamento", "Categoria hoje", "Destino",
                                           "Confiança", "Valor")):
         coluna.caption(f"**{titulo}**")
 
     for item in sugestoes:
-        colunas = st.columns([3, 2, 2.4, 1.1, 1])
-        colunas[0].write(f"{item['data']:%d/%m} {item['descricao'][:38]}")
+        colunas = st.columns(larguras)
+        colunas[0].write(f"{item['data']:%d/%m} {item['descricao'][:34]}")
         colunas[1].write(item["categoria"])
 
-        opcoes = [DEIXAR_PARA_DEPOIS] + list(item["opcoes"])
+        # o plano inteiro da natureza do lançamento, com o bloco da categoria
+        # atual na frente: o caso comum continua a um clique, e o grupo errado
+        # tem para onde ir
+        destino_por_rotulo = destinos.do_plano(
+            plano, item["natureza"], primeiro=item["categoria_id"]
+        )
+        opcoes = [DEIXAR_PARA_DEPOIS, *destino_por_rotulo]
+
         sugerida = item["subcategoria"]
         preencher = bool(sugerida) and item["confianca"] >= CONFIANCA_PARA_PREENCHER
-        indice = opcoes.index(sugerida) if preencher and sugerida in opcoes else 0
+        rotulo_sugerido = destinos.rotulo(item["categoria"], sugerida) if sugerida else ""
+        indice = (
+            opcoes.index(rotulo_sugerido)
+            if preencher and rotulo_sugerido in opcoes else 0
+        )
         escolha = colunas[2].selectbox(
-            "subcategoria", opcoes, index=indice, key=f"sub_{item['id']}",
+            "destino", opcoes, index=indice, key=f"sub_{item['id']}",
             label_visibility="collapsed",
         )
 
@@ -367,14 +394,36 @@ def _tabela_de_subcategorias(engine, sugestoes: list[dict], usuario: dict) -> No
         colunas[4].caption(fmt_brl(item["valor_centavos"]))
 
         if escolha != DEIXAR_PARA_DEPOIS:
-            escolhas[item["id"]] = escolha
+            destino = destino_por_rotulo[escolha]
+            escolhas[item["id"]] = destino
+            trocas += destino[0] != item["categoria_id"]
 
     st.divider()
     if st.button(
-        f"Aplicar {len(escolhas)} subcategorias", key="ia_aplicar_subs",
+        f"Aplicar {len(escolhas)} classificações", key="ia_aplicar_subs",
         type="primary", disabled=not escolhas,
+        help=(f"{trocas} deles mudam de categoria, e a troca vira memória "
+              "para as próximas faturas." if trocas else None),
     ):
-        gravadas = repo.aplicar_subcategorias(engine, escolhas, usuario.get("nome", "—"))
+        contas = repo.aplicar_destinos(engine, escolhas, usuario.get("nome", "—"))
         st.session_state.pop("sugestoes_sub", None)
-        st.success(f"{gravadas} subcategoria(s) preenchida(s).")
+        gravadas, trocadas, memorias = (
+            contas["gravadas"], contas["categorias"], contas["memorias"]
+        )
+        recado = (
+            "1 lançamento classificado." if gravadas == 1
+            else f"{gravadas} lançamentos classificados."
+        )
+        if trocadas:
+            recado += (
+                " 1 mudou de categoria" if trocadas == 1
+                else f" {trocadas} mudaram de categoria"
+            )
+            recado += (
+                (f", e {'a correção virou memória' if memorias == 1 else f'{memorias} viraram memória'}"
+                 " — a próxima fatura já reconhece o estabelecimento no grupo certo.")
+                if memorias
+                else " (sem virar memória: a descrição só diz o meio de pagamento)."
+            )
+        st.session_state["msg_subcategorias"] = recado
         st.rerun()

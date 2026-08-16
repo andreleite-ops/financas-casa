@@ -6,6 +6,7 @@ import streamlit as st
 
 from core import classify, db, repo
 from core.money import fmt_brl
+from ui import destinos
 
 SEM_SUB = "— sem subcategoria —"
 ESCOLHER = {"id": None, "nome": "— escolher categoria —", "subcategorias": []}
@@ -98,22 +99,10 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
 def _destinos(plano, natureza: str) -> dict[str, tuple[int, int | None] | None]:
     """Rótulo legível -> (categoria_id, subcategoria_id), achatado num nível só.
 
-    A categoria aparece sozinha e depois cada subcategoria dela, indentada. O
-    destino inteiro vira uma escolha só: quem quer o detalhe pega a
-    subcategoria, quem não quer para na categoria — e nos dois casos o
-    lançamento sai da fila.
+    A lista mora em ui.destinos porque a revisão de subcategorias da Análise IA
+    usa a mesma; aqui só entra a linha de "ainda não escolhi" na frente.
     """
-    saida: dict[str, tuple[int, int | None] | None] = {ESCOLHER["nome"]: None}
-    for categoria in plano:
-        if categoria["natureza"] != natureza or not categoria["ativa"]:
-            continue
-        saida[categoria["nome"]] = (categoria["id"], None)
-        for sub in categoria["subcategorias"]:
-            if sub["ativa"]:
-                saida[f"    ↳ {categoria['nome']} › {sub['nome']}"] = (
-                    categoria["id"], sub["id"]
-                )
-    return saida
+    return {ESCOLHER["nome"]: None, **destinos.do_plano(plano, natureza)}
 
 
 def _aba_de_para(engine, usuario: dict, plano) -> None:
@@ -175,16 +164,16 @@ def _aba_de_para(engine, usuario: dict, plano) -> None:
                 # tela recarregar e só então ver as subcategorias — e, com a
                 # lista de opções mudando debaixo do widget, elas nem sempre
                 # apareciam. Aqui o destino inteiro é uma escolha só.
-                destinos = _destinos(plano, natureza)
+                lista = _destinos(plano, natureza)
                 c1, c2 = st.columns([3.2, 0.9])
                 escolha = c1.selectbox(
-                    "Vai para", list(destinos), key=f"dp_dest_{rotulo}",
+                    "Vai para", list(lista), key=f"dp_dest_{rotulo}",
                     help="Escolha a subcategoria quando ela importar. A categoria "
                          "sozinha já tira o lançamento da fila.",
                 )
                 if c2.button("Aplicar", key=f"dp_ok_{rotulo}", type="primary",
                              width="stretch"):
-                    destino = destinos[escolha]
+                    destino = lista[escolha]
                     if destino is None:
                         st.warning("Escolha o destino antes de aplicar.")
                     else:
