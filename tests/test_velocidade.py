@@ -194,3 +194,19 @@ def test_salvar_metas_nao_cresce_com_o_numero_de_categorias(engine, conn):
     with engine.connect() as leitura:
         assert repo.listar_metas(leitura, 2026) == metas
     assert contador.n <= 6, f"{contador.n} consultas no segundo salvamento"
+
+
+# ---------------------------------------------------------------------------
+# a descrição do extrato não pode virar formatação na tela
+# ---------------------------------------------------------------------------
+def test_asterisco_do_estabelecimento_nao_vira_italico():
+    """Foi visto na tela: "PCART*TAB*SAO PAULO" saiu com TAB em itálico.
+
+    Os asteriscos são do nome do estabelecimento, não marcação — e o recado
+    que confirma o que foi salvo comia parte do nome bem na hora de dizê-lo.
+    """
+    from core.texto import sem_marcacao
+
+    assert sem_marcacao("PCART*TAB*SAO PAULO") == r"PCART\*TAB\*SAO PAULO"
+    assert sem_marcacao("MERCADO_LIVRE") == r"MERCADO\_LIVRE"
+    assert sem_marcacao("IFOOD 123") == "IFOOD 123"      # nada a escapar

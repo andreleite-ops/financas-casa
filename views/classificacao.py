@@ -6,6 +6,7 @@ import streamlit as st
 
 from core import classify, db, repo
 from core.money import fmt_brl
+from core.texto import sem_marcacao
 from ui import dados, destinos
 
 ESCOLHER = {"id": None, "nome": "— escolher categoria —", "subcategorias": []}
@@ -95,7 +96,8 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
             if excluir:
                 repo.excluir_transacao(engine, item["id"])
                 st.session_state["msg_classificacao"] = (
-                    f"Lançamento de {item['data']:%d/%m/%Y} — {item['descricao'][:40]} — excluído."
+                    f"Lançamento de {item['data']:%d/%m/%Y} — "
+                    f"{sem_marcacao(item['descricao'][:40])} — excluído."
                 )
                 st.rerun()
             if salvar:
@@ -108,7 +110,8 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                     pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
                 )
                 st.session_state["msg_classificacao"] = (
-                    f"Salvo. O sistema vai reconhecer “{item['descricao'][:40]}” sozinho "
+                    f"Salvo. O sistema vai reconhecer "
+                    f"“{sem_marcacao(item['descricao'][:40])}” sozinho "
                     "na próxima importação."
                     if virou_regra else
                     "Salvo — só este lançamento. A descrição diz o meio de pagamento "
@@ -291,16 +294,38 @@ def render(engine, usuario: dict) -> None:
             st.rerun()
 
     total_pendente = sum(por_mes.values())
-    aba_de_para, aba_fila, aba_busca = st.tabs([
-        f"🔁 De-para de rótulos ({len(rotulos)})",
-        f"📌 Fila de pendências ({total_pendente})",
-        "🔎 Reclassificar qualquer lançamento",
-    ])
+    # Seções em vez de abas, por um motivo prático: `st.tabs` não guarda qual
+    # aba estava aberta, e todo `st.rerun()` devolve a tela para a primeira.
+    # Quem classifica salva um lançamento e é jogado de volta para o de-para,
+    # cinquenta vezes seguidas. Com a escolha guardada no estado, salvar deixa
+    # a pessoa onde ela estava.
+    #
+    # De quebra, só a seção aberta é desenhada. Com abas, o Streamlit executa
+    # as três em todo rerun — inclusive os quarenta editores da busca, que
+    # ninguém pediu.
+    SECOES = {
+        f"🔁 De-para de rótulos ({len(rotulos)})": "de_para",
+        f"📌 Fila de pendências ({total_pendente})": "fila",
+        "🔎 Reclassificar qualquer lançamento": "busca",
+    }
+    if st.session_state.get("secao_classificacao") not in SECOES.values():
+        st.session_state["secao_classificacao"] = "fila"
+    rotulo_atual = next(
+        r for r, chave in SECOES.items()
+        if chave == st.session_state["secao_classificacao"]
+    )
+    escolhida = st.segmented_control(
+        "Seção", list(SECOES), default=rotulo_atual,
+        key="secao_rotulo", label_visibility="collapsed",
+    )
+    if escolhida:
+        st.session_state["secao_classificacao"] = SECOES[escolhida]
+    secao = st.session_state["secao_classificacao"]
 
-    with aba_de_para:
+    if secao == "de_para":
         _aba_de_para(engine, usuario, plano, rotulos, traduzidos)
 
-    with aba_fila:
+    if secao == "fila":
         if not total_pendente:
             st.success("Nada pendente — tudo classificado.", icon="✅")
             st.caption(
@@ -340,7 +365,7 @@ def render(engine, usuario: dict) -> None:
                 )
                 _listar(engine, usuario, fila, plano)
 
-    with aba_busca:
+    if secao == "busca":
         termo = st.text_input(
             "Buscar", placeholder="Ex.: iFood, Uber, mercado…",
             help="Busca na descrição do extrato.",

@@ -128,3 +128,19 @@ def parcela_de(descricao: str) -> tuple[int, int] | None:
     if total < 2 or atual > total or total > 48:
         return None
     return atual, total
+
+
+# Caracteres que o Streamlit lê como formatação quando um texto nosso vira
+# mensagem na tela.
+_MARCACAO = "*_`~[]$"
+
+
+def sem_marcacao(texto: str) -> str:
+    """Descricao de extrato pronta para entrar num recado da tela.
+
+    "PCART*TAB*SAO PAULO" virava "PCART TAB SAO PAULO" com TAB em italico: os
+    asteriscos do estabelecimento sao marcacao de markdown, e a tela comia
+    parte do nome justamente na hora de dizer o que foi salvo. Cifrao entra na
+    lista pelo mesmo motivo — um par deles vira formula.
+    """
+    return "".join("\\" + c if c in _MARCACAO else c for c in texto)
