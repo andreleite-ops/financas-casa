@@ -170,3 +170,105 @@ def test_despesa_manual_nao_entra_nessa_regra(engine, conn):
         assert leitura.execute(
             sa.select(db.transacoes.c.ativo).where(db.transacoes.c.id == id_euros)
         ).scalar_one() is True
+
+
+# ---------------------------------------------------------------------------
+# o que a regra automática não casa, a tela pergunta
+# ---------------------------------------------------------------------------
+def test_dinheiro_que_caiu_no_mes_seguinte_vira_pergunta(engine, conn):
+    """Previsto em novembro, creditado no dia 1º de dezembro.
+
+    Meses diferentes: o pareamento automático não encosta nisso, e com razão —
+    dezembro pode ter o seu próprio salário. Mas ficar calado aqui é deixar a
+    renda dobrar sem ninguém saber.
+    """
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-11", 2_059_621)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 12, 1), 2_059_621, "TED PRO LABORE")
+
+    assert resumo["previsoes_realizadas"] == 0            # não casou, e não devia
+    conferir = resumo["previsoes_a_conferir"]
+    assert [item["competencia"] for item in conferir] == ["2026-11"]
+
+
+def test_mes_de_bonus_vira_pergunta(engine, conn):
+    """Previu 20.000 e entrou 30.000: fora da folga do pareamento."""
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-11", 2_000_000)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 11, 5), 3_000_000, "TED PRO LABORE")
+
+    assert resumo["previsoes_realizadas"] == 0
+    assert len(resumo["previsoes_a_conferir"]) == 1
+
+
+def test_previsao_que_nao_se_parece_com_nada_do_arquivo_nao_vira_ruido(engine, conn):
+    """Os atendimentos de 4.800 não têm nada a ver com um salário de 20.596.
+
+    Avisar de tudo a cada upload é o mesmo que não avisar: o aviso vira
+    paisagem e deixa de ser lido justo no mês em que importa.
+    """
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-11", 480_000, "ATENDIMENTOS")
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 11, 5), 2_059_621, "TED PRO LABORE")
+
+    assert resumo["previsoes_a_conferir"] == []
+
+
+def test_previsao_ja_realizada_nao_e_perguntada_de_novo(engine, conn):
+    """Depois de casar, ela sai de cena — e não pode voltar como pergunta."""
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-11", 2_059_621)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 11, 5), 2_059_621, "TED PRO LABORE TAG")
+
+    assert resumo["previsoes_realizadas"] == 1
+    assert resumo["previsoes_a_conferir"] == []
+
+
+def test_extrato_so_de_despesa_nao_pergunta_nada(engine, conn):
+    """Mês sem entrada nenhuma no arquivo não tem como duplicar receita."""
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-11", 2_059_621)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 11, 5), -50_000, "SUPERMERCADO")
+
+    assert resumo["previsoes_a_conferir"] == []
+
+
+def test_mes_normal_nao_gera_aviso_nenhum(engine, conn):
+    """Ele previu todos os meses até dezembro. Se cada extrato avisasse dos
+    meses vizinhos, o aviso apareceria sempre — e aviso que aparece sempre
+    deixa de ser lido justo no mês em que importa.
+    """
+    conta = _conta_corrente(engine)
+    for mes in ("2026-09", "2026-10", "2026-11", "2026-12"):
+        _prever_receita(engine, conn, mes, 2_000_000)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 10, 5), 2_059_621, "TED PRO LABORE")
+
+    assert resumo["previsoes_realizadas"] == 1
+    assert resumo["previsoes_a_conferir"] == []      # casou; não há o que perguntar
+
+
+def test_salario_de_dezembro_creditado_em_janeiro_vira_pergunta(engine, conn):
+    """O caso que sobra: mês sem previsão própria recebendo o dinheiro do
+    mês anterior. Nada casa, e a previsão de dezembro fica de pé — as duas
+    linhas contariam.
+    """
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-12", 2_059_621)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2027, 1, 2), 2_059_621, "TED PRO LABORE")
+
+    assert resumo["previsoes_realizadas"] == 0
+    assert [item["competencia"] for item in resumo["previsoes_a_conferir"]] == ["2026-12"]

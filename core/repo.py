@@ -172,6 +172,75 @@ def _pessoa_valida(valor: str | None, padrao: str) -> str:
 LOTE_INSERCAO = 500
 
 
+def _mes_vizinho(competencia: str, passo: int) -> str:
+    ano, mes = int(competencia[:4]), int(competencia[5:7]) + passo
+    if mes == 0:
+        ano, mes = ano - 1, 12
+    elif mes == 13:
+        ano, mes = ano + 1, 1
+    return f"{ano:04d}-{mes:02d}"
+
+
+# Quanto dois valores podem divergir e ainda merecer uma conferida de olho.
+# Mais larga que a folga do pareamento automatico de proposito: aqui ninguem
+# decide nada, so se pergunta.
+FOLGA_PARA_PERGUNTAR = 0.5
+
+
+def _previsoes_por_conferir(conn, sem_par: list[dict]) -> list[dict]:
+    """Receita prevista a mao que este arquivo pode ter trazido de novo.
+
+    So olha as entradas do arquivo que **nao** casaram com previsao nenhuma. Se
+    a entrada ja realizou a previsao do proprio mes, nao ha o que perguntar — e
+    perguntar assim mesmo seria o pior tipo de aviso: o que aparece todo mes,
+    vira paisagem e deixa de ser lido justo quando importa.
+
+    Sobra o que a regra automatica nao alcanca, que e onde a duplicacao passaria
+    calada: o dinheiro caiu num mes sem previsao correspondente (o salario de
+    dezembro creditado em 2 de janeiro) ou veio tao acima do previsto que saiu
+    da folga. Nesses casos a janela abre para os meses vizinhos e a folga dobra
+    — porque aqui ninguem decide nada, so se pergunta.
+    """
+    if not sem_par:
+        return []
+
+    meses = {linha["competencia"] for linha in sem_par}
+    janela = sorted(
+        meses
+        | {_mes_vizinho(m, -1) for m in meses}
+        | {_mes_vizinho(m, +1) for m in meses}
+    )
+    consulta = (
+        sa.select(
+            db.transacoes.c.competencia,
+            db.transacoes.c.descricao,
+            db.transacoes.c.valor_centavos,
+            db.transacoes.c.pessoa,
+        )
+        .where(
+            db.transacoes.c.origem == "manual",
+            db.transacoes.c.valor_centavos > 0,
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.competencia.in_(janela),
+        )
+        .order_by(db.transacoes.c.competencia, db.transacoes.c.id)
+    )
+    saida = []
+    for previsao in conn.execute(consulta):
+        parecidas = [
+            linha for linha in sem_par
+            if abs(linha["valor_centavos"] - previsao.valor_centavos)
+            <= FOLGA_PARA_PERGUNTAR * max(linha["valor_centavos"], previsao.valor_centavos)
+        ]
+        if parecidas:
+            saida.append({
+                **dict(previsao._mapping),
+                "parecida_com": parecidas[0]["descricao"],
+                "valor_parecido": parecidas[0]["valor_centavos"],
+            })
+    return saida
+
+
 def _inserir_transacoes(conn, linhas: list[dict], upload_id: int) -> list[int]:
     """Insere tudo em poucas idas ao banco e devolve os ids na mesma ordem.
 
@@ -226,6 +295,7 @@ def importar(
         "duplicados_provaveis": 0,
         "conferidos_planilha": 0,
         "previsoes_realizadas": 0,
+        "previsoes_a_conferir": [],
         "upload_id": None,
     }
     if not lancamentos:
@@ -266,6 +336,7 @@ def importar(
         linhas: list[dict] = []          # o que será inserido, na ordem
         duplicatas: list[tuple[int, dedup.Decisao]] = []   # (posição na lista, decisão)
         substituir: list[int] = []       # linhas da planilha que o extrato aposenta
+        entradas_sem_par: list[dict] = []  # receitas que nao casaram com previsao
         pendentes_pos: list[int] = []    # posições que ficaram sem categoria
         proximo_temp = -1
 
@@ -402,6 +473,9 @@ def importar(
             }
             posicao = len(linhas)
             linhas.append(registro)
+            if (registro["valor_centavos"] > 0 and registro["ativo"]
+                    and decisao.situacao != "realiza_previsao"):
+                entradas_sem_par.append(registro)
 
             # entra no índice com id provisório, para pegar linha repetida
             # dentro do próprio arquivo
@@ -445,6 +519,17 @@ def importar(
                     for posicao, decisao in duplicatas
                 ],
             )
+
+        # A regra da previsão realizada casa por mês e por ordem de grandeza.
+        # Ela cobre o caso comum e erra por omissão em dois: o dinheiro cai no
+        # mês seguinte ao previsto, ou o valor real foge demais do previsto
+        # (mês de bônus). Nesses, ninguém pareia e a renda dobra calada — que é
+        # justamente o que não pode acontecer sem alguém ficar sabendo.
+        #
+        # Então, quando este arquivo trouxe entradas e ainda sobra receita
+        # prevista à mão por perto, a tela pergunta. Não decide nada: só põe as
+        # duas coisas lado a lado para quem sabe olhar.
+        resumo["previsoes_a_conferir"] = _previsoes_por_conferir(conn, entradas_sem_par)
 
         pendentes = [
             (ids[posicao], linhas[posicao]["descricao"], linhas[posicao]["valor_centavos"])

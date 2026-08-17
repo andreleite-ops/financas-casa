@@ -9,6 +9,16 @@ import streamlit as st
 
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
+from core.texto import sem_marcacao
+
+
+def _reais(centavos: int) -> str:
+    """Valor pronto para entrar em texto markdown.
+
+    Um par de cifrões vira fórmula LaTeX no Streamlit, e o "R$" some junto com
+    o pedaço da frase entre eles.
+    """
+    return fmt_brl(centavos).replace("$", r"\$")
 from parsers import extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
@@ -436,6 +446,27 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
             "verdade neste extrato.** A previsão saiu de cena e vale o valor do extrato — sem "
             "isso, a renda do mês apareceria dobrada. Nada foi apagado: a previsão ficou "
             "inativa e continua visível na tela **Receitas**.",
+            icon="💰",
+        )
+    # o que a regra automática não casou, mas continua parecido demais para
+    # passar sem alguém olhar
+    sobrando = resumo.get("previsoes_a_conferir") or []
+    if sobrando:
+        linhas = "\n".join(
+            f"- **{item['competencia']}** · {item['pessoa']} · "
+            f"{sem_marcacao(item['descricao'])} — {_reais(item['valor_centavos'])} "
+            f"— parecida com *{sem_marcacao(item['parecida_com'][:34])}* "
+            f"({_reais(item['valor_parecido'])}) deste arquivo"
+            for item in sobrando[:10]
+        )
+        st.warning(
+            "**Confira se alguma destas receitas lançadas à mão é o mesmo dinheiro que "
+            "acabou de entrar pelo extrato.** Elas continuam contando nos relatórios, e "
+            "duas linhas para o mesmo salário dobram a renda do mês. O que cai no mesmo "
+            "mês com valor parecido o sistema já casou sozinho; aqui sobrou o que não "
+            "casou com nada — caiu num mês sem previsão correspondente, ou veio bem "
+            "acima do previsto.\n\n" + linhas
+            + "\n\nSe alguma já veio no extrato, apague-a na tela **Receitas**.",
             icon="💰",
         )
     if resumo["duplicados_exatos"] + resumo["duplicados_provaveis"]:
