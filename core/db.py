@@ -177,6 +177,9 @@ analises = sa.Table(
     sa.Column("gerada_em", sa.DateTime, server_default=sa.func.now()),
 )
 
+# quanto esperar por uma conexao nova antes de desistir e explicar o problema
+SEGUNDOS_PARA_CONECTAR = 10
+
 _engine = None
 
 
@@ -262,6 +265,13 @@ def get_engine():
         # encontrar conexao viva quase sempre, em vez de gastar a ida
         # descobrindo que morreu para so entao abrir outra.
         kwargs = {"future": True, "pool_pre_ping": True, "pool_recycle": 300}
+        # Sem isto, banco fora do ar nao da erro: a conexao fica pendurada e a
+        # tela roda o carregando para sempre, sem dizer nada a ninguem. Foi
+        # exatamente o que aconteceu — e projeto do Supabase no plano gratuito
+        # hiberna sozinho depois de uns dias parado. Dez segundos e generoso
+        # para um banco que responde em 150ms, e transforma o travamento mudo
+        # numa mensagem que diz o que fazer.
+        kwargs["connect_args"] = {"connect_timeout": SEGUNDOS_PARA_CONECTAR}
         if url.startswith("sqlite"):
             kwargs.pop("pool_pre_ping")
             kwargs.pop("pool_recycle")

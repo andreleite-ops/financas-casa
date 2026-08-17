@@ -66,10 +66,42 @@ def _estado_da_conexao() -> dict:
     return db.diagnostico()
 
 
+def _explicar_banco_fora(erro: Exception) -> None:
+    """A tela que aparece quando o banco não responde.
+
+    Antes, banco fora do ar não dava erro nenhum: a conexão ficava pendurada e
+    o app rodava o "carregando" para sempre, sem dizer nada. Um travamento mudo
+    é pior que um erro — não há o que fazer com ele, nem como saber se o
+    problema é o app, a internet ou o banco.
+    """
+    st.error(
+        "**Não consegui falar com o banco de dados.** O app está no ar; quem não "
+        "respondeu foi o Supabase.",
+        icon="🔌",
+    )
+    st.markdown(
+        "**O que costuma ser, em ordem de probabilidade:**\n\n"
+        "1. **O projeto do Supabase hibernou.** No plano gratuito ele pausa sozinho "
+        "depois de alguns dias sem uso. Entre em [supabase.com/dashboard]"
+        "(https://supabase.com/dashboard), abra o projeto e clique em **Restore** "
+        "— leva um ou dois minutos. Depois volte aqui e recarregue a página.\n"
+        "2. **A senha do banco mudou** e o segredo `DATABASE_URL` deste app ficou "
+        "para trás (Settings › Secrets).\n"
+        "3. **O Supabase está com problema.** Dá para conferir em "
+        "[status.supabase.com](https://status.supabase.com)."
+    )
+    with st.expander("Detalhe técnico do erro"):
+        st.code(f"{type(erro).__name__}: {erro}"[:1500], language="text")
+
+
 def main() -> None:
     tema.aplicar()
     usuario = auth.exigir_login()
-    engine = preparar()
+    try:
+        engine = preparar()
+    except Exception as erro:            # banco fora do ar, senha errada, rede
+        _explicar_banco_fora(erro)
+        return
 
     # os dois números ao lado dos botões do menu. Isto roda em **todo** rerun
     # de **toda** tela, inclusive a cada tecla digitada num filtro: vêm do

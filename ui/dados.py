@@ -29,32 +29,38 @@ import streamlit as st
 from core import analytics, db, dedup, reconcile, repo
 
 TTL = 300
+# Quantas respostas guardar por função. A chave inclui a versão dos dados, e a
+# versão sobe a cada gravação: sem teto, classificar cinquenta lançamentos
+# deixaria cinquenta cópias de cada leitura na memória até o TTL expirar — e o
+# container do Streamlit Cloud tem 1 GB. Com teto, a mais antiga sai quando
+# entra uma nova, que é exatamente o que se quer: só a versão atual importa.
+MAX = 8
 
 
 def versao() -> int:
     return db.versao_dos_dados()
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def plano_de_contas(_engine, versao: int, natureza: str | None = None) -> list[dict]:
     """O plano inteiro. Lido por seis telas, e muda quando alguém o edita."""
     with _engine.connect() as conn:
         return repo.plano_de_contas(conn, natureza=natureza)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def contas(_engine, versao: int, so_ativas: bool = True) -> list[dict]:
     with _engine.connect() as conn:
         return repo.listar_contas(conn, so_ativas=so_ativas)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def competencias(_engine, versao: int) -> list[str]:
     with _engine.connect() as conn:
         return repo.competencias_disponiveis(conn)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def contexto_do_mes(_engine, versao: int, competencia: str) -> str:
     """O texto que vai para a IA — umas quinze consultas para montar.
 
@@ -71,19 +77,19 @@ def contexto_do_mes(_engine, versao: int, competencia: str) -> str:
         return analytics.contexto_para_ia(conn, competencia)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def contexto_do_ano(_engine, versao: int, competencia: str) -> str:
     with _engine.connect() as conn:
         return analytics.contexto_do_ano(conn, competencia)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def usos_das_categorias(_engine, versao: int) -> dict[int, dict]:
     with _engine.connect() as conn:
         return repo.usos_das_categorias(conn)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def critica(_engine, versao: int) -> dict:
     """Planilha × extratos, confrontados período a período.
 
@@ -95,7 +101,7 @@ def critica(_engine, versao: int) -> dict:
         return reconcile.criticar(conn)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def painel_do_mes(_engine, versao: int, competencia: str, pessoa: str) -> dict:
     """Os oito números da Visão Geral, numa chamada só.
 
@@ -130,7 +136,7 @@ def painel_do_mes(_engine, versao: int, competencia: str, pessoa: str) -> dict:
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def meses_com_despesa(_engine, versao: int) -> set[str]:
     """Em que meses há gasto lançado — decide onde a Visão Geral abre."""
     with _engine.connect() as conn:
@@ -146,19 +152,19 @@ def meses_com_despesa(_engine, versao: int) -> set[str]:
 # o carimbo, e a fila é relida. O que sai de graça é o resto: escolher uma
 # categoria, digitar no filtro, trocar de aba. Classificar cinquenta
 # lançamentos são dezenas de reruns e só uma dúzia de gravações.
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def fila_de_pendencias(_engine, versao: int, competencia: str | None, termo: str) -> list[dict]:
     with _engine.connect() as conn:
         return repo.fila_pendentes(conn, limite=5000, competencia=competencia, termo=termo)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def busca(_engine, versao: int, termo: str, limite: int = 40) -> list[dict]:
     with _engine.connect() as conn:
         return repo.buscar_transacoes(conn, termo, limite=limite)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def painel_de_classificacao(_engine, versao: int) -> dict:
     """O cabeçalho da tela de Classificação: contagens e avisos de dono."""
     with _engine.connect() as conn:
@@ -172,14 +178,14 @@ def painel_de_classificacao(_engine, versao: int) -> dict:
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def contadores_da_barra(_engine, versao: int) -> tuple[int, int]:
     """Os dois números do menu. Rodam em todo rerun de toda tela."""
     with _engine.connect() as conn:
         return repo.contar_pendentes(conn), dedup.contar_pendentes(conn)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def cobertura_de_uploads(_engine, versao: int, competencias: tuple[str, ...]) -> dict:
     """O mapa "o que falta carregar", conta por mês."""
     with _engine.connect() as conn:
@@ -189,31 +195,31 @@ def cobertura_de_uploads(_engine, versao: int, competencias: tuple[str, ...]) ->
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def lancamentos_manuais(_engine, versao: int, ano: int, natureza: str) -> list[dict]:
     with _engine.connect() as conn:
         return repo.lancamentos_manuais(conn, ano, natureza=natureza)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def uploads(_engine, versao: int) -> list[dict]:
     with _engine.connect() as conn:
         return repo.listar_uploads(conn)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def duplicidades(_engine, versao: int) -> list[dict]:
     with _engine.connect() as conn:
         return dedup.pendentes(conn)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def cobertura_do_mes(_engine, versao: int, competencia: str) -> dict:
     with _engine.connect() as conn:
         return analytics.cobertura_da_classificacao(conn, competencia)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def painel_do_ano(_engine, versao: int, competencia: str) -> dict:
     with _engine.connect() as conn:
         return {
@@ -222,7 +228,7 @@ def painel_do_ano(_engine, versao: int, competencia: str) -> dict:
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def metas_do_ano(_engine, versao: int, ano: int) -> dict:
     """Metas gravadas e a média do ano — o que a tela precisa antes de saber
     qual renda a pessoa vai considerar."""
@@ -233,7 +239,7 @@ def metas_do_ano(_engine, versao: int, ano: int) -> dict:
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def realizado_do_orcamento(_engine, versao: int, ano: int, competencia: str,
                            renda_base: int) -> dict:
     """Sugestão pelas médias e realizado × meta — dependem da renda escolhida.
@@ -251,7 +257,7 @@ def realizado_do_orcamento(_engine, versao: int, ano: int, competencia: str,
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def painel_de_receitas(_engine, versao: int, ano: int, competencia: str | None) -> dict:
     """De onde vem a renda, por pessoa e por tipo."""
     filtro = {"competencia": competencia} if competencia else {"ano": ano}
@@ -266,7 +272,7 @@ def painel_de_receitas(_engine, versao: int, ano: int, competencia: str | None) 
         }
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def analise_gravada(_engine, versao: int, competencia: str, contexto: str,
                     tipo: str = "mes") -> dict | None:
     """A última análise escrita, e se os números mudaram desde então."""
@@ -274,13 +280,28 @@ def analise_gravada(_engine, versao: int, competencia: str, contexto: str,
         return repo.ultima_analise(conn, competencia, contexto, tipo=tipo)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def perguntas_anteriores(_engine, versao: int, competencia: str) -> list[dict]:
     with _engine.connect() as conn:
         return repo.perguntas_anteriores(conn, competencia)
 
 
-@st.cache_data(ttl=TTL, show_spinner=False)
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def sem_subcategoria(_engine, versao: int, competencia: str) -> list[dict]:
     with _engine.connect() as conn:
         return repo.sem_subcategoria(conn, competencia=competencia, limite=500)
+
+
+@st.cache_data(ttl=TTL, max_entries=8, show_spinner=False)
+def categoria_explodida(_engine, versao: int, categoria_id: int, ano: int,
+                        competencia: str | None, pessoa: str) -> dict:
+    """Uma categoria aberta nas subcategorias dela, mês a mês."""
+    with _engine.connect() as conn:
+        return {
+            "aberto": analytics.serie_por_subcategoria(conn, categoria_id, ano, pessoa=pessoa),
+            "fatias": analytics.por_subcategoria(
+                conn, categoria_id,
+                **({"ano": ano} if competencia is None else {"competencia": competencia}),
+                pessoa=pessoa,
+            ),
+        }
