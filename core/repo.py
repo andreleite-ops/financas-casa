@@ -225,6 +225,7 @@ def importar(
         "duplicados_exatos": 0,
         "duplicados_provaveis": 0,
         "conferidos_planilha": 0,
+        "previsoes_realizadas": 0,
         "upload_id": None,
     }
     if not lancamentos:
@@ -278,6 +279,9 @@ def importar(
                 descricao_norm=descricao_norm,
                 origem=lan.origem or origem,
                 upload_id=upload_id,
+                # o dono ainda nao foi decidido aqui; o que a origem declara ja
+                # basta para desempatar entre duas receitas previstas no mes
+                pessoa=lan.pessoa_hint or pessoa_padrao,
             )
             if decisao.existente_id:
                 indice.marcar_usado(decisao.existente_id)
@@ -356,6 +360,21 @@ def importar(
                 observacao = "conferido com a planilha"
                 substituir.append(decisao.existente_id)
                 resumo["conferidos_planilha"] += 1
+
+            if decisao.situacao == "realiza_previsao":
+                # a receita que ele lançou à mão para o mês acabou de chegar de
+                # verdade. Vale o do extrato — é o que aconteceu, com o valor
+                # que aconteceu — e a previsão sai de cena, herdando para cá a
+                # categoria e a pessoa que ele já tinha escolhido nela.
+                previsto = indice.registro(decisao.existente_id)
+                if previsto and previsto["categoria_id"]:
+                    categoria_id = previsto["categoria_id"]
+                    subcategoria_id = previsto["subcategoria_id"]
+                    pessoa = previsto["pessoa"]
+                    status, confianca = "manual", 1.0
+                observacao = decisao.motivo
+                substituir.append(decisao.existente_id)
+                resumo["previsoes_realizadas"] += 1
 
             registro = {
                 "data": lan.data,
@@ -625,11 +644,16 @@ def lancar_receita_manual(engine, **kw) -> int:
 
 
 def lancamentos_manuais(conn, ano: int, natureza: str | None = None) -> list[dict]:
-    """O que já foi digitado à mão no ano, para a tela poder revisar e apagar."""
+    """O que já foi digitado à mão no ano, para a tela poder revisar e apagar.
+
+    O que já foi realizado pelo extrato vem junto, marcado. Ele lança à mão o
+    que ainda vai entrar até o fim do ano; sumir com a linha quando o dinheiro
+    chega de verdade tiraria da tela justamente a resposta que ela dá — o que
+    já veio e o que falta vir.
+    """
     condicoes = [
         db.transacoes.c.origem == "manual",
         db.transacoes.c.competencia.like(f"{ano}-%"),
-        db.transacoes.c.ativo == sa.true(),
     ]
     if natureza:
         condicoes.append(
@@ -643,6 +667,7 @@ def lancamentos_manuais(conn, ano: int, natureza: str | None = None) -> list[dic
             db.transacoes.c.descricao,
             db.transacoes.c.valor_centavos,
             db.transacoes.c.pessoa,
+            db.transacoes.c.ativo,
             db.categorias.c.nome.label("categoria"),
             db.subcategorias.c.nome.label("subcategoria"),
         )

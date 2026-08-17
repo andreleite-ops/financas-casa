@@ -99,15 +99,27 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
 
         if ja_lancados:
             st.markdown(f"**Já lançado à mão em {ano}**")
+            realizados = sum(1 for item in ja_lancados if not item.get("ativo", True))
+            if realizados:
+                st.caption(
+                    f"{realizados} já chegaram no extrato e estão riscados: o valor que vale "
+                    "passou a ser o do extrato, e a linha aqui ficou só como histórico do que "
+                    "você tinha previsto."
+                )
             for item in ja_lancados:
                 linha, botao = st.columns([5, 1])
                 destino = item["subcategoria"] or item["categoria"] or "—"
-                linha.markdown(
+                veio = not item.get("ativo", True)
+                texto = (
                     f"{item['competencia']} &nbsp; {selo_pessoa(item['pessoa'])} &nbsp; "
                     f"{item['descricao']} — **{fmt_brl(abs(item['valor_centavos']))}** "
-                    f"<span class='nota'>({destino})</span>",
+                    f"<span class='nota'>({destino})</span>"
+                )
+                linha.markdown(
+                    f"<span class='nota'><s>{texto}</s> · já veio no extrato</span>"
+                    if veio else texto,
                     unsafe_allow_html=True,
                 )
-                if botao.button("Apagar", key=f"del_manual_{item['id']}"):
+                if not veio and botao.button("Apagar", key=f"del_manual_{item['id']}"):
                     repo.excluir_transacao(engine, item["id"])
                     st.rerun()

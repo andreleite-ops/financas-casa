@@ -430,6 +430,14 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
             "conferidos — a versão do extrato prevaleceu e herdou a categoria dela.",
             icon="✔️",
         )
+    if resumo.get("previsoes_realizadas"):
+        st.info(
+            f"**{resumo['previsoes_realizadas']} receita(s) que você lançou à mão chegaram de "
+            "verdade neste extrato.** A previsão saiu de cena e vale o valor do extrato — sem "
+            "isso, a renda do mês apareceria dobrada. Nada foi apagado: a previsão ficou "
+            "inativa e continua visível na tela **Receitas**.",
+            icon="💰",
+        )
     if resumo["duplicados_exatos"] + resumo["duplicados_provaveis"]:
         st.warning(
             f"{resumo['duplicados_exatos']} duplicata(s) exata(s) — repetição de arquivo já "

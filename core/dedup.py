@@ -18,17 +18,74 @@ from .texto import chave_estabelecimento
 
 JANELA_PROVAVEL = timedelta(days=3)
 
+# Quanto o valor real pode divergir da receita prevista a mao e ainda ser o
+# mesmo dinheiro. Previsao e digitada redonda ou com o valor do mes passado; o
+# contracheque vem com centavos e reajuste. Vinte por cento acomoda isso e
+# ainda deixa longe uma previsao de 4.800 de uma entrada de 20.596.
+FOLGA_DA_PREVISAO = 0.20
+
 
 def hash_lancamento(conta_id: int, dia: date, valor_centavos: int, descricao_norm: str) -> str:
     crua = f"{conta_id}|{dia.isoformat()}|{valor_centavos}|{descricao_norm}"
     return hashlib.sha256(crua.encode("utf-8")).hexdigest()
 
 
+def _mesma_competencia(a: date, b: date) -> bool:
+    return (a.year, a.month) == (b.year, b.month)
+
+
+def previsao_equivalente(
+    candidatos, *, dia: date, valor_centavos: int, pessoa: str | None,
+) -> dict | None:
+    """A receita prevista a mao que este lancamento do extrato veio realizar.
+
+    O Andre lanca a mao o que ainda vai entrar ate o fim do ano — e previsao,
+    para o orcamento nao ficar cego. Quando o extrato do mes chega, o mesmo
+    dinheiro vem de novo, agora de verdade, e duas linhas para o mesmo salario
+    dobram a renda do mes. Renda dobrada estraga tudo que se apoia nela: a
+    sobra, o percentual das metas, a leitura da IA.
+
+    Casa por mes e por ordem de grandeza, nao por descricao: a previsao se
+    chama "PRO LABORE" e o extrato diz "TED 0938 PRO LABORE TAG LTDA" — exigir
+    o mesmo texto seria nao casar nunca. Entre os candidatos, ganha o da mesma
+    pessoa e, dentro disso, o de valor mais proximo: num mes com pro-labore
+    previsto e atendimentos previstos, o salario do extrato tem de consumir o
+    pro-labore, nao os atendimentos.
+
+    So vale para entrada. Receita e pouca, recorrente e prevista de proposito;
+    a mesma regra em despesa faria os euros comprados em especie sumirem
+    quando o extrato trouxesse qualquer gasto parecido no mes.
+    """
+    if valor_centavos <= 0:
+        return None
+
+    possiveis = [
+        c for c in candidatos
+        if c.get("origem") == "manual"
+        and c.get("ativo")
+        and c.get("valor_centavos", 0) > 0
+        and _mesma_competencia(c["data"], dia)
+        and abs(c["valor_centavos"] - valor_centavos)
+        <= FOLGA_DA_PREVISAO * max(c["valor_centavos"], valor_centavos)
+    ]
+    if not possiveis:
+        return None
+    return min(
+        possiveis,
+        key=lambda c: (
+            c.get("pessoa") != pessoa,                       # mesma pessoa primeiro
+            abs(c["valor_centavos"] - valor_centavos),       # depois o mais proximo
+            c["id"],
+        ),
+    )
+
+
 @dataclass
 class Decisao:
     """O que fazer com um lancamento que chegou no upload."""
 
-    situacao: str  # novo | duplicata_exata | duplicata_provavel | confere_planilha
+    # novo | duplicata_exata | duplicata_provavel | confere_planilha | realiza_previsao
+    situacao: str
     existente_id: int | None = None
     motivo: str = ""
 
@@ -166,6 +223,7 @@ class Indice:
     def avaliar(
         self, *, conta_id: int, dia: date, valor_centavos: int, descricao: str,
         descricao_norm: str, origem: str, upload_id: int | None,
+        pessoa: str | None = None,
     ) -> Decisao:
         h = hash_lancamento(conta_id, dia, valor_centavos, descricao_norm)
 
@@ -185,6 +243,21 @@ class Indice:
                                "linha repetida no mesmo arquivo")
             return Decisao("duplicata_exata", linha["id"],
                            "mesma conta, data, valor e descrição")
+
+        # Receita prevista a mao que agora chegou de verdade no extrato.
+        # Antes das regras gerais: elas comparam por conta e por dia, e a
+        # previsao mora noutra conta e no dia 28 — nenhuma casaria.
+        if origem == "extrato":
+            previsao = previsao_equivalente(
+                [c for c in self._todos() if c["id"] not in self._usados],
+                dia=dia, valor_centavos=valor_centavos, pessoa=pessoa,
+            )
+            if previsao is not None:
+                return Decisao(
+                    "realiza_previsao", previsao["id"],
+                    f"realiza a receita de {previsao['data']:%m/%Y} lançada à mão"
+                    + (f" ({previsao['descricao'][:30]})" if previsao.get("descricao") else ""),
+                )
 
         # Planilha x extrato no mesmo dia e valor: e o mesmo lancamento, ainda
         # que escrito de outro jeito. A descricao digitada a mao ("Mercado do
@@ -300,11 +373,14 @@ def carregar_indice(conn, conta_id: int, datas: list[date]) -> Indice:
         # compara por mes, nao pelos tres dias da regra geral
         db.transacoes.c.data >= (min(datas) - JANELA_PROVAVEL).replace(day=1),
         db.transacoes.c.data <= max(datas) + timedelta(days=31),
-        # a conta filtra o historico da propria conta, mas a planilha entra de
-        # qualquer conta: ela anota o gasto sem dizer de qual cartao saiu
+        # a conta filtra o historico da propria conta, mas planilha e
+        # lancamento manual entram de qualquer conta: a planilha anota o gasto
+        # sem dizer de qual cartao saiu, e o manual mora numa conta propria —
+        # filtrar por conta escondia justamente a receita prevista a mao que o
+        # extrato vem realizar
         sa.or_(
             db.transacoes.c.conta_id == conta_id,
-            db.transacoes.c.origem == "planilha",
+            db.transacoes.c.origem.in_(("planilha", "manual")),
         ),
     )
     return Indice([dict(linha._mapping) for linha in conn.execute(consulta)])
