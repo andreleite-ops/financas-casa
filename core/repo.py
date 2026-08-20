@@ -238,6 +238,26 @@ def _previsoes_por_conferir(conn, sem_par: list[dict]) -> list[dict]:
                 "parecida_com": parecidas[0]["descricao"],
                 "valor_parecido": parecidas[0]["valor_centavos"],
             })
+            continue
+
+        # A Ro recebe dos pacientes picado, dezenas de vezes no mes, e lanca o
+        # total a mao numa linha so. Quando o extrato dela entra, nenhum
+        # pagamento isolado se parece com o total — R$ 300 contra R$ 4.800 —,
+        # entao a comparacao um a um passa batido e a renda dela dobra calada.
+        # Somados e que eles sao o mesmo dinheiro.
+        do_mes = [
+            linha for linha in sem_par
+            if linha["competencia"] == previsao.competencia
+        ]
+        soma = sum(linha["valor_centavos"] for linha in do_mes)
+        if len(do_mes) > 1 and abs(soma - previsao.valor_centavos) <= (
+            FOLGA_PARA_PERGUNTAR * max(soma, previsao.valor_centavos)
+        ):
+            saida.append({
+                **dict(previsao._mapping),
+                "parecida_com": f"{len(do_mes)} lançamentos somados",
+                "valor_parecido": soma,
+            })
     return saida
 
 

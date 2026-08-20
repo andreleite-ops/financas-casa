@@ -272,3 +272,58 @@ def test_salario_de_dezembro_creditado_em_janeiro_vira_pergunta(engine, conn):
 
     assert resumo["previsoes_realizadas"] == 0
     assert [item["competencia"] for item in resumo["previsoes_a_conferir"]] == ["2026-12"]
+
+
+# ---------------------------------------------------------------------------
+# a Rô: recebe picado dos pacientes e lança o total do mês numa linha só
+# ---------------------------------------------------------------------------
+def test_pagamentos_picados_somados_batem_com_o_total_lancado_a_mao(engine, conn):
+    """Dezesseis pagamentos de R$ 300 contra um total de R$ 4.800 lançado à mão.
+
+    Nenhum deles se parece com o total sozinho — é o que fazia a comparação um
+    a um passar batido e a renda dela dobrar calada. Somados, são o mesmo
+    dinheiro, e é assim que precisam ser olhados.
+    """
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-09", 480_000, "ATENDIMENTOS")
+    conn.commit()
+
+    resumo = repo.importar(
+        engine,
+        lancamentos=[
+            Lancamento(data=date(2026, 9, 1 + i), descricao=f"PIX RECEBIDO PACIENTE {i}",
+                       valor_centavos=30_000)
+            for i in range(16)
+        ],
+        conta_id=conta, arquivo="ro.csv", origem="extrato", usuario="André",
+        pessoa_padrao="Rô", usar_ia=False,
+    )
+
+    conferir = resumo["previsoes_a_conferir"]
+    assert len(conferir) == 1
+    assert conferir[0]["competencia"] == "2026-09"
+    assert conferir[0]["valor_parecido"] == 480_000          # a soma dos dezesseis
+    assert "somados" in conferir[0]["parecida_com"]
+
+
+def test_um_mes_de_compras_avulsas_nao_vira_falso_alarme(engine, conn):
+    """A soma só acusa quando chega perto do total previsto.
+
+    Um mês com duas entradas pequenas e sem relação com os atendimentos não
+    pode acender o alerta — senão ele acende sempre.
+    """
+    conta = _conta_corrente(engine)
+    _prever_receita(engine, conn, "2026-09", 480_000, "ATENDIMENTOS")
+    conn.commit()
+
+    resumo = repo.importar(
+        engine,
+        lancamentos=[
+            Lancamento(data=date(2026, 9, 4), descricao="ESTORNO ANUIDADE", valor_centavos=8_000),
+            Lancamento(data=date(2026, 9, 9), descricao="RENDIMENTO POUPANCA", valor_centavos=1_200),
+        ],
+        conta_id=conta, arquivo="cc.csv", origem="extrato", usuario="André",
+        pessoa_padrao="Rô", usar_ia=False,
+    )
+
+    assert resumo["previsoes_a_conferir"] == []
