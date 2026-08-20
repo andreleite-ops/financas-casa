@@ -410,11 +410,24 @@ def render(engine, usuario: dict) -> None:
                     )
                 sem_detalhe = next((f for f in fatias if not f["detalhada"]), None)
                 if sem_detalhe:
-                    st.caption(
+                    aviso, botao = st.columns([3, 1.2])
+                    aviso.caption(
                         f"⚠️ {fmt_brl(sem_detalhe['total'])} em "
                         f"{sem_detalhe['qtd']} lançamento(s) ainda **sem subcategoria** — "
                         "é o que falta detalhar para esta abertura ficar completa."
                     )
+                    # apontar o problema sem dar o caminho é metade do serviço:
+                    # o lançamento não está na fila (já tem categoria) e caçá-lo
+                    # pela busca exige saber o nome, que é o que não se sabe
+                    if botao.button("Classificar agora", key="ir_sem_sub",
+                                    type="primary", width="stretch"):
+                        st.session_state["tela"] = "Classificação"
+                        st.session_state["secao_classificacao"] = "sem_sub"
+                        st.session_state["foco_sem_sub"] = {
+                            "competencia": None if do_ano else competencia,
+                            "categoria_id": categoria_id,
+                        }
+                        st.rerun()
 
     st.markdown("### Ano a ano")
     if len(anual) > 1 or (anual and anual[0]["ano"] != date.today().year):

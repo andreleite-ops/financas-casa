@@ -303,9 +303,11 @@ def render(engine, usuario: dict) -> None:
     # De quebra, só a seção aberta é desenhada. Com abas, o Streamlit executa
     # as três em todo rerun — inclusive os quarenta editores da busca, que
     # ninguém pediu.
+    faltam_sub = dados.sem_subcategoria_por_mes(engine, dados.versao())
     SECOES = {
         f"🔁 De-para de rótulos ({len(rotulos)})": "de_para",
         f"📌 Fila de pendências ({total_pendente})": "fila",
+        f"🧩 Sem subcategoria ({sum(faltam_sub.values())})": "sem_sub",
         "🔎 Reclassificar qualquer lançamento": "busca",
     }
     if st.session_state.get("secao_classificacao") not in SECOES.values():
@@ -365,6 +367,9 @@ def render(engine, usuario: dict) -> None:
                 )
                 _listar(engine, usuario, fila, plano)
 
+    if secao == "sem_sub":
+        _secao_sem_subcategoria(engine, usuario, plano, faltam_sub)
+
     if secao == "busca":
         termo = st.text_input(
             "Buscar", placeholder="Ex.: iFood, Uber, mercado…",
@@ -387,3 +392,61 @@ def render(engine, usuario: dict) -> None:
                 else:
                     atual = marca + "ainda sem categoria"
                 _editor(engine, usuario, item, plano, "b", atual)
+
+
+def _secao_sem_subcategoria(engine, usuario: dict, plano, por_mes: dict[str, int]) -> None:
+    """O que está classificado até a categoria e parou ali.
+
+    Existe porque achar o lançamento era o trabalho: o relatório dizia "R$ 231
+    em 1 lançamento ainda sem subcategoria" e não dizia qual. Sobrava abrir a
+    fila — onde ele não está, porque já tem categoria — ou caçar pela busca sem
+    saber o nome. Aqui ele aparece, com o mês já escolhido por quem mandou
+    para cá.
+    """
+    if not por_mes:
+        st.success("Nada sem subcategoria — está tudo detalhado.", icon="✅")
+        st.caption(
+            "Categoria é o que soma no relatório; subcategoria é o detalhe que "
+            "explica de onde veio o número."
+        )
+        return
+
+    foco = st.session_state.pop("foco_sem_sub", None) or {}
+    if foco.get("competencia") in por_mes:
+        st.session_state["mes_sem_sub"] = f"{foco['competencia']} ({por_mes[foco['competencia']]})"
+    categoria_id = foco.get("categoria_id") or st.session_state.get("categoria_sem_sub")
+    st.session_state["categoria_sem_sub"] = categoria_id
+
+    total = sum(por_mes.values())
+    TODOS = f"Todos os meses ({total})"
+    opcoes = [TODOS] + [f"{mes} ({n})" for mes, n in por_mes.items()]
+    if st.session_state.get("mes_sem_sub") not in opcoes:
+        st.session_state["mes_sem_sub"] = TODOS
+
+    c1, c2 = st.columns([1.6, 2.4])
+    escolha = c1.selectbox("Mês", opcoes, key="mes_sem_sub")
+    competencia = None if escolha == TODOS else escolha.split(" ")[0]
+
+    nome_categoria = next(
+        (c["nome"] for c in plano if c["id"] == categoria_id), None
+    ) if categoria_id else None
+    if nome_categoria:
+        c2.markdown("&nbsp;", unsafe_allow_html=True)
+        if c2.button(f"Mostrando só **{nome_categoria}** — ver todas as categorias",
+                     width="stretch"):
+            st.session_state["categoria_sem_sub"] = None
+            st.rerun()
+
+    faltando = dados.faltando_subcategoria(
+        engine, dados.versao(), competencia, categoria_id
+    )
+    if not faltando:
+        st.info("Nada sem subcategoria com este filtro.", icon="🔎")
+        return
+
+    st.caption(
+        f"{len(faltando)} lançamento(s) com categoria e sem subcategoria. O campo já vem "
+        "no grupo certo: é só abrir e escolher o detalhe. A categoria também pode mudar, "
+        "se ela é que estiver errada."
+    )
+    _listar(engine, usuario, faltando, plano)

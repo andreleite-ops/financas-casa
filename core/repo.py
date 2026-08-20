@@ -1603,7 +1603,10 @@ def perguntas_anteriores(conn, competencia: str, limite: int = 10) -> list[dict]
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
 
 
-def sem_subcategoria(conn, competencia: str | None = None, limite: int = 200) -> list[dict]:
+def sem_subcategoria(
+    conn, competencia: str | None = None, limite: int = 200,
+    categoria_id: int | None = None,
+) -> list[dict]:
     """Classificado ate a categoria, faltando a subcategoria.
 
     E o que sobra quando alguem classifica em volume: a categoria resolve o
@@ -1615,6 +1618,8 @@ def sem_subcategoria(conn, competencia: str | None = None, limite: int = 200) ->
         db.transacoes.c.categoria_id.isnot(None),
         db.transacoes.c.subcategoria_id.is_(None),
     ]
+    if categoria_id:
+        condicoes.append(db.transacoes.c.categoria_id == categoria_id)
     if competencia:
         condicoes.append(db.transacoes.c.competencia == competencia)
     consulta = (
@@ -1639,6 +1644,26 @@ def sem_subcategoria(conn, competencia: str | None = None, limite: int = 200) ->
         .limit(limite)
     )
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def sem_subcategoria_por_mes(conn) -> dict[str, int]:
+    """Quantos faltam detalhar em cada mes, do mais recente para o mais antigo.
+
+    E o que a tela precisa para oferecer o mes certo: achar um lancamento sem
+    subcategoria num relatorio e ter de sair procurando em que mes ele estava e
+    dificuldade a mais para um trabalho que ja e chato.
+    """
+    consulta = (
+        sa.select(db.transacoes.c.competencia, sa.func.count().label("quantos"))
+        .where(
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.categoria_id.isnot(None),
+            db.transacoes.c.subcategoria_id.is_(None),
+        )
+        .group_by(db.transacoes.c.competencia)
+        .order_by(db.transacoes.c.competencia.desc())
+    )
+    return {linha.competencia: linha.quantos for linha in conn.execute(consulta)}
 
 
 def sugerir_subcategorias(conn, competencia: str | None = None, limite: int = 60) -> list[dict]:

@@ -81,10 +81,24 @@ def _aviso_de_cobertura(engine, competencia: str) -> None:
     if cobertura["sem_subcategoria"]:
         texto += f" E {cobertura['sem_subcategoria']} estão sem subcategoria."
 
-    if pct >= 95:
-        st.success(texto, icon="✅")
-    else:
-        st.warning(texto + " A leitura abaixo fala só do que já foi classificado.", icon="⚠️")
+    aviso, atalho = st.columns([4, 1.1])
+    with aviso:
+        if pct >= 95:
+            st.success(texto, icon="✅")
+        else:
+            st.warning(
+                texto + " A leitura abaixo fala só do que já foi classificado.", icon="⚠️"
+            )
+    # dizer que falta detalhar sem dizer o quê deixa o trabalho de achar para
+    # quem já estava só olhando o relatório
+    if cobertura["sem_subcategoria"]:
+        atalho.markdown("&nbsp;", unsafe_allow_html=True)
+        if atalho.button("Ver os sem subcategoria", key="ir_sem_sub_ia", width="stretch"):
+            st.session_state["tela"] = "Classificação"
+            st.session_state["secao_classificacao"] = "sem_sub"
+            st.session_state["foco_sem_sub"] = {"competencia": competencia,
+                                                "categoria_id": None}
+            st.rerun()
 
 
 def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> None:

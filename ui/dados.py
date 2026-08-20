@@ -305,3 +305,19 @@ def categoria_explodida(_engine, versao: int, categoria_id: int, ano: int,
                 pessoa=pessoa,
             ),
         }
+
+
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
+def sem_subcategoria_por_mes(_engine, versao: int) -> dict[str, int]:
+    """Quantos faltam detalhar em cada mês — o rótulo e o filtro da seção."""
+    with _engine.connect() as conn:
+        return repo.sem_subcategoria_por_mes(conn)
+
+
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
+def faltando_subcategoria(_engine, versao: int, competencia: str | None,
+                          categoria_id: int | None) -> list[dict]:
+    with _engine.connect() as conn:
+        return repo.sem_subcategoria(
+            conn, competencia=competencia, limite=500, categoria_id=categoria_id
+        )
