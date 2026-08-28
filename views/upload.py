@@ -10,7 +10,13 @@ import streamlit as st
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
 from core.texto import sem_marcacao
-
+from parsers import extrato_itau, instituicoes, pdf, tabular
+from parsers import pdf as leitor_pdf
+from views import manual
+from parsers.base import ErroDeLeitura
+from ui import dados
+from ui.graficos import MESES_PT as MESES_CURTOS
+from ui.tema import selo_pessoa
 
 def _reais(centavos: int) -> str:
     """Valor pronto para entrar em texto markdown.
@@ -19,13 +25,7 @@ def _reais(centavos: int) -> str:
     o pedaço da frase entre eles.
     """
     return fmt_brl(centavos).replace("$", r"\$")
-from parsers import extrato_itau, instituicoes, pdf, tabular
-from parsers import pdf as leitor_pdf
-from views import manual
-from parsers.base import ErroDeLeitura
-from ui import dados
-from ui.graficos import MESES_PT as MESES_CURTOS
-from ui.tema import selo_pessoa
+
 
 PAPEIS = ["data", "competencia", "descricao", "valor", "entrada", "saida", "categoria", "subcategoria",
           "pessoa", "tipo"]
@@ -37,15 +37,36 @@ ROTULOS_PAPEL = {
 }
 
 
+# A lista de competências vai para os dois lados, e larga.
+#
+# Para a frente porque fatura de cartão fecha num mês e vence no seguinte: a
+# compra de agosto entra na fatura que vence em setembro, e é setembro a
+# competência dela. A lista começava no mês de hoje, então esse upload
+# simplesmente não tinha como ser feito.
+#
+# Para trás porque histórico não tem prazo: extrato antigo, ano fechado que se
+# resolve recuperar, a fatura que ficou esquecida na gaveta.
+#
+# Dois anos à frente e cinco atrás dão oitenta e quatro opções. Parece muito
+# para um menu, mas o campo aceita digitação: escrever "2027-03" filtra a
+# lista na hora, e rolar até lá continua possível para quem preferir.
+MESES_A_FRENTE = 24
+MESES_PARA_TRAS = 60
+
+
+def _passo_de_mes(ano: int, mes: int, passo: int) -> tuple[int, int]:
+    total = (ano * 12 + mes - 1) + passo
+    return total // 12, total % 12 + 1
+
+
 def _competencias_sugeridas() -> list[str]:
+    """Do mês mais adiantado para o mais antigo, com o mês de hoje no meio."""
     hoje = date.today()
+    ano, mes = _passo_de_mes(hoje.year, hoje.month, MESES_A_FRENTE)
     saida = []
-    ano, mes = hoje.year, hoje.month
-    for _ in range(18):
+    for _ in range(MESES_A_FRENTE + MESES_PARA_TRAS):
         saida.append(f"{ano:04d}-{mes:02d}")
-        mes -= 1
-        if mes == 0:
-            ano, mes = ano - 1, 12
+        ano, mes = _passo_de_mes(ano, mes, -1)
     return saida
 
 
@@ -93,7 +114,13 @@ def _aba_enviar(engine, usuario: dict) -> None:
     else:
         competencia = c2.selectbox(
             "Competência", _competencias_sugeridas(),
-            help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a própria data.",
+            # abre no mês de hoje, não no primeiro da lista: os meses à frente
+            # existem para a fatura de cartão, e não são o caso comum
+            index=MESES_A_FRENTE,
+            help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a "
+                 "própria data. Em fatura de cartão, use o mês em que ela vence. A lista "
+                 "vai de cinco anos atrás a dois à frente — dá para digitar o mês "
+                 "(“2027-03”) em vez de rolar.",
         )
     # só serve para completar data sem ano, o caso da fatura de cartão
     ano_referencia = int(competencia[:4]) if competencia else date.today().year
