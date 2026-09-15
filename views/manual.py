@@ -104,7 +104,9 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                 st.caption(
                     f"{realizados} já chegaram no extrato e estão riscados: o valor que vale "
                     "passou a ser o do extrato, e a linha aqui ficou só como histórico do que "
-                    "você tinha previsto."
+                    "você tinha previsto. Se algum foi riscado por engano — um arquivo lido "
+                    "com o sinal trocado faz uma compra de cartão parecer a receita do mês —, "
+                    "**Voltar a valer** o traz de volta."
                 )
             for item in ja_lancados:
                 linha, botao = st.columns([5, 1])
@@ -120,6 +122,12 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                     if veio else texto,
                     unsafe_allow_html=True,
                 )
-                if not veio and botao.button("Apagar", key=f"del_manual_{item['id']}"):
+                if veio:
+                    if botao.button("Voltar a valer", key=f"volta_manual_{item['id']}",
+                                    help="Só se ele foi riscado por engano: voltando com o "
+                                         "lançamento do extrato no lugar, o mês conta duas vezes."):
+                        repo.reativar_transacao(engine, item["id"])
+                        st.rerun()
+                elif botao.button("Apagar", key=f"del_manual_{item['id']}"):
                     repo.excluir_transacao(engine, item["id"])
                     st.rerun()

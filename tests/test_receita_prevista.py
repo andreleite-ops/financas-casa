@@ -327,3 +327,68 @@ def test_um_mes_de_compras_avulsas_nao_vira_falso_alarme(engine, conn):
     )
 
     assert resumo["previsoes_a_conferir"] == []
+
+
+def test_desfazer_o_upload_devolve_a_previsao_que_ele_desligou(engine, conn):
+    """Desfazer tem de desfazer os dois lados.
+
+    O upload apaga o que trouxe — mas ele também *desligou* a previsão que veio
+    realizar. Desfazendo só um lado, o mês ficava sem nenhuma das duas linhas:
+    a do extrato apagada e a prevista inativa para sempre, sem nada na tela
+    dizendo por quê. Em setembro isso seria perder a renda do mês inteiro na
+    hora de consertar um arquivo lido com o sinal trocado.
+    """
+    conta = _conta_corrente(engine)
+    id_previsto = _prever_receita(engine, conn, "2026-11", 2_059_621)
+    conn.commit()
+
+    resumo = _importar_extrato(engine, conta, date(2026, 11, 5), 2_059_621, "TED PRO LABORE")
+    assert resumo["previsoes_realizadas"] == 1
+
+    apagadas, devolvidas = repo.apagar_upload(engine, resumo["upload_id"])
+    assert (apagadas, devolvidas) == (1, 1)
+
+    ativas = [linha for linha in _receitas_do_mes(engine, "2026-11") if linha[2]]
+    assert len(ativas) == 1, f"o mês ficou sem receita nenhuma: {ativas}"
+    assert ativas[0][1] == 2_059_621
+
+    with engine.connect() as leitura:
+        voltou = leitura.execute(
+            sa.select(db.transacoes.c.ativo, db.transacoes.c.substituido_por)
+            .where(db.transacoes.c.id == id_previsto)
+        ).one()
+    assert voltou.ativo is True
+    assert voltou.substituido_por is None
+
+
+def test_previsao_riscada_por_engano_volta_a_valer(engine, conn):
+    """A saída manual quando o pareamento errou.
+
+    O pareamento casa por mês e por ordem de grandeza, não por descrição: uma
+    fatura de cartão lida com o sinal trocado traz compras positivas, e uma
+    delas pode "realizar" a receita prevista do mês. A previsão fica riscada e
+    a renda some sem que nada a tenha apagado.
+    """
+    conta = _conta_corrente(engine)
+    id_previsto = _prever_receita(engine, conn, "2026-09", 480_000, "ATENDIMENTOS")
+    conn.commit()
+
+    # a compra de cartão que entrou positiva por engano, no mesmo mês e na
+    # mesma ordem de grandeza da previsão
+    resumo = _importar_extrato(engine, conta, date(2026, 9, 12), 470_000, "MOVEIS PLANEJADOS")
+    assert resumo["previsoes_realizadas"] == 1
+
+    with engine.connect() as leitura:
+        assert leitura.execute(
+            sa.select(db.transacoes.c.ativo).where(db.transacoes.c.id == id_previsto)
+        ).scalar_one() is False
+
+    assert repo.reativar_transacao(engine, id_previsto) is True
+
+    with engine.connect() as leitura:
+        volta = leitura.execute(
+            sa.select(db.transacoes.c.ativo, db.transacoes.c.substituido_por)
+            .where(db.transacoes.c.id == id_previsto)
+        ).one()
+    assert volta.ativo is True
+    assert volta.substituido_por is None

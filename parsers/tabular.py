@@ -394,6 +394,56 @@ def _vazio(valor) -> bool:
     return not texto or texto.lower() in ("nan", "none", "nat", "-", "—")
 
 
+# Numa fatura de cartao a compra e a regra e o credito e a excecao: dezenas de
+# compras contra o pagamento da fatura anterior e um estorno ou outro. Sete em
+# cada dez linhas positivas ja identifica o arquivo que chama gasto de
+# positivo. A conta pelo valor nao serve: o pagamento da fatura anterior
+# sozinho empata com o total das compras, e a fatura pareceria dividida ao
+# meio.
+PROPORCAO_DE_GASTO = 0.7
+
+
+def proporcao_positiva(df, mapa) -> float | None:
+    """Que fracao das linhas tem valor positivo, lendo o arquivo como esta.
+
+    None quando o proprio arquivo diz de que lado cada linha esta — coluna de
+    tipo, ou colunas separadas de entrada e saida. Ai nao ha o que adivinhar, e
+    adivinhar por cima do que o arquivo declarou so pode piorar.
+    """
+    if mapa.get("tipo") or mapa.get("entrada") or mapa.get("saida"):
+        return None
+    coluna = mapa.get("valor")
+    if not coluna or coluna not in getattr(df, "columns", []):
+        return None
+    positivos = total = 0
+    for bruto in df[coluna]:
+        if _vazio(bruto) or re.search(r"[A-Za-z]", str(bruto)):
+            continue
+        try:
+            centavos = para_centavos(bruto)
+        except (ValueError, ArithmeticError):
+            continue
+        if not centavos:
+            continue
+        total += 1
+        positivos += centavos > 0
+    return positivos / total if total else None
+
+
+def positivo_e_gasto(df, mapa) -> bool:
+    """O arquivo escreve gasto com sinal positivo, como a fatura de cartao?
+
+    O CSV da fatura do Nubank e `date,title,amount` com `amount` positivo na
+    compra: lido ao pe da letra, a fatura inteira entra como receita. Nao havia
+    nada no arquivo que dissesse o contrario — so uma caixa de marcar, desmarcada
+    por padrao, e um aviso que so aparecia quando *todas* as linhas da amostra
+    fossem entrada. Uma linha de "Pagamento recebido" negativa, que toda fatura
+    tem, bastava para calar o aviso.
+    """
+    proporcao = proporcao_positiva(df, mapa)
+    return proporcao is not None and proporcao >= PROPORCAO_DE_GASTO
+
+
 def _natureza_da_linha(linha, mapa) -> str | None:
     """"despesa"/"receita" quando a coluna de tipo diz; None quando nao diz."""
     col_tipo = mapa.get("tipo")

@@ -81,6 +81,11 @@ transacoes = sa.Table(
     # E o que faz um lancamento ainda sem categoria cair no lado certo do
     # resumo: estorno de despesa entra com sinal de credito e nao e receita.
     sa.Column("natureza", sa.String(10)),
+    # qual upload aposentou esta linha: a planilha que o extrato conferiu, a
+    # receita prevista a mao que o extrato veio realizar. Sem esse rastro,
+    # desfazer o upload apagava o que ele trouxe e deixava para tras o que ele
+    # desligou — a previsao sumia do mes e nada dizia por que.
+    sa.Column("substituido_por", sa.Integer),
     sa.Column("criado_em", sa.DateTime, server_default=sa.func.now()),
 )
 

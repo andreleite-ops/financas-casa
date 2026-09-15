@@ -522,7 +522,13 @@ def importar(
             conn.execute(
                 sa.update(db.transacoes)
                 .where(db.transacoes.c.id.in_(substituir))
-                .values(ativo=False, observacao="substituído pelo lançamento do extrato")
+                .values(
+                    ativo=False,
+                    observacao="substituído pelo lançamento do extrato",
+                    # de quem foi a substituição: é por aqui que desfazer o
+                    # upload devolve estas linhas ao mês
+                    substituido_por=upload_id,
+                )
             )
         if duplicatas:
             conn.execute(
@@ -1072,6 +1078,24 @@ def apagar_de_para(engine, rotulo: str) -> int:
     return devolvidos
 
 
+def reativar_transacao(engine, transacao_id: int) -> bool:
+    """Devolve ao mes um lancamento que um upload tinha desligado.
+
+    O pareamento "esta previsao acabou de chegar no extrato" casa por mes e por
+    ordem de grandeza, nao por descricao — e um arquivo lido com o sinal
+    trocado pode fazer uma compra de cartao "realizar" a receita prevista do
+    mes. Quando isso acontece, a previsao fica riscada por engano e a renda do
+    mes some sem que nada a tenha apagado. Aqui ela volta.
+    """
+    with engine.begin() as conn:
+        resultado = conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id == transacao_id)
+            .values(ativo=True, substituido_por=None, observacao=None)
+        )
+    return resultado.rowcount > 0
+
+
 def excluir_transacao(engine, transacao_id: int) -> bool:
     """Apaga um lancamento avulso.
 
@@ -1528,9 +1552,22 @@ def competencias_disponiveis(conn) -> list[str]:
     ]
 
 
-def apagar_upload(engine, upload_id: int) -> int:
-    """Desfaz uma importacao inteira - o 'undo' de um arquivo errado."""
+def apagar_upload(engine, upload_id: int) -> tuple[int, int]:
+    """Desfaz uma importacao inteira - o 'undo' de um arquivo errado.
+
+    Apagar o que entrou nao basta: o upload tambem *desliga* linhas antigas —
+    a da planilha que ele conferiu, a receita prevista a mao que ele veio
+    realizar. Desfazendo so um lado, essas linhas ficavam desligadas para
+    sempre e o mes perdia dinheiro que ninguem apagou. Aqui os dois lados
+    voltam atras, e a contagem devolvida diz quantas linhas sairam e quantas
+    voltaram.
+    """
     with engine.begin() as conn:
+        devolvidas = conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.substituido_por == upload_id)
+            .values(ativo=True, substituido_por=None, observacao=None)
+        ).rowcount or 0
         ids = [
             linha.id
             for linha in conn.execute(
@@ -1548,7 +1585,7 @@ def apagar_upload(engine, upload_id: int) -> int:
             )
             conn.execute(sa.delete(db.transacoes).where(db.transacoes.c.id.in_(ids)))
         conn.execute(sa.delete(db.uploads).where(db.uploads.c.id == upload_id))
-    return len(ids)
+    return len(ids), devolvidas
 
 
 # --------------------------------------------------------------------------

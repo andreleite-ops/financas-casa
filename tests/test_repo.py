@@ -220,8 +220,9 @@ def test_apagar_upload_remove_transacoes_e_duplicidades(engine):
         ).scalar()
         assert duplicidades_antes == 1
 
-    apagados = repo.apagar_upload(engine, upload_id_2)
+    apagados, devolvidas = repo.apagar_upload(engine, upload_id_2)
     assert apagados == 1
+    assert devolvidas == 0
 
     with engine.begin() as conn:
         restantes = conn.execute(

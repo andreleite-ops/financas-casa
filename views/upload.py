@@ -238,10 +238,20 @@ def _aba_enviar(engine, usuario: dict) -> None:
         # coluna de tipo mapeada, os dois controles disputam a mesma decisão e
         # a inversão desfaz o que a coluna acabou de definir
         tem_coluna_de_sinal = bool(mapa.get("tipo") or mapa.get("entrada") or mapa.get("saida"))
+        # O CSV da fatura vem com a compra positiva. Deixar a caixa desmarcada
+        # por padrão fazia a fatura inteira entrar como receita — a de setembro
+        # entrou assim: as despesas do cartão sumiram do quadro e a renda do mês
+        # dobrou. Quem sabe a resposta é o arquivo, não a memória de quem envia.
+        sugere_inverter = (
+            conta["tipo"] == "cartao"
+            and not tem_coluna_de_sinal
+            and tabular.positivo_e_gasto(df, mapa)
+        )
         inverter = st.checkbox(
             "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",
-            value=False,
+            value=sugere_inverter,
             disabled=tem_coluna_de_sinal,
+            key=f"{chave_estado}:inverter:{sugere_inverter}",
             help=(
                 "Desativado porque o próprio arquivo já diz o que é despesa e o que é receita, "
                 "na coluna mapeada acima — inverter aqui desfaria isso."
@@ -251,6 +261,11 @@ def _aba_enviar(engine, usuario: dict) -> None:
         )
         if tem_coluna_de_sinal:
             inverter = False
+        if sugere_inverter:
+            st.caption(
+                "Marcado sozinho: neste arquivo a maioria das linhas vem positiva, e numa "
+                "fatura de cartão isso quer dizer compra. Desmarque se estiver errado."
+            )
 
         # prévia do resultado, não do arquivo: mostra como cada linha vai ficar
         # depois de lida. É o único jeito de ver um erro de sinal ou de coluna
@@ -272,7 +287,6 @@ def _aba_enviar(engine, usuario: dict) -> None:
             st.error("Nenhuma linha foi reconhecida. Revise as colunas de data e valor.")
             return
 
-        entradas = sum(1 for lan in previa if lan.valor_centavos > 0)
         st.dataframe(
             pd.DataFrame([
                 {
@@ -286,11 +300,25 @@ def _aba_enviar(engine, usuario: dict) -> None:
             ]),
             width="stretch", hide_index=True,
         )
-        if entradas == len(previa):
+        # A conta é sobre o arquivo inteiro, não sobre as oito linhas da prévia:
+        # a fatura do cartão traz o "Pagamento recebido" logo nas primeiras
+        # linhas, e bastava ele para a amostra deixar de ser toda de entrada e o
+        # aviso não aparecer — justamente no arquivo em que ele mais importa.
+        # Uma varredura da coluna de valor, sem reler o arquivo lançamento a
+        # lançamento, que é o que a tela faz a cada mexida no mapeamento.
+        proporcao = tabular.proporcao_positiva(df, mapa)
+        entram = None if proporcao is None else ((1 - proporcao) if inverter else proporcao)
+        if entram is not None and entram >= tabular.PROPORCAO_DE_GASTO:
             st.warning(
-                "**Todas as linhas da amostra estão como ENTRADA.** Numa planilha de gastos "
-                "isso quase nunca está certo — confira a coluna **Tipo (D/C)**.",
+                f"**{entram:.0%} das linhas deste arquivo vão entrar como ENTRADA**, "
+                "somando nas receitas do mês. Isso está certo numa planilha de "
+                "recebimentos e errado numa fatura de cartão ou num extrato de gastos — "
+                "nesses, marque a caixa acima.",
                 icon="⚠️",
+            )
+            st.caption(
+                "Se passar errado dá para voltar atrás: **Histórico → Desfazer uma "
+                "importação** apaga tudo o que entrou por este arquivo."
             )
         else:
             st.caption(
@@ -875,8 +903,14 @@ def _aba_historico(engine) -> None:
         )
         st.caption("Apaga todos os lançamentos que entraram por esse arquivo. Não dá para desfazer.")
         if st.button("Desfazer importação", type="secondary"):
-            total = repo.apagar_upload(engine, escolha["id"])
-            st.success(f"{total} lançamento(s) removido(s).")
+            total, devolvidas = repo.apagar_upload(engine, escolha["id"])
+            recado = f"{total} lançamento(s) removido(s)."
+            if devolvidas:
+                recado += (
+                    f" {devolvidas} lançamento(s) que este arquivo tinha substituído "
+                    "voltaram a valer."
+                )
+            st.success(recado)
             st.rerun()
 
 
