@@ -17,7 +17,7 @@ import pandas as pd
 from core.money import para_centavos
 from core.texto import sem_acento
 
-from .base import ErroDeLeitura, Lancamento, ler_data
+from .base import PROPORCAO_DE_GASTO, ErroDeLeitura, Lancamento, ler_data
 
 # sinonimos aceitos em cada papel de coluna, ja sem acento e em minuscula
 SINONIMOS = {
@@ -412,13 +412,6 @@ def _vazio(valor) -> bool:
     return not texto or texto.lower() in ("nan", "none", "nat", "-", "—")
 
 
-# Numa fatura de cartao a compra e a regra e o credito e a excecao: dezenas de
-# compras contra o pagamento da fatura anterior e um estorno ou outro. Sete em
-# cada dez linhas positivas ja identifica o arquivo que chama gasto de
-# positivo. A conta pelo valor nao serve: o pagamento da fatura anterior
-# sozinho empata com o total das compras, e a fatura pareceria dividida ao
-# meio.
-PROPORCAO_DE_GASTO = 0.7
 
 
 def proporcao_positiva(df, mapa) -> float | None:

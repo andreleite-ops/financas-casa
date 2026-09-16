@@ -8,6 +8,7 @@ from datetime import date
 import sqlalchemy as sa
 
 from . import ai, analytics, classify, db, dedup
+from parsers.base import endireitar, fatura_invertida
 from .texto import normalizar, pessoa_na_descricao
 
 PESSOA_PADRAO = "Casal"
@@ -316,6 +317,7 @@ def importar(
         "conferidos_planilha": 0,
         "previsoes_realizadas": 0,
         "previsoes_a_conferir": [],
+        "sinal_corrigido": False,
         "upload_id": None,
     }
     if not lancamentos:
@@ -328,6 +330,17 @@ def importar(
         # quem escolhe manda; senão vale o titular da conta. A planilha de
         # carga inicial fica numa conta do casal, mas pode ser de uma pessoa só
         pessoa_padrao = _pessoa_valida(pessoa_padrao, conta["titular"])
+
+        # A trava que fecha o assunto, no unico lugar por onde tudo passa.
+        # Num cartao, compra e negativa. Se o lote chegou quase todo positivo,
+        # o arquivo veio com o sinal trocado — por qualquer caminho que seja:
+        # leitor do banco, mapeamento manual, coluna "Tipo" com "a vista"
+        # dentro, caixa desmarcada. Aqui ele e virado e a tela fica sabendo.
+        # Antes disto a mesma fatura passou tres vezes, cada uma por um
+        # caminho que a protecao anterior nao olhava.
+        if conta["tipo"] == "cartao" and fatura_invertida(lancamentos):
+            lancamentos = endireitar(lancamentos)
+            resumo["sinal_corrigido"] = True
 
         upload_id = conn.execute(
             sa.insert(db.uploads).values(
@@ -1623,6 +1636,39 @@ def _pode_voltar(conn, desligada, upload_id: int) -> bool:
         )
     ).scalar()
     return not equivalente
+
+
+def inverter_sinal_do_upload(engine, upload_id: int) -> int:
+    """Vira o sinal de tudo o que entrou por um arquivo — o reparo sem reimportar.
+
+    Para a fatura que ja esta no banco com a compra positiva: desfazer e
+    reimportar perde a classificacao que ja foi feita em cima dela e pede que
+    a pessoa refaca um caminho que ja errou duas vezes. Virar no lugar e
+    reversivel (virar de novo desfaz) e nao mexe em categoria, pessoa ou
+    status. O hash de duplicidade acompanha, porque o valor faz parte dele.
+    A natureza fica: ela diz de que lado a linha esta, e num cartao e sempre
+    "despesa" — vira-la junto mandaria a compra para o lado da receita.
+    """
+    with engine.begin() as conn:
+        linhas = conn.execute(
+            sa.select(
+                db.transacoes.c.id, db.transacoes.c.conta_id, db.transacoes.c.data,
+                db.transacoes.c.valor_centavos, db.transacoes.c.descricao_norm,
+            ).where(db.transacoes.c.upload_id == upload_id)
+        ).all()
+        for linha in linhas:
+            valor = -linha.valor_centavos
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id == linha.id)
+                .values(
+                    valor_centavos=valor,
+                    hash_dedup=dedup.hash_lancamento(
+                        linha.conta_id, linha.data, valor, linha.descricao_norm
+                    ),
+                )
+            )
+    return len(linhas)
 
 
 def apagar_upload(engine, upload_id: int) -> tuple[int, int, int]:

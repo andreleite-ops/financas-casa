@@ -549,8 +549,17 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
     # As perguntas antes de importar dependem de alguém responder direito; esta
     # olha o que de fato entrou, e vem com o desfazer do lado — é o que faltava
     # nas duas vezes em que a fatura passou.
+    if resumo.get("sinal_corrigido"):
+        st.info(
+            "**Este arquivo veio com a compra positiva, e foi virado na gravação.** "
+            "Numa conta de cartão, compra é despesa — o sistema não pergunta mais, "
+            "corrige. Só o que veio negativo no arquivo (estorno, pagamento da fatura) "
+            "entrou como crédito.",
+            icon="💳",
+        )
     entradas = sum(1 for lan in lancamentos if lan.valor_centavos > 0)
-    if entradas and entradas / len(lancamentos) >= tabular.PROPORCAO_DE_GASTO:
+    if (not resumo.get("sinal_corrigido")
+            and entradas and entradas / len(lancamentos) >= tabular.PROPORCAO_DE_GASTO):
         soma = sum(lan.valor_centavos for lan in lancamentos if lan.valor_centavos > 0)
         st.error(
             f"**{entradas} dos {len(lancamentos)} lançamentos entraram como ENTRADA**, "
@@ -983,7 +992,17 @@ def _aba_historico(engine) -> None:
             format_func=lambda u: f"#{u['id']} · {u['arquivo']} ({u['importados']} lançamentos)",
         )
         st.caption("Apaga todos os lançamentos que entraram por esse arquivo. Não dá para desfazer.")
-        if st.button("Desfazer importação", type="secondary"):
+        c_apaga, c_vira = st.columns(2)
+        # o reparo para a fatura que ja esta no banco com o sinal trocado: nao
+        # perde classificacao, nao pede reimportacao, e virar de novo desfaz
+        if c_vira.button("Inverter o sinal desta importação", width="stretch"):
+            virados = repo.inverter_sinal_do_upload(engine, escolha["id"])
+            st.success(
+                f"{virados} lançamento(s) trocaram de sinal. Se a despesa do mês "
+                "estava negativa, agora deve estar certa; se virou errado, clique de novo."
+            )
+            st.rerun()
+        if c_apaga.button("Desfazer importação", type="secondary", width="stretch"):
             total, devolvidas, retidas = repo.apagar_upload(engine, escolha["id"])
             recado = f"{total} lançamento(s) removido(s)."
             if devolvidas:

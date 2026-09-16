@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
 from dateutil import parser as dateparser
@@ -155,3 +155,43 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[
             lan.data = _trocar_ano(lan.data, lan.data.year + 1)
         lan.competencia = competencia
     return lancamentos
+
+
+# Numa fatura de cartao a compra e a regra e o credito e a excecao: dezenas de
+# compras contra o pagamento da fatura anterior e um estorno ou outro. Sete em
+# cada dez linhas positivas identifica o arquivo que chama gasto de positivo.
+# Contar pelo valor nao serviria: o pagamento da fatura anterior sozinho
+# empata com o total das compras.
+PROPORCAO_DE_GASTO = 0.7
+MINIMO_PARA_DECIDIR = 3
+
+
+def fatura_invertida(lancamentos: list[Lancamento]) -> bool:
+    """Este lote de cartao chegou com a compra positiva?
+
+    A pergunta e sobre o lote, nao sobre o arquivo, o leitor, a coluna ou a
+    caixa de marcar — e e por isso que ela vale onde as outras falharam. A
+    mesma fatura passou tres vezes com o sinal trocado, cada vez por um caminho
+    que uma protecao anterior nao olhava: a caixa desmarcada, a conta corrente,
+    o leitor do banco que fixava o sinal, a coluna "Tipo" com "a vista" dentro.
+    O que entra num cartao e o unico lugar por onde todas passam.
+    """
+    com_valor = [lan for lan in lancamentos if lan.valor_centavos]
+    # uma ou duas linhas nao dizem qual e a convencao do arquivo: um estorno
+    # avulso lancado sozinho e positivo e esta certo assim. A fatura de
+    # verdade tem dezenas de linhas, e e sobre ela que a regra fala
+    if len(com_valor) < MINIMO_PARA_DECIDIR:
+        return False
+    positivos = sum(1 for lan in com_valor if lan.valor_centavos > 0)
+    return positivos / len(com_valor) >= PROPORCAO_DE_GASTO
+
+
+def endireitar(lancamentos: list[Lancamento]) -> list[Lancamento]:
+    """A mesma fatura, com o sinal do sistema: compra negativa, credito positivo.
+
+    Devolve copias — o lote original e de quem chamou. So o valor vira: a
+    natureza, quando declarada, diz de que lado a linha esta, e isso nao muda
+    porque o numero veio com o sinal trocado. Num cartao ela e sempre
+    "despesa", e o gravador a preenche logo depois.
+    """
+    return [replace(lan, valor_centavos=-lan.valor_centavos) for lan in lancamentos]

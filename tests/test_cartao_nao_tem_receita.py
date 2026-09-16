@@ -10,9 +10,9 @@ fatura de setembro entrou inteira como receita, as despesas do cartão sumiram
 do quadro do mês e a renda apareceu dobrada.
 
 Estes testes são sobre a trava que não depende de ninguém lembrar: o gravador
-declara "despesa" em todo lançamento de cartão que chegue sem natureza. Assim
-o erro de sinal, quando acontecer, vira despesa negativa — que salta aos olhos
-— em vez de renda dobrada, que se confunde com um bom mês.
+declara "despesa" em todo lançamento de cartão que chegue sem natureza, e vira
+o lote quando ele chega com a compra positiva. Cartão não gera receita, e
+despesa é uma quantia positiva — quanto saiu.
 """
 
 from __future__ import annotations
@@ -47,23 +47,26 @@ def _resumo(engine, competencia="2026-09") -> dict:
         return analytics.resumo(conn, competencia=competencia)
 
 
-def test_fatura_lida_com_o_sinal_trocado_nao_vira_renda(engine):
-    """O caso de setembro, reproduzido: seis compras lidas ao contrário.
+def test_fatura_lida_com_o_sinal_trocado_entra_como_despesa_normal(engine):
+    """O caso de setembro, reproduzido: compras lidas ao contrário.
 
-    Antes da trava, os R$ 985,40 da fatura entravam em `receitas`. Agora caem
-    em `despesas` — com sinal negativo, porque o valor veio invertido. Feio de
-    propósito: é um número que ninguém confunde com um mês bom.
+    A primeira versão desta trava jogava o valor positivo para o lado da
+    despesa e deixava o sinal como veio — despesa negativa, "feia de propósito"
+    para servir de alarme. Quem usa leu esse número como o app quebrado, não
+    como o arquivo invertido; alarme que precisa de explicação não é alarme.
+    Agora o gravador vira o lote e a despesa sai normal, positiva.
     """
     cartao = _conta(engine, "cartao")
-    _importar(engine, cartao, [
+    resumo_importacao = _importar(engine, cartao, [
         Lancamento(data=date(2026, 9, 1), descricao="SUPERMERCADO", valor_centavos=54_010),
         Lancamento(data=date(2026, 9, 5), descricao="STREAMING", valor_centavos=3_990),
         Lancamento(data=date(2026, 9, 7), descricao="LIVRARIA", valor_centavos=40_540),
     ])
+    assert resumo_importacao["sinal_corrigido"] is True
 
     resumo = _resumo(engine)
     assert resumo["receitas"] == 0, "cartão não gera receita em hipótese nenhuma"
-    assert resumo["despesas"] < 0, "o erro de sinal tem de aparecer, não se esconder"
+    assert resumo["despesas"] == 98_540, "despesa é uma quantia positiva: quanto saiu"
 
 
 def test_fatura_lida_certo_soma_nas_despesas(engine):
