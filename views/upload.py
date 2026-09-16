@@ -994,14 +994,19 @@ def _aba_historico(engine) -> None:
         st.caption("Apaga todos os lançamentos que entraram por esse arquivo. Não dá para desfazer.")
         c_apaga, c_vira = st.columns(2)
         # o reparo para a fatura que ja esta no banco com o sinal trocado: nao
-        # perde classificacao, nao pede reimportacao, e virar de novo desfaz
-        if c_vira.button("Inverter o sinal desta importação", width="stretch"):
-            virados = repo.inverter_sinal_do_upload(engine, escolha["id"])
-            st.success(
-                f"{virados} lançamento(s) trocaram de sinal. Se a despesa do mês "
-                "estava negativa, agora deve estar certa; se virou errado, clique de novo."
-            )
-            st.rerun()
+        # perde classificacao, nao pede reimportacao, e e idempotente — clicar
+        # de novo nao desfaz (a versao que desfazia foi acionada duas vezes e
+        # devolveu a fatura ao erro)
+        if c_vira.button("Corrigir o sinal desta importação", width="stretch",
+                         help="Só age se for fatura de cartão gravada com a compra positiva. "
+                              "Clicar de novo não desfaz nada."):
+            corrigidos = repo.endireitar_upload(engine, escolha["id"])
+            if corrigidos:
+                st.success(f"{corrigidos} lançamento(s) corrigidos: compra agora é despesa.")
+                st.rerun()
+            else:
+                st.info("Nada a corrigir: este arquivo já está com o sinal certo, ou não é "
+                        "fatura de cartão.")
         if c_apaga.button("Desfazer importação", type="secondary", width="stretch"):
             total, devolvidas, retidas = repo.apagar_upload(engine, escolha["id"])
             recado = f"{total} lançamento(s) removido(s)."

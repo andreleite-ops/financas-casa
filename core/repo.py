@@ -1638,24 +1638,31 @@ def _pode_voltar(conn, desligada, upload_id: int) -> bool:
     return not equivalente
 
 
-def inverter_sinal_do_upload(engine, upload_id: int) -> int:
-    """Vira o sinal de tudo o que entrou por um arquivo — o reparo sem reimportar.
+def endireitar_upload(engine, upload_id: int) -> int:
+    """Corrige o sinal de uma fatura que foi gravada invertida. Idempotente.
 
-    Para a fatura que ja esta no banco com a compra positiva: desfazer e
-    reimportar perde a classificacao que ja foi feita em cima dela e pede que
-    a pessoa refaca um caminho que ja errou duas vezes. Virar no lugar e
-    reversivel (virar de novo desfaz) e nao mexe em categoria, pessoa ou
-    status. O hash de duplicidade acompanha, porque o valor faz parte dele.
-    A natureza fica: ela diz de que lado a linha esta, e num cartao e sempre
-    "despesa" — vira-la junto mandaria a compra para o lado da receita.
+    A primeira versao disto era "inverter": virava tudo, e virar de novo
+    desfazia. Um botao que alterna um estado destrutivo e uma armadilha — dois
+    cliques, e a fatura que tinha acabado de ser consertada voltou ao erro, ao
+    centavo. Foi exatamente o que aconteceu.
+
+    Aqui a pergunta e a mesma do gravador: este lote, numa conta de cartao,
+    esta quase todo positivo? So entao vira. Ja esta certo, ou nao e cartao, ou
+    e pequeno demais para decidir: nao faz nada. Clicar cem vezes da no mesmo
+    que clicar uma, e rodar na inicializacao e seguro.
     """
     with engine.begin() as conn:
         linhas = conn.execute(
             sa.select(
                 db.transacoes.c.id, db.transacoes.c.conta_id, db.transacoes.c.data,
                 db.transacoes.c.valor_centavos, db.transacoes.c.descricao_norm,
-            ).where(db.transacoes.c.upload_id == upload_id)
+                db.contas.c.tipo,
+            )
+            .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+            .where(db.transacoes.c.upload_id == upload_id)
         ).all()
+        if not linhas or linhas[0].tipo != "cartao" or not fatura_invertida(linhas):
+            return 0
         for linha in linhas:
             valor = -linha.valor_centavos
             conn.execute(
@@ -1663,12 +1670,38 @@ def inverter_sinal_do_upload(engine, upload_id: int) -> int:
                 .where(db.transacoes.c.id == linha.id)
                 .values(
                     valor_centavos=valor,
+                    # o valor faz parte do hash de duplicidade; sem acompanhar,
+                    # a proxima importacao nao reconheceria estas linhas
                     hash_dedup=dedup.hash_lancamento(
                         linha.conta_id, linha.data, valor, linha.descricao_norm
                     ),
                 )
             )
     return len(linhas)
+
+
+def endireitar_faturas_gravadas(engine) -> list[dict]:
+    """Passa por toda fatura ja gravada e corrige a que estiver invertida.
+
+    Roda na inicializacao. E o que faz a correcao nao depender de ninguem
+    clicar em nada: a fatura que entrou errada antes da trava existir, ou que
+    voltou ao erro por um clique a mais, e endireitada na proxima subida do
+    app. Como `endireitar_upload` so age no que esta invertido, rodar a cada
+    inicializacao nao custa nada quando esta tudo certo.
+    """
+    with engine.connect() as conn:
+        uploads = conn.execute(
+            sa.select(db.uploads.c.id, db.uploads.c.arquivo)
+            .select_from(db.uploads.join(db.contas, db.uploads.c.conta_id == db.contas.c.id))
+            .where(db.contas.c.tipo == "cartao")
+            .order_by(db.uploads.c.id)
+        ).all()
+    corrigidos = []
+    for upload in uploads:
+        linhas = endireitar_upload(engine, upload.id)
+        if linhas:
+            corrigidos.append({"upload_id": upload.id, "arquivo": upload.arquivo, "linhas": linhas})
+    return corrigidos
 
 
 def apagar_upload(engine, upload_id: int) -> tuple[int, int, int]:

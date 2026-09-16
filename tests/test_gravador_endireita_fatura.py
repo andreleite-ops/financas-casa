@@ -101,57 +101,97 @@ def test_conta_corrente_nao_passa_pela_trava(engine):
     assert _resumo(engine)["receitas"] == 105_000
 
 
-def test_reparo_vira_o_sinal_do_upload_ja_gravado(engine):
-    """A fatura que já está no banco errada: vira no lugar, sem reimportar.
+def _gravar_invertida_como_cartao(engine, lancamentos=None):
+    """O estado que a casa viu: fatura invertida, ja no banco, na conta do cartao.
 
-    Simula o estado que a casa viu — despesa negativa em setembro — gravando a
-    fatura invertida numa conta corrente (onde a trava não age) e depois
-    reclassificando a conta como cartão, como quem descobre o erro depois.
+    Importa numa conta corrente (onde o gravador nao corrige) e depois muda o
+    tipo da conta para cartao, como quem descobre o erro depois.
     """
     conta = _conta(engine, "corrente")
-    resumo = _importar(engine, conta, FATURA_INVERTIDA)
+    resumo = _importar(engine, conta, lancamentos or FATURA_INVERTIDA)
     with engine.begin() as conn:
-        conn.execute(
-            sa.update(db.contas).where(db.contas.c.id == conta).values(tipo="cartao")
-        )
-        # as compras, como ficaram na tela: sem categoria, marcadas despesa,
-        # positivas. O pagamento da fatura continua transferência
+        conn.execute(sa.update(db.contas).where(db.contas.c.id == conta).values(tipo="cartao"))
         conn.execute(
             sa.update(db.transacoes)
-            .where(
-                db.transacoes.c.upload_id == resumo["upload_id"],
-                db.transacoes.c.valor_centavos > 0,
-            )
+            .where(db.transacoes.c.upload_id == resumo["upload_id"],
+                   db.transacoes.c.valor_centavos > 0)
             .values(natureza="despesa", categoria_id=None)
         )
-    compras = 54_010 + 21_000 + 4_240 + 1_500
-    assert _resumo(engine)["despesas"] == -compras, (
-        "o estado de partida é a despesa negativa que apareceu na tela"
-    )
+    return resumo["upload_id"]
 
-    virados = repo.inverter_sinal_do_upload(engine, resumo["upload_id"])
-    assert virados == 5
-    assert _resumo(engine)["despesas"] == compras
 
-    # virar de novo desfaz: o reparo é reversível
-    repo.inverter_sinal_do_upload(engine, resumo["upload_id"])
-    assert _resumo(engine)["despesas"] < 0
+COMPRAS = 54_010 + 21_000 + 4_240 + 1_500
+
+
+def test_reparo_corrige_a_fatura_gravada_invertida(engine):
+    upload_id = _gravar_invertida_como_cartao(engine)
+    assert _resumo(engine)["despesas"] == -COMPRAS, "o ponto de partida e a despesa negativa"
+
+    assert repo.endireitar_upload(engine, upload_id) == 5
+    assert _resumo(engine)["despesas"] == COMPRAS
+
+
+def test_reparo_e_idempotente(engine):
+    """Clicar de novo nao desfaz. Foi assim que a fatura voltou ao erro."""
+    upload_id = _gravar_invertida_como_cartao(engine)
+    repo.endireitar_upload(engine, upload_id)
+    certo = _resumo(engine)["despesas"]
+    assert certo == COMPRAS
+
+    for _ in range(3):
+        assert repo.endireitar_upload(engine, upload_id) == 0
+    assert _resumo(engine)["despesas"] == certo
+
+
+def test_reparo_nao_toca_fatura_que_ja_esta_certa(engine):
+    cartao = _conta(engine, "cartao")
+    resumo = _importar(engine, cartao, endireitar(FATURA_INVERTIDA))
+    assert repo.endireitar_upload(engine, resumo["upload_id"]) == 0
+    assert _resumo(engine)["despesas"] == COMPRAS
+
+
+def test_reparo_nao_toca_conta_corrente(engine):
+    """Em conta corrente positivo e receita: o reparo nao tem o que dizer."""
+    corrente = _conta(engine, "corrente")
+    resumo = _importar(engine, corrente, [
+        Lancamento(data=date(2026, 9, 1 + i), descricao=f"PIX {i}", valor_centavos=30_000)
+        for i in range(5)
+    ])
+    assert repo.endireitar_upload(engine, resumo["upload_id"]) == 0
+    assert _resumo(engine)["receitas"] == 150_000
 
 
 def test_reparo_acompanha_o_hash_de_duplicidade(engine):
-    """O valor faz parte do hash: virar o sinal sem virar o hash quebraria a
-    detecção de duplicidade na próxima importação."""
+    """O valor faz parte do hash: corrigir o sinal sem corrigir o hash quebraria
+    a deteccao de duplicidade na proxima importacao."""
     from core.dedup import hash_lancamento
 
-    cartao = _conta(engine, "corrente")
-    resumo = _importar(engine, cartao, FATURA_INVERTIDA[:1])
-    repo.inverter_sinal_do_upload(engine, resumo["upload_id"])
+    upload_id = _gravar_invertida_como_cartao(engine)
+    repo.endireitar_upload(engine, upload_id)
 
     with engine.connect() as conn:
-        linha = conn.execute(
-            sa.select(db.transacoes).where(db.transacoes.c.upload_id == resumo["upload_id"])
-        ).one()
-    assert linha.valor_centavos == -54_010
-    assert linha.hash_dedup == hash_lancamento(
-        linha.conta_id, linha.data, -54_010, linha.descricao_norm
-    )
+        for linha in conn.execute(
+            sa.select(db.transacoes).where(db.transacoes.c.upload_id == upload_id)
+        ):
+            assert linha.hash_dedup == hash_lancamento(
+                linha.conta_id, linha.data, linha.valor_centavos, linha.descricao_norm
+            )
+
+
+def test_inicializacao_corrige_sozinha_o_que_estiver_invertido(engine):
+    """Ninguem precisa clicar: a subida do app passa por toda fatura gravada."""
+    from core import seed
+
+    invertida = _gravar_invertida_como_cartao(engine)
+    cartao_certo = _conta(engine, "cartao")
+    certa = _importar(engine, cartao_certo, endireitar(FATURA_INVERTIDA))["upload_id"]
+    assert _resumo(engine)["despesas"] == -COMPRAS + COMPRAS
+
+    corrigidos = repo.endireitar_faturas_gravadas(engine)
+    assert [c["upload_id"] for c in corrigidos] == [invertida]
+    assert _resumo(engine)["despesas"] == COMPRAS * 2
+
+    # e rodar de novo, como toda inicializacao vai rodar, nao mexe em nada
+    assert repo.endireitar_faturas_gravadas(engine) == []
+    seed.semear(engine)
+    assert _resumo(engine)["despesas"] == COMPRAS * 2

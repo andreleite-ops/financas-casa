@@ -190,6 +190,11 @@ def semear(engine=None, ano_metas: int | None = None) -> dict:
 
     engine = engine or db.get_engine()
     db.criar_schema(engine)
+    # fatura de cartao gravada com a compra positiva e corrigida aqui, na
+    # subida, sem depender de clique: a que entrou antes da trava existir, ou
+    # a que voltou ao erro por um clique a mais no reparo antigo
+    from . import repo
+    repo.endireitar_faturas_gravadas(engine)
     ano = ano_metas or date.today().year
     with engine.begin() as conn:
         _semear_categorias(conn)
