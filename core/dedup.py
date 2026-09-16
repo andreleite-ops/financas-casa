@@ -24,6 +24,13 @@ JANELA_PROVAVEL = timedelta(days=3)
 # ainda deixa longe uma previsao de 4.800 de uma entrada de 20.596.
 FOLGA_DA_PREVISAO = 0.20
 
+# De onde vem uma receita "prevista": do lancamento a mao e da planilha da
+# carga inicial. A planilha tem o ano inteiro — de janeiro a dezembro — e, dos
+# meses que ainda nao aconteceram, ela e a previsao. Olhar so o manual deixava
+# o salario da planilha e o salario do extrato somarem, calados, a partir do
+# primeiro extrato real depois da carga.
+ORIGENS_DE_PREVISAO = ("manual", "planilha")
+
 
 def hash_lancamento(conta_id: int, dia: date, valor_centavos: int, descricao_norm: str) -> str:
     crua = f"{conta_id}|{dia.isoformat()}|{valor_centavos}|{descricao_norm}"
@@ -76,7 +83,7 @@ def previsao_equivalente(
     mes = competencia or f"{dia.year:04d}-{dia.month:02d}"
     possiveis = [
         c for c in candidatos
-        if c.get("origem") == "manual"
+        if c.get("origem") in ORIGENS_DE_PREVISAO
         and c.get("ativo")
         and c.get("valor_centavos", 0) > 0
         and competencia_de(c) == mes
@@ -260,22 +267,6 @@ class Indice:
             return Decisao("duplicata_exata", linha["id"],
                            "mesma conta, data, valor e descrição")
 
-        # Receita prevista a mao que agora chegou de verdade no extrato.
-        # Antes das regras gerais: elas comparam por conta e por dia, e a
-        # previsao mora noutra conta e no dia 28 — nenhuma casaria.
-        if origem == "extrato" and pode_realizar_previsao:
-            previsao = previsao_equivalente(
-                [c for c in self._todos() if c["id"] not in self._usados],
-                dia=dia, valor_centavos=valor_centavos, pessoa=pessoa,
-                competencia=competencia,
-            )
-            if previsao is not None:
-                return Decisao(
-                    "realiza_previsao", previsao["id"],
-                    f"realiza a receita de {previsao['data']:%m/%Y} lançada à mão"
-                    + (f" ({previsao['descricao'][:30]})" if previsao.get("descricao") else ""),
-                )
-
         # Planilha x extrato no mesmo dia e valor: e o mesmo lancamento, ainda
         # que escrito de outro jeito. A descricao digitada a mao ("Mercado do
         # bairro") nunca casa com a do banco ("SUPERM PAO DE ACUCAR 1234"), e
@@ -307,6 +298,26 @@ class Indice:
             if origem == "planilha" and viz["origem"] == "extrato":
                 return Decisao("duplicata_provavel", viz["id"],
                                f"mesmo valor de um lançamento do extrato, {quando}")
+
+        # Receita prevista — a mao ou na planilha — que agora chegou de verdade
+        # no extrato. Vem DEPOIS da conferencia por valor exato de proposito: o
+        # que bate no centavo e conferencia (herda tudo da planilha e conta como
+        # tal); o que so bate por ordem de grandeza — o contracheque com
+        # reajuste contra o valor redondo previsto — e o que cai aqui. As regras
+        # de estabelecimento, abaixo, nao casariam: a previsao mora noutra conta
+        # e no dia 28.
+        if origem == "extrato" and pode_realizar_previsao:
+            previsao = previsao_equivalente(
+                [c for c in self._todos() if c["id"] not in self._usados],
+                dia=dia, valor_centavos=valor_centavos, pessoa=pessoa,
+                competencia=competencia,
+            )
+            if previsao is not None:
+                return Decisao(
+                    "realiza_previsao", previsao["id"],
+                    f"realiza a receita de {previsao['data']:%m/%Y} lançada à mão"
+                    + (f" ({previsao['descricao'][:30]})" if previsao.get("descricao") else ""),
+                )
 
         chave = chave_estabelecimento(descricao)
 

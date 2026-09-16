@@ -7,7 +7,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from core import db
+from core import analytics, db
 from core.money import fmt_brl, fmt_mil
 from ui import dados, graficos
 from ui.tema import CORES_PESSOA, selo_pessoa
@@ -54,19 +54,20 @@ def _de_onde_veio(composicao: list[dict], rotulo: str) -> None:
         acumulado["total"] += linha["total"]
         acumulado["quantos"] += linha["quantos"]
 
-    previsto = por_origem.get("manual", {}).get("total", 0)
-    realizado = sum(
-        dados_da_origem["total"]
-        for origem, dados_da_origem in por_origem.items()
-        if origem != "manual"
-    )
+    # previsao e o que foi digitado a mao OU veio na planilha da carga inicial:
+    # a planilha tem o ano inteiro, e dos meses futuros ela e a previsao. Olhar
+    # so o manual deixava salario da planilha + salario do extrato passarem
+    # calados a partir do primeiro extrato real depois da carga
+    previsto, realizado = analytics.previsto_e_realizado(composicao)
     if previsto and realizado:
         st.error(
             f"**Esta renda pode estar contada duas vezes.** Em {rotulo} há "
-            f"{fmt_brl(previsto)} de receita **lançada à mão** (a previsão que você digitou) "
-            f"e {fmt_brl(realizado)} vinda de **extrato/planilha**, as duas valendo. Se for o "
-            "mesmo dinheiro, apague a previsão: ela está logo abaixo, em *Já lançado à mão*, "
-            "com o botão **Apagar**.",
+            f"{fmt_brl(previsto)} de receita **prevista** (lançada à mão ou vinda da "
+            f"planilha) e {fmt_brl(realizado)} vinda de **extrato**, as duas valendo. O "
+            "upload casa sozinho o que cai no mesmo mês com valor parecido; o que sobrou "
+            "aqui não casou. Se for o mesmo dinheiro, apague a previsão: a lançada à mão "
+            "está logo abaixo, com o botão **Apagar**; a da planilha, em **Classificação → "
+            "Reclassificar qualquer lançamento**, com o botão **Excluir**.",
             icon="🚨",
         )
 

@@ -740,6 +740,27 @@ def receita_em_cartao(conn) -> list[dict]:
     ]
 
 
+def previsto_e_realizado(composicao: list[dict]) -> tuple[int, int]:
+    """Quanto da receita do periodo e previsao e quanto ja aconteceu.
+
+    Previsao e o que foi digitado a mao ou veio na planilha da carga inicial —
+    a planilha traz o ano inteiro, e dos meses futuros ela e a previsao.
+    Realizado e o que veio de extrato. Os dois juntos no mesmo mes, valendo, e
+    a assinatura de renda contada duas vezes; e a tela de Receitas que le isto.
+    """
+    from .dedup import ORIGENS_DE_PREVISAO
+
+    previsto = realizado = 0
+    for linha in composicao:
+        if not linha.get("no_total", True):
+            continue
+        if linha["origem"] in ORIGENS_DE_PREVISAO:
+            previsto += linha["total"]
+        else:
+            realizado += linha["total"]
+    return previsto, realizado
+
+
 def receitas_por_pessoa(conn, competencia=None, ano=None) -> list[dict]:
     consulta = (
         sa.select(

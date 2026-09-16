@@ -180,9 +180,11 @@ def test_condicoes_do_pareamento_uma_a_uma():
 
     assert dedup.previsao_equivalente([base], **real) is not None
 
-    # (a) origem diferente de 'manual' — a receita da planilha inicial não é
-    #     previsão para efeito desta regra
-    assert dedup.previsao_equivalente([{**base, "origem": "planilha"}], **real) is None
+    # (a) a planilha da carga inicial TAMBÉM é previsão: ela traz o ano
+    #     inteiro, e dos meses futuros ela é a previsão. Só o extrato não é —
+    #     extrato é o que aconteceu, e não realiza extrato
+    assert dedup.previsao_equivalente([{**base, "origem": "planilha"}], **real) is not None
+    assert dedup.previsao_equivalente([{**base, "origem": "extrato"}], **real) is None
     # (b) previsão já inativa (foi "realizada" por outro upload antes)
     assert dedup.previsao_equivalente([{**base, "ativo": False}], **real) is None
     # (c) mês diferente — compara DATA, não competência
@@ -335,8 +337,15 @@ def test_planilha_e_extrato_com_um_dia_de_diferenca_conferem(engine, conn):
     )
 
 
-def test_lancamentos_distantes_demais_continuam_separados(engine, conn):
-    """A janela é de três dias, não do mês: duas receitas iguais existem."""
+def test_receita_da_planilha_no_mesmo_mes_e_realizada_mesmo_longe_no_dia(engine, conn):
+    """Para receita, o dia da planilha não vale nada — só o mês.
+
+    A planilha anota a receita no dia 28, no dia 1 (tabela cruzada) ou no dia
+    do contracheque; o extrato traz o dia em que caiu. Fora dos três dias da
+    conferência exata, a mesma receita no mesmo mês ainda é a mesma receita, e
+    quem prevalece é o extrato. É isso que impede o salário de agosto da
+    planilha somar com o salário de agosto do banco.
+    """
     planilha = _conta(engine, "Planilha da casa", titular="Casal")
     corrente = _conta(engine, "Conta Salário")
 
@@ -350,8 +359,29 @@ def test_lancamentos_distantes_demais_continuam_separados(engine, conn):
                    valor_centavos=30_000),
     ])
 
-    assert resumo["conferidos_planilha"] == 0
-    assert _receitas(engine, "2026-09") == 60_000
+    assert resumo["conferidos_planilha"] == 0        # longe demais para conferência exata
+    assert resumo["previsoes_realizadas"] == 1       # mas é a previsão do mês
+    assert _receitas(engine, "2026-09") == 30_000
+
+
+def test_receita_de_outro_mes_continua_separada(engine, conn):
+    """O mês é a fronteira: setembro não realiza agosto."""
+    planilha = _conta(engine, "Planilha da casa", titular="Casal")
+    corrente = _conta(engine, "Conta Salário")
+
+    _importar(engine, planilha, [
+        Lancamento(data=date(2026, 8, 28), descricao="AULA PARTICULAR",
+                   valor_centavos=30_000, origem="planilha"),
+    ], origem="planilha", arquivo="planilha.xlsx")
+
+    resumo = _importar(engine, corrente, [
+        Lancamento(data=date(2026, 9, 2), descricao="PIX AULA PARTICULAR",
+                   valor_centavos=30_000),
+    ])
+
+    assert resumo["previsoes_realizadas"] == 0
+    assert _receitas(engine, "2026-08") == 30_000
+    assert _receitas(engine, "2026-09") == 30_000
 
 
 # ===========================================================================

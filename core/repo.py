@@ -219,7 +219,7 @@ def _previsoes_por_conferir(conn, sem_par: list[dict]) -> list[dict]:
             db.transacoes.c.pessoa,
         )
         .where(
-            db.transacoes.c.origem == "manual",
+            db.transacoes.c.origem.in_(dedup.ORIGENS_DE_PREVISAO),
             db.transacoes.c.valor_centavos > 0,
             db.transacoes.c.ativo == sa.true(),
             db.transacoes.c.competencia.in_(janela),
