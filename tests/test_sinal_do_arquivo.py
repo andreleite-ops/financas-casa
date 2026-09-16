@@ -81,12 +81,17 @@ def test_arquivo_que_declara_o_sinal_nao_e_adivinhado():
     assert not tabular.positivo_e_gasto(planilha, mapa)
 
 
-def test_planilha_so_de_recebimentos_nao_vira_gasto_sozinha():
-    """A detecção vale para cartão; a planilha de receitas não passa por ela.
+def test_planilha_so_de_recebimentos_e_indistinguivel_de_uma_fatura():
+    """Por que esta é a única pergunta do sistema sem resposta pronta.
 
-    Aqui todas as linhas são positivas e todas são receita de verdade. Quem
-    chama `positivo_e_gasto` só o faz quando a conta escolhida é um cartão —
-    esta planilha entra numa conta corrente e nunca chega a ser perguntada.
+    Todas as linhas aqui são positivas e todas são receita de verdade — os
+    atendimentos da Rô. Uma fatura de cartão tem exatamente a mesma cara. Pelo
+    arquivo, os dois casos são idênticos; o que os separa é o que a pessoa sabe
+    e o arquivo não diz.
+
+    Em conta de cartão a dúvida não existe e o sistema decide sozinho. Em conta
+    corrente ele pergunta — e tranca a importação até ser respondido, porque
+    adivinhar aqui erra metade das vezes.
     """
     recebimentos = pd.DataFrame(
         [
@@ -123,3 +128,33 @@ def test_competencia_da_fatura_manda_no_mes_mesmo_com_compra_de_agosto():
     lidos, _ = tabular.extrair(FATURA, mapa, competencia="2026-09", inverter_sinal=True)
     assert {l.competencia for l in lidos} == {"2026-09"}
     assert min(l.data for l in lidos).month == 8
+
+
+def test_a_rede_final_conta_as_entradas_de_qualquer_conta(monkeypatch):
+    """A proporção que dispara o alarme pós-importação não olha a conta.
+
+    Foi a lição da segunda passagem: prender a proteção ao tipo da conta fazia
+    a mesma fatura passar limpa quando enviada na conta corrente. A conta do
+    alarme é sobre os lançamentos que entraram, e só sobre eles.
+    """
+    mapa = tabular.sugerir_mapeamento(FATURA.columns, FATURA)
+    entrando, _ = tabular.extrair(FATURA, mapa, competencia="2026-09", inverter_sinal=False)
+
+    entradas = sum(1 for lan in entrando if lan.valor_centavos > 0)
+    assert entradas / len(entrando) >= tabular.PROPORCAO_DE_GASTO, (
+        "uma fatura lida sem inverter tem de acender o alarme, seja qual for a conta"
+    )
+
+    certo, _ = tabular.extrair(FATURA, mapa, competencia="2026-09", inverter_sinal=True)
+    entradas_certas = sum(1 for lan in certo if lan.valor_centavos > 0)
+    assert entradas_certas / len(certo) < tabular.PROPORCAO_DE_GASTO, (
+        "e a mesma fatura lida direito não pode acender alarme nenhum"
+    )
+
+
+def test_extrato_de_conta_corrente_nao_acende_o_alarme():
+    """Um extrato normal tem os dois lados: nada a perguntar."""
+    mapa = tabular.sugerir_mapeamento(EXTRATO.columns, EXTRATO)
+    lidos, _ = tabular.extrair(EXTRATO, mapa, competencia="2026-09")
+    entradas = sum(1 for lan in lidos if lan.valor_centavos > 0)
+    assert entradas / len(lidos) < tabular.PROPORCAO_DE_GASTO

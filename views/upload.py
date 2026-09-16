@@ -272,6 +272,42 @@ def _aba_enviar(engine, usuario: dict) -> None:
                      "depois do aviso acima. O normal numa fatura é não mexer aqui.",
             )
             inverter = positivo_e_gasto and not excecao
+        elif tabular.positivo_e_gasto(df, mapa):
+            # Conta corrente com um arquivo quase todo positivo. Prender a
+            # proteção ao tipo da conta foi o erro que deixou a fatura passar
+            # pela segunda vez: ela foi enviada na conta corrente, e ali nada
+            # disparava — nem a inversão automática, nem a trava do gravador,
+            # que também olha o tipo da conta.
+            #
+            # Aqui o arquivo é genuinamente ambíguo: pode ser a lista de
+            # recebimentos da Rô (positivo é receita mesmo) ou uma fatura de
+            # cartão enviada na conta errada. Adivinhar erra metade das vezes,
+            # então esta é a única pergunta do sistema sem resposta pronta — e
+            # ela tranca o botão até ser respondida.
+            proporcao = tabular.proporcao_positiva(df, mapa) or 0
+            st.warning(
+                f"**{proporcao:.0%} das linhas deste arquivo vêm positivas**, e a conta "
+                f"escolhida é **{conta['nome']}**, uma conta corrente. Num extrato de conta "
+                "corrente isso não acontece: ele tem os dois lados. Ou este arquivo é uma "
+                "lista de recebimentos, ou é uma fatura de cartão que veio parar na conta "
+                "errada. Preciso que você diga qual.",
+                icon="✋",
+            )
+            GASTOS = "São gastos — o positivo aqui é despesa (fatura de cartão, lista de compras)"
+            RECEBIMENTOS = "São recebimentos — o positivo aqui é receita mesmo"
+            resposta = st.radio(
+                "O que é este arquivo?", [GASTOS, RECEBIMENTOS],
+                index=None, key=f"{chave_estado}:natureza_do_arquivo",
+            )
+            if resposta is None:
+                st.info(
+                    "Responda acima para liberar a importação. Se for fatura de cartão, o "
+                    "melhor é cancelar e enviá-la na conta do próprio cartão: ali o sistema "
+                    "garante sozinho que nada de cartão entre como renda.",
+                    icon="⬆️",
+                )
+                return
+            inverter = resposta == GASTOS
         else:
             inverter = st.checkbox(
                 "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",
@@ -496,6 +532,27 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
         )
 
     st.success(f"Arquivo processado: {resumo['lidos']} lançamentos lidos.")
+
+    # A última rede, depois de tudo gravado: quantas destas linhas somam na
+    # renda do mês? Numa fatura de cartão a resposta certa é "quase nenhuma".
+    # As perguntas antes de importar dependem de alguém responder direito; esta
+    # olha o que de fato entrou, e vem com o desfazer do lado — é o que faltava
+    # nas duas vezes em que a fatura passou.
+    entradas = sum(1 for lan in lancamentos if lan.valor_centavos > 0)
+    if entradas and entradas / len(lancamentos) >= tabular.PROPORCAO_DE_GASTO:
+        soma = sum(lan.valor_centavos for lan in lancamentos if lan.valor_centavos > 0)
+        st.error(
+            f"**{entradas} dos {len(lancamentos)} lançamentos entraram como ENTRADA**, "
+            f"somando {_reais(soma)} nas receitas de **{conta['nome']}**. Se este arquivo "
+            "era uma fatura de cartão ou uma lista de gastos, está invertido: desfaça agora "
+            "e envie de novo com o sinal certo.",
+            icon="🚨",
+        )
+        if st.button("Desfazer esta importação", type="primary", key="desfazer_recem"):
+            apagadas, devolvidas, retidas = repo.apagar_upload(engine, resumo["upload_id"])
+            st.success(f"{apagadas} lançamento(s) removido(s). Pode enviar de novo.")
+            st.stop()
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Importados", resumo["importados"])
     c2.metric("Classificados", resumo["auto"])
