@@ -180,13 +180,14 @@ def test_varredura_conserta_tudo_o_que_a_sentinela_ve(engine):
         outras = _categoria(conn, "Outras Receitas")
 
         def gravar(descricao, valor, **extra):
-            conn.execute(sa.insert(db.transacoes).values(
+            valores = dict(
                 data=date(2026, 9, 3), competencia="2026-09", descricao=descricao,
                 descricao_norm=normalizar(descricao), valor_centavos=valor, conta_id=cartao,
                 pessoa="Casal", status="pendente", origem="extrato", ativo=True,
                 hash_dedup=hash_lancamento(cartao, date(2026, 9, 3), valor, normalizar(descricao)),
-                **extra,
-            ))
+            )
+            valores.update(extra)
+            conn.execute(sa.insert(db.transacoes).values(**valores))
         gravar("EM CATEGORIA DE RECEITA", -8_495, categoria_id=outras, status="manual")
         gravar("NATUREZA RECEITA SEM CATEGORIA", -1_500, natureza="receita")
         gravar("POSITIVA SEM NADA", 5_000)
