@@ -43,6 +43,17 @@ def _id_poupanca(conn) -> int | None:
     ).scalar()
 
 
+def mes_anterior(competencia: str) -> str:
+    """O mes anterior no calendario — nao "o anterior que tem lancamento".
+
+    A diferenca entre os dois so aparece quando ha buraco na serie, e e
+    justamente ai que ela engana: comparar setembro com julho sob o rotulo
+    "mes anterior" faz um mes normal parecer o dobro do que foi.
+    """
+    ano, mes = int(competencia[:4]), int(competencia[5:7])
+    return f"{ano - 1:04d}-12" if mes == 1 else f"{ano:04d}-{mes - 1:02d}"
+
+
 def meses_decorridos(ano: int) -> int:
     """Quantos meses do ano já aconteceram.
 

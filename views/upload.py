@@ -916,7 +916,7 @@ def _aba_historico(engine) -> None:
         )
         st.caption("Apaga todos os lançamentos que entraram por esse arquivo. Não dá para desfazer.")
         if st.button("Desfazer importação", type="secondary"):
-            total, devolvidas = repo.apagar_upload(engine, escolha["id"])
+            total, devolvidas, retidas = repo.apagar_upload(engine, escolha["id"])
             recado = f"{total} lançamento(s) removido(s)."
             if devolvidas:
                 recado += (
@@ -924,6 +924,14 @@ def _aba_historico(engine) -> None:
                     "voltaram a valer."
                 )
             st.success(recado)
+            if retidas:
+                st.warning(
+                    f"{retidas} previsão(ões) que este arquivo tinha aposentado **continuam "
+                    "desligadas**: o dinheiro delas já entrou por um extrato depois. Religar "
+                    "aqui faria o mês contar duas vezes. Se você discordar, o botão **Voltar "
+                    "a valer** está em *Lançar à mão*.",
+                    icon="🔁",
+                )
             st.rerun()
 
 

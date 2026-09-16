@@ -252,14 +252,24 @@ def render(engine, usuario: dict) -> None:
     anual = painel["anual"]
     acumulado = painel["acumulado"]
 
-    posicao = next((i for i, m in enumerate(serie) if m["competencia"] == competencia), None)
-    anterior = serie[posicao - 1] if posicao else None
+    # O mês anterior é o do calendário, e ele é nomeado no rótulo.
+    #
+    # Antes isto era `serie[posicao - 1]` — o mês anterior *que tem lançamento*.
+    # `serie_mensal` só devolve competências com movimento, então um buraco na
+    # série fazia setembro ser comparado com julho sob o rótulo "mês anterior".
+    # E há um buraco garantido neste ano: agosto tem só a previsão lançada à
+    # mão, e os extratos reais só começaram a chegar em setembro. Um "+107,2%
+    # vs mês anterior" contra um mês pela metade se lê como renda dobrada,
+    # ainda que nada tenha dobrado — foi o que mandou a casa procurar um bug
+    # onde talvez só houvesse uma comparação torta.
+    passado = analytics.mes_anterior(competencia)
+    anterior = next((m for m in serie if m["competencia"] == passado), None)
 
     def variacao(chave: str) -> str | None:
         if not anterior or not anterior[chave]:
             return None
         delta = (atual[chave] / anterior[chave] - 1) * 100
-        return f"{delta:+.1f}% vs mês anterior"
+        return f"{delta:+.1f}% vs {graficos.rotulo_mes(passado).lower()}/{passado[2:4]}"
 
     meta_poupanca = next(
         (o["meta"] for o in orcamento if o["categoria"] == analytics.CATEGORIA_POUPANCA), 0

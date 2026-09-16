@@ -362,9 +362,16 @@ def importar(
 
         for lan in lancamentos:
             descricao_norm = normalizar(lan.descricao)
+            # o mes em que este lancamento vai contar, decidido antes de
+            # qualquer pareamento: e por ele que a previsao casa, porque e por
+            # ele que o relatorio soma
+            competencia_da_linha = (
+                lan.competencia or (competencia or lan.data.strftime("%Y-%m"))
+            )
             decisao = indice.avaliar(
                 conta_id=conta_id,
                 dia=lan.data,
+                competencia=competencia_da_linha,
                 valor_centavos=lan.valor_centavos,
                 descricao=lan.descricao,
                 descricao_norm=descricao_norm,
@@ -373,6 +380,13 @@ def importar(
                 # o dono ainda nao foi decidido aqui; o que a origem declara ja
                 # basta para desempatar entre duas receitas previstas no mes
                 pessoa=lan.pessoa_hint or pessoa_padrao,
+                # Num cartao nao existe receita, entao nada que venha dele pode
+                # "realizar" uma receita prevista a mao. Sem esta porta, uma
+                # fatura lida com o sinal trocado aposentava a previsao do mes:
+                # a compra de R$ 19.000 casava por mes e por ordem de grandeza
+                # com o pro-labore previsto e o desligava — e o salario de
+                # verdade, chegando depois, ja nao encontrava com quem parear.
+                pode_realizar_previsao=conta["tipo"] != "cartao",
             )
             if decisao.existente_id:
                 indice.marcar_usado(decisao.existente_id)
@@ -483,7 +497,7 @@ def importar(
 
             registro = {
                 "data": lan.data,
-                "competencia": lan.competencia or (competencia or lan.data.strftime("%Y-%m")),
+                "competencia": competencia_da_linha,
                 "descricao": lan.descricao,
                 "descricao_norm": descricao_norm,
                 "valor_centavos": lan.valor_centavos,
@@ -533,6 +547,12 @@ def importar(
         temp_para_real = {-(i + 1): ids[i] for i in range(len(ids))}
 
         if substituir:
+            # o mesmo tradutor que as duplicidades usam: a decisao pode apontar
+            # para uma linha do proprio lote, que ainda tinha id provisorio
+            # negativo. Sem traduzir, o UPDATE ... WHERE id IN (-1) nao acerta
+            # nada e as duas linhas ficam ativas, com o resumo dizendo que uma
+            # foi aposentada
+            substituir = [temp_para_real.get(alvo, alvo) for alvo in substituir]
             conn.execute(
                 sa.update(db.transacoes)
                 .where(db.transacoes.c.id.in_(substituir))
@@ -1566,22 +1586,84 @@ def competencias_disponiveis(conn) -> list[str]:
     ]
 
 
-def apagar_upload(engine, upload_id: int) -> tuple[int, int]:
+def _pode_voltar(conn, desligada, upload_id: int) -> bool:
+    """Devolver esta linha ao mes recriaria a duplicidade que ela evitava?
+
+    Desfazer um upload religa o que aquele upload desligou. Mas entre desligar
+    e desfazer pode ter passado outro arquivo trazendo o mesmo dinheiro — e o
+    segundo arquivo nao viu a previsao, porque o indice de duplicidade so le
+    linhas ativas. Religar por cima soma as duas.
+
+    Foi exatamente essa a sequencia: a fatura lida com o sinal trocado aposentou
+    a receita prevista de setembro; o extrato do salario chegou depois e entrou
+    como nova, sem parear e sem nem virar pergunta; desfazer a fatura devolveu a
+    previsao para o lado do salario. O upload errado saiu e a renda continuou
+    dobrada, sem nada na tela explicando.
+    """
+    if desligada.origem != "manual" or desligada.valor_centavos <= 0:
+        return True
+    equivalente = conn.execute(
+        sa.select(sa.func.count())
+        .select_from(db.transacoes)
+        .where(
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.origem != "manual",
+            db.transacoes.c.valor_centavos > 0,
+            db.transacoes.c.competencia == desligada.competencia,
+            db.transacoes.c.id != desligada.id,
+            # o que este upload trouxe esta prestes a ser apagado: contá-lo
+            # aqui faria o desfazer normal reter a previsao que ele mesmo veio
+            # devolver — o caso comum, e justamente o que tem de funcionar
+            sa.or_(
+                db.transacoes.c.upload_id.is_(None),
+                db.transacoes.c.upload_id != upload_id,
+            ),
+            sa.func.abs(db.transacoes.c.valor_centavos - desligada.valor_centavos)
+            <= dedup.FOLGA_DA_PREVISAO * desligada.valor_centavos,
+        )
+    ).scalar()
+    return not equivalente
+
+
+def apagar_upload(engine, upload_id: int) -> tuple[int, int, int]:
     """Desfaz uma importacao inteira - o 'undo' de um arquivo errado.
 
     Apagar o que entrou nao basta: o upload tambem *desliga* linhas antigas —
     a da planilha que ele conferiu, a receita prevista a mao que ele veio
     realizar. Desfazendo so um lado, essas linhas ficavam desligadas para
-    sempre e o mes perdia dinheiro que ninguem apagou. Aqui os dois lados
-    voltam atras, e a contagem devolvida diz quantas linhas sairam e quantas
-    voltaram.
+    sempre e o mes perdia dinheiro que ninguem apagou.
+
+    Mas religar tudo as cegas tem o defeito oposto: se o dinheiro ja voltou por
+    outro arquivo, a linha devolvida passa a contar duas vezes. Por isso cada
+    uma passa por `_pode_voltar`. Devolve (apagadas, devolvidas, retidas).
     """
     with engine.begin() as conn:
-        devolvidas = conn.execute(
-            sa.update(db.transacoes)
-            .where(db.transacoes.c.substituido_por == upload_id)
-            .values(ativo=True, substituido_por=None, observacao=None)
-        ).rowcount or 0
+        desligadas = conn.execute(
+            sa.select(
+                db.transacoes.c.id, db.transacoes.c.origem,
+                db.transacoes.c.competencia, db.transacoes.c.valor_centavos,
+            ).where(db.transacoes.c.substituido_por == upload_id)
+        ).all()
+        voltam = [linha.id for linha in desligadas if _pode_voltar(conn, linha, upload_id)]
+        retidas = len(desligadas) - len(voltam)
+        devolvidas = 0
+        if voltam:
+            devolvidas = conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(voltam))
+                .values(ativo=True, substituido_por=None, observacao=None)
+            ).rowcount or 0
+        if retidas:
+            # sai de baixo deste upload, mas continua desligada: o dinheiro dela
+            # ja esta no mes por outro arquivo, e a tela precisa dizer isso
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.substituido_por == upload_id)
+                .values(
+                    substituido_por=None,
+                    observacao="o dinheiro previsto aqui já entrou por um extrato",
+                )
+            )
         ids = [
             linha.id
             for linha in conn.execute(
@@ -1599,7 +1681,7 @@ def apagar_upload(engine, upload_id: int) -> tuple[int, int]:
             )
             conn.execute(sa.delete(db.transacoes).where(db.transacoes.c.id.in_(ids)))
         conn.execute(sa.delete(db.uploads).where(db.uploads.c.id == upload_id))
-    return len(ids), devolvidas
+    return len(ids), devolvidas, retidas
 
 
 # --------------------------------------------------------------------------

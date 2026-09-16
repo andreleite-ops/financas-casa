@@ -30,12 +30,26 @@ def hash_lancamento(conta_id: int, dia: date, valor_centavos: int, descricao_nor
     return hashlib.sha256(crua.encode("utf-8")).hexdigest()
 
 
-def _mesma_competencia(a: date, b: date) -> bool:
-    return (a.year, a.month) == (b.year, b.month)
+def competencia_de(registro, dia: date | None = None) -> str:
+    """O mes em que o lancamento conta, nao o dia em que o dinheiro andou.
+
+    Os dois so divergem no cartao, e divergem sempre: a compra de 20/08 esta na
+    fatura de setembro e conta em setembro. Como o relatorio agrega por
+    competencia, parear por data fazia a previsao de *agosto* morrer para um
+    credito que entrava como receita de *setembro* — agosto encolhia e setembro
+    inchava, os dois pelo mesmo valor, sem uma linha a mais no banco.
+    """
+    declarada = registro.get("competencia") if hasattr(registro, "get") else None
+    if declarada:
+        return str(declarada)
+    referencia = registro.get("data") if hasattr(registro, "get") else None
+    referencia = referencia or dia
+    return f"{referencia.year:04d}-{referencia.month:02d}"
 
 
 def previsao_equivalente(
     candidatos, *, dia: date, valor_centavos: int, pessoa: str | None,
+    competencia: str | None = None,
 ) -> dict | None:
     """A receita prevista a mao que este lancamento do extrato veio realizar.
 
@@ -59,12 +73,13 @@ def previsao_equivalente(
     if valor_centavos <= 0:
         return None
 
+    mes = competencia or f"{dia.year:04d}-{dia.month:02d}"
     possiveis = [
         c for c in candidatos
         if c.get("origem") == "manual"
         and c.get("ativo")
         and c.get("valor_centavos", 0) > 0
-        and _mesma_competencia(c["data"], dia)
+        and competencia_de(c) == mes
         and abs(c["valor_centavos"] - valor_centavos)
         <= FOLGA_DA_PREVISAO * max(c["valor_centavos"], valor_centavos)
     ]
@@ -223,7 +238,8 @@ class Indice:
     def avaliar(
         self, *, conta_id: int, dia: date, valor_centavos: int, descricao: str,
         descricao_norm: str, origem: str, upload_id: int | None,
-        pessoa: str | None = None,
+        pessoa: str | None = None, pode_realizar_previsao: bool = True,
+        competencia: str | None = None,
     ) -> Decisao:
         h = hash_lancamento(conta_id, dia, valor_centavos, descricao_norm)
 
@@ -247,10 +263,11 @@ class Indice:
         # Receita prevista a mao que agora chegou de verdade no extrato.
         # Antes das regras gerais: elas comparam por conta e por dia, e a
         # previsao mora noutra conta e no dia 28 — nenhuma casaria.
-        if origem == "extrato":
+        if origem == "extrato" and pode_realizar_previsao:
             previsao = previsao_equivalente(
                 [c for c in self._todos() if c["id"] not in self._usados],
                 dia=dia, valor_centavos=valor_centavos, pessoa=pessoa,
+                competencia=competencia,
             )
             if previsao is not None:
                 return Decisao(
@@ -267,17 +284,29 @@ class Indice:
         # A conta tambem e ignorada: uma planilha de familia costuma anotar o
         # gasto sem dizer de qual cartao saiu, entao tudo dela cai numa conta
         # so. Exigir a mesma conta faria a fatura do Nubank duplicar o que ja
-        # estava anotado. Dia e centavo exatos identificam o lancamento com
-        # folga, e o pareamento continua um-para-um.
-        for viz in sorted(self._por_valor.get(valor_centavos, []), key=lambda r: r["id"]):
-            if viz["id"] in self._usados or not viz["ativo"] or viz["data"] != dia:
-                continue
+        # estava anotado. O centavo exato identifica o lancamento com folga, e o
+        # pareamento continua um-para-um.
+        #
+        # O dia, nao. Exigir o dia exato deixava escapar o caso mais comum de
+        # todos: a planilha anota o dia do contracheque e o extrato traz o dia
+        # em que o dinheiro caiu — um dia de diferenca, a mesma receita duas
+        # vezes, e nada avisava, porque a regra dos tres dias logo acima exige a
+        # mesma conta e a planilha mora numa conta so dela. A janela aqui e a
+        # mesma dos tres dias, e o mais proximo ganha.
+        vizinhos = [
+            viz for viz in self._por_valor.get(valor_centavos, [])
+            if viz["id"] not in self._usados and viz["ativo"]
+            and abs(viz["data"] - dia) <= JANELA_PROVAVEL
+        ]
+        for viz in sorted(vizinhos, key=lambda r: (abs(r["data"] - dia), r["id"])):
+            quando = ("mesmo dia" if viz["data"] == dia
+                      else f"{abs((viz['data'] - dia).days)} dia(s) de diferença")
             if origem == "extrato" and viz["origem"] == "planilha":
                 return Decisao("confere_planilha", viz["id"],
-                               "mesmo dia e valor de um lançamento da planilha")
+                               f"mesmo valor de um lançamento da planilha, {quando}")
             if origem == "planilha" and viz["origem"] == "extrato":
                 return Decisao("duplicata_provavel", viz["id"],
-                               "mesmo dia e valor de um lançamento do extrato")
+                               f"mesmo valor de um lançamento do extrato, {quando}")
 
         chave = chave_estabelecimento(descricao)
 
@@ -360,6 +389,9 @@ def carregar_indice(conn, conta_id: int, datas: list[date]) -> Indice:
         db.transacoes.c.upload_id,
         db.transacoes.c.ativo,
         db.transacoes.c.data,
+        # a competencia e o mes em que a linha conta; no cartao ela difere da
+        # data, e e por ela que a previsao tem de casar
+        db.transacoes.c.competencia,
         db.transacoes.c.descricao,
         db.transacoes.c.valor_centavos,
         db.transacoes.c.conta_id,

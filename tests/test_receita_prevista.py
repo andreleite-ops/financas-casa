@@ -345,8 +345,8 @@ def test_desfazer_o_upload_devolve_a_previsao_que_ele_desligou(engine, conn):
     resumo = _importar_extrato(engine, conta, date(2026, 11, 5), 2_059_621, "TED PRO LABORE")
     assert resumo["previsoes_realizadas"] == 1
 
-    apagadas, devolvidas = repo.apagar_upload(engine, resumo["upload_id"])
-    assert (apagadas, devolvidas) == (1, 1)
+    apagadas, devolvidas, retidas = repo.apagar_upload(engine, resumo["upload_id"])
+    assert (apagadas, devolvidas, retidas) == (1, 1, 0)
 
     ativas = [linha for linha in _receitas_do_mes(engine, "2026-11") if linha[2]]
     assert len(ativas) == 1, f"o mês ficou sem receita nenhuma: {ativas}"
