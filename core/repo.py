@@ -467,6 +467,20 @@ def importar(
                 substituir.append(decisao.existente_id)
                 resumo["previsoes_realizadas"] += 1
 
+            # A trava que não depende de ninguém lembrar de marcar uma caixa.
+            # Num cartão de crédito não existe receita: o que entra é compra, e
+            # o crédito que aparece é estorno ou o pagamento da própria fatura —
+            # nenhum dos dois é renda da casa. Declarando "despesa" aqui, um
+            # lançamento de cartão que chegue sem categoria cai no lado certo
+            # mesmo que o arquivo tenha sido lido com o sinal trocado.
+            #
+            # O erro deixa de ser silencioso e passa a ser escandaloso: uma
+            # fatura inteira lida ao contrário vira despesa negativa, que salta
+            # aos olhos, em vez de renda dobrada, que se confunde com um bom mês.
+            natureza_declarada = lan.natureza_hint
+            if conta["tipo"] == "cartao" and not natureza_declarada:
+                natureza_declarada = "despesa"
+
             registro = {
                 "data": lan.data,
                 "competencia": lan.competencia or (competencia or lan.data.strftime("%Y-%m")),
@@ -489,7 +503,7 @@ def importar(
                 "classificado_por": None,
                 "classificacao_origem": (str(lan.categoria_hint).strip()
                                          if lan.categoria_hint else None),
-                "natureza": lan.natureza_hint,
+                "natureza": natureza_declarada,
             }
             posicao = len(linhas)
             linhas.append(registro)

@@ -25,6 +25,77 @@ def _cartoes_por_pessoa(por_pessoa, total):
         )
 
 
+ROTULO_ORIGEM = {
+    "manual": "Lançado à mão (previsão)",
+    "planilha": "Carga inicial (planilha)",
+    "extrato": "Extrato do banco",
+}
+
+
+def _de_onde_veio(composicao: list[dict], rotulo: str) -> None:
+    """A quebra da receita por origem, e o alerta de renda contada duas vezes.
+
+    O cartão do topo diz quanto entrou; ele nunca disse de onde, e é essa a
+    pergunta quando o número parece grande demais. Renda dobrada tem uma
+    assinatura só: no mesmo mês, a previsão digitada à mão e o extrato do banco
+    ativos ao mesmo tempo. O pareamento automático cobre o caso comum — mesmo
+    mês, valor na mesma ordem de grandeza — e erra por omissão justamente onde
+    o recebimento chega picado, em dezenas de créditos pequenos que nenhum
+    sozinho se parece com o total previsto.
+    """
+    if not composicao:
+        return
+
+    por_origem: dict[str, dict] = {}
+    for linha in composicao:
+        if not linha["no_total"]:
+            continue
+        acumulado = por_origem.setdefault(linha["origem"], {"total": 0, "quantos": 0})
+        acumulado["total"] += linha["total"]
+        acumulado["quantos"] += linha["quantos"]
+
+    previsto = por_origem.get("manual", {}).get("total", 0)
+    realizado = sum(
+        dados_da_origem["total"]
+        for origem, dados_da_origem in por_origem.items()
+        if origem != "manual"
+    )
+    if previsto and realizado:
+        st.error(
+            f"**Esta renda pode estar contada duas vezes.** Em {rotulo} há "
+            f"{fmt_brl(previsto)} de receita **lançada à mão** (a previsão que você digitou) "
+            f"e {fmt_brl(realizado)} vinda de **extrato/planilha**, as duas valendo. Se for o "
+            "mesmo dinheiro, apague a previsão: ela está logo abaixo, em *Já lançado à mão*, "
+            "com o botão **Apagar**.",
+            icon="🚨",
+        )
+
+    with st.expander(f"De onde veio a receita de {rotulo}", expanded=bool(previsto and realizado)):
+        st.caption(
+            "A mesma conta do cartão lá em cima, aberta por origem. **Quantos** importa tanto "
+            "quanto o valor: trinta créditos pequenos são pacientes; um crédito só é salário."
+        )
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Origem": ROTULO_ORIGEM.get(linha["origem"], linha["origem"]),
+                    "Conta": linha["conta"],
+                    "Tipo": linha["categoria"],
+                    "Lançamentos": linha["quantos"],
+                    "Período": (
+                        f"{linha['primeiro']:%d/%m}"
+                        if linha["primeiro"] == linha["ultimo"]
+                        else f"{linha['primeiro']:%d/%m} a {linha['ultimo']:%d/%m}"
+                    ),
+                    "Valor": fmt_brl(linha["total"]),
+                    "No total": "sim" if linha["no_total"] else "não (transferência)",
+                }
+                for linha in composicao
+            ]),
+            width="stretch", hide_index=True,
+        )
+
+
 def render(engine, usuario: dict) -> None:
     competencias = dados.competencias(engine, dados.versao())
     if not competencias:
@@ -57,6 +128,7 @@ def render(engine, usuario: dict) -> None:
     matriz, itens = painel["matriz"], painel["itens"]
 
     _cartoes_por_pessoa(por_pessoa, total)
+    _de_onde_veio(painel["composicao"], rotulo)
     manual.formulario(engine, usuario, ano, "receita")
 
     if not matriz["linhas"]:

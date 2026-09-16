@@ -269,6 +269,7 @@ def painel_de_receitas(_engine, versao: int, ano: int, competencia: str | None) 
             "itens": analytics.lancamentos(
                 conn, **filtro, natureza="receita", limite=400
             ),
+            "composicao": analytics.composicao_de_receitas(conn, **filtro),
         }
 
 

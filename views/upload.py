@@ -238,33 +238,46 @@ def _aba_enviar(engine, usuario: dict) -> None:
         # coluna de tipo mapeada, os dois controles disputam a mesma decisão e
         # a inversão desfaz o que a coluna acabou de definir
         tem_coluna_de_sinal = bool(mapa.get("tipo") or mapa.get("entrada") or mapa.get("saida"))
-        # O CSV da fatura vem com a compra positiva. Deixar a caixa desmarcada
-        # por padrão fazia a fatura inteira entrar como receita — a de setembro
-        # entrou assim: as despesas do cartão sumiram do quadro e a renda do mês
-        # dobrou. Quem sabe a resposta é o arquivo, não a memória de quem envia.
-        sugere_inverter = (
-            conta["tipo"] == "cartao"
-            and not tem_coluna_de_sinal
-            and tabular.positivo_e_gasto(df, mapa)
-        )
-        inverter = st.checkbox(
-            "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",
-            value=sugere_inverter,
-            disabled=tem_coluna_de_sinal,
-            key=f"{chave_estado}:inverter:{sugere_inverter}",
-            help=(
-                "Desativado porque o próprio arquivo já diz o que é despesa e o que é receita, "
-                "na coluna mapeada acima — inverter aqui desfaria isso."
-                if tem_coluna_de_sinal
-                else "Marque se, na prévia abaixo, as compras aparecerem como ENTRADA."
-            ),
-        )
+        # Num cartão o sinal não é pergunta: a fatura exporta a compra positiva,
+        # e quem vem negativo é estorno ou o pagamento da própria fatura. Os
+        # leitores por banco (parsers/instituicoes) já aplicavam essa regra
+        # sozinhos; este caminho — o mapeamento manual de colunas, onde cai a
+        # conta de leitor genérico — era o único que ainda perguntava, e
+        # perguntava com a resposta errada já marcada. Foi por aqui que a
+        # fatura de setembro entrou inteira como receita.
+        #
+        # Por isso a regra virou o padrão e a exceção virou a caixa: esquecer
+        # de marcar passou a dar no caso certo, não no errado.
+        e_cartao = conta["tipo"] == "cartao"
         if tem_coluna_de_sinal:
             inverter = False
-        if sugere_inverter:
             st.caption(
-                "Marcado sozinho: neste arquivo a maioria das linhas vem positiva, e numa "
-                "fatura de cartão isso quer dizer compra. Desmarque se estiver errado."
+                "O próprio arquivo diz o que é despesa e o que é receita, na coluna "
+                "mapeada acima — é ela que manda no sinal."
+            )
+        elif e_cartao:
+            positivo_e_gasto = tabular.positivo_e_gasto(df, mapa)
+            if positivo_e_gasto:
+                st.info(
+                    "**Fatura de cartão: o valor positivo é compra.** Neste arquivo a maioria "
+                    "das linhas vem positiva, então elas entram como **despesa**, e só o que "
+                    "vem negativo (estorno, pagamento da fatura) entra como crédito.",
+                    icon="💳",
+                )
+            excecao = st.checkbox(
+                "Não é o caso deste arquivo: aqui a compra já vem negativa",
+                value=False,
+                key=f"{chave_estado}:excecao_sinal",
+                help="Só marque se a prévia abaixo mostrar as compras como ENTRADA mesmo "
+                     "depois do aviso acima. O normal numa fatura é não mexer aqui.",
+            )
+            inverter = positivo_e_gasto and not excecao
+        else:
+            inverter = st.checkbox(
+                "O valor vem positivo mesmo quando é gasto (comum em fatura de cartão)",
+                value=False,
+                key=f"{chave_estado}:inverter",
+                help="Marque se, na prévia abaixo, as compras aparecerem como ENTRADA.",
             )
 
         # prévia do resultado, não do arquivo: mostra como cada linha vai ficar

@@ -586,6 +586,75 @@ def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
     return {"meses": ordem, "linhas": saida}
 
 
+def _lado_da_linha():
+    """De que lado o lancamento cai, decidido linha a linha.
+
+    A mesma regra do `resumo`, escrita em SQL para poder agrupar por ela: manda
+    a natureza da categoria; sem categoria, manda a natureza que a origem
+    declarou (estorno de despesa entra positivo e nao e receita); sem nenhuma
+    das duas, manda o sinal.
+    """
+    return sa.case(
+        (db.categorias.c.natureza.isnot(None), db.categorias.c.natureza),
+        (db.transacoes.c.natureza.isnot(None), db.transacoes.c.natureza),
+        (db.transacoes.c.valor_centavos > 0, sa.literal("receita")),
+        else_=sa.literal("despesa"),
+    )
+
+
+def composicao_de_receitas(conn, competencia=None, ano=None, pessoa=None) -> list[dict]:
+    """De onde veio cada real da receita do periodo, agrupado por origem.
+
+    O cartao do topo diz *quanto* entrou; ele nao diz *de onde*, e e essa a
+    pergunta quando o numero parece grande demais. Renda dobrada tem uma
+    assinatura: o mesmo mes com receita `manual` — a previsao que ele digitou
+    para o ano inteiro — e receita de `extrato` ao mesmo tempo, as duas ativas.
+    Sem esta quebra, essa assinatura so aparecia para quem soubesse ler a
+    tabela de transacoes por fora do app.
+
+    Uma consulta. Conta e soma juntas, porque "sao trinta creditinhos" e
+    "e um credito so" pedem conversas diferentes — e trinta creditinhos e
+    exatamente o jeito como a Ro recebe dos pacientes.
+    """
+    lado = _lado_da_linha().label("lado")
+    consulta = (
+        sa.select(
+            db.transacoes.c.origem,
+            db.contas.c.nome.label("conta"),
+            db.categorias.c.nome.label("categoria"),
+            lado,
+            sa.func.count().label("quantos"),
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+            sa.func.min(db.transacoes.c.data).label("primeiro"),
+            sa.func.max(db.transacoes.c.data).label("ultimo"),
+        )
+        .select_from(
+            db.transacoes
+            .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(*_base(competencia, ano, pessoa))
+        .group_by(db.transacoes.c.origem, db.contas.c.nome, db.categorias.c.nome, lado)
+        .having(lado == "receita")
+    )
+    linhas = [
+        {
+            "origem": linha.origem,
+            "conta": linha.conta,
+            "categoria": linha.categoria or "— sem categoria —",
+            "quantos": int(linha.quantos or 0),
+            "total": int(linha.total or 0),
+            "primeiro": linha.primeiro,
+            "ultimo": linha.ultimo,
+            # transferencia entra na lista, marcada: ela nao soma no total do
+            # topo, e some-la aqui faria a quebra nao fechar com o cartao
+            "no_total": linha.categoria != CATEGORIA_TRANSFERENCIA,
+        }
+        for linha in conn.execute(consulta)
+    ]
+    return sorted(linhas, key=lambda linha: (-linha["total"], linha["origem"]))
+
+
 def receitas_por_pessoa(conn, competencia=None, ano=None) -> list[dict]:
     consulta = (
         sa.select(
