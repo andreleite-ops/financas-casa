@@ -404,6 +404,18 @@ def importar(
             if decisao.existente_id:
                 indice.marcar_usado(decisao.existente_id)
 
+            # Num cartão de crédito não existe receita: o que entra é compra, e
+            # o crédito que aparece é estorno ou o pagamento da própria fatura.
+            # A natureza é decidida AQUI, antes de qualquer camada classificar,
+            # porque é ela que as três camadas usam como guarda. Decidida depois,
+            # a guarda olhava o sinal — e a fatura que entrou positiva na
+            # primeira vez teve compras classificadas como renda, viraram
+            # memória, e a memória repetia a cada fatura seguinte. Foram os 14
+            # lançamentos do cartão em "Outras Receitas" que a sentinela pegou.
+            natureza_declarada = lan.natureza_hint
+            if conta["tipo"] == "cartao" and not natureza_declarada:
+                natureza_declarada = "despesa"
+
             # classificacao: dica da planilha primeiro, senao regras
             categoria_id = subcategoria_id = None
             status, confianca = "pendente", None
@@ -422,7 +434,7 @@ def importar(
                 # vira um total de despesas negativo, sem nada apontar a causa.
                 # Quando a origem declara a natureza numa coluna (DESP/REC), ela
                 # manda: estorno de despesa entra positivo e continua despesa.
-                natureza_esperada = lan.natureza_hint or (
+                natureza_esperada = natureza_declarada or (
                     "receita" if lan.valor_centavos > 0 else "despesa"
                 )
                 if (categoria_id and categoria_id not in bidirecionais
@@ -440,7 +452,7 @@ def importar(
             # planilha dela entraria como dela, e o "quem trouxe o quê" mentiria.
             achado = classify.classificar_local(
                 lan.descricao, lan.valor_centavos, regras, naturezas,
-                natureza_hint=lan.natureza_hint,
+                natureza_hint=natureza_declarada,
                 rotulo_origem=lan.categoria_hint,
                 bidirecionais=bidirecionais,
             )
@@ -493,20 +505,6 @@ def importar(
                 observacao = decisao.motivo
                 substituir.append(decisao.existente_id)
                 resumo["previsoes_realizadas"] += 1
-
-            # A trava que não depende de ninguém lembrar de marcar uma caixa.
-            # Num cartão de crédito não existe receita: o que entra é compra, e
-            # o crédito que aparece é estorno ou o pagamento da própria fatura —
-            # nenhum dos dois é renda da casa. Declarando "despesa" aqui, um
-            # lançamento de cartão que chegue sem categoria cai no lado certo
-            # mesmo que o arquivo tenha sido lido com o sinal trocado.
-            #
-            # O erro deixa de ser silencioso e passa a ser escandaloso: uma
-            # fatura inteira lida ao contrário vira despesa negativa, que salta
-            # aos olhos, em vez de renda dobrada, que se confunde com um bom mês.
-            natureza_declarada = lan.natureza_hint
-            if conta["tipo"] == "cartao" and not natureza_declarada:
-                natureza_declarada = "despesa"
 
             registro = {
                 "data": lan.data,
@@ -605,7 +603,8 @@ def importar(
         resumo["previsoes_a_conferir"] = _previsoes_por_conferir(conn, entradas_sem_par)
 
         pendentes = [
-            (ids[posicao], linhas[posicao]["descricao"], linhas[posicao]["valor_centavos"])
+            (ids[posicao], linhas[posicao]["descricao"], linhas[posicao]["valor_centavos"],
+             linhas[posicao]["natureza"])
             for posicao in pendentes_pos
         ]
 
@@ -629,7 +628,7 @@ def importar(
     return resumo
 
 
-def _classificar_com_ia(conn, pendentes: list[tuple[int, str, int]]) -> int:
+def _classificar_com_ia(conn, pendentes: list[tuple[int, str, int, str | None]]) -> int:
     plano = plano_para_ia(conn)
     cats_idx, subs_idx = _indice_categorias(conn)
     naturezas = classify._natureza_por_categoria(conn)
@@ -637,15 +636,17 @@ def _classificar_com_ia(conn, pendentes: list[tuple[int, str, int]]) -> int:
 
     for inicio in range(0, len(pendentes), ai.LOTE):
         fatia = pendentes[inicio : inicio + ai.LOTE]
-        entrada = [(i, desc, valor) for i, (_id, desc, valor) in enumerate(fatia)]
+        entrada = [(i, desc, valor) for i, (_id, desc, valor, _nat) in enumerate(fatia)]
         for sugestao in ai.sugerir_categorias(entrada, plano):
             if sugestao.indice >= len(fatia):
                 continue
-            transacao_id, _desc, valor = fatia[sugestao.indice]
+            transacao_id, _desc, valor, natureza = fatia[sugestao.indice]
             categoria_id = cats_idx.get(sugestao.categoria.casefold())
             if not categoria_id:
                 continue
-            natureza_esperada = "receita" if valor > 0 else "despesa"
+            # a natureza gravada manda sobre o sinal: e ela que impede a IA de
+            # por uma compra de cartao numa categoria de receita
+            natureza_esperada = natureza or ("receita" if valor > 0 else "despesa")
             if naturezas.get(categoria_id) != natureza_esperada:
                 continue
             if sugestao.confianca < classify.LIMITE_CONFIANCA_IA:
@@ -697,8 +698,21 @@ def reclassificar(
     """
     with engine.begin() as conn:
         linha = conn.execute(
-            sa.select(db.transacoes.c.descricao).where(db.transacoes.c.id == transacao_id)
+            sa.select(db.transacoes.c.descricao, db.contas.c.tipo.label("tipo_conta"))
+            .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+            .where(db.transacoes.c.id == transacao_id)
         ).fetchone()
+        # cartao nao gera receita, e isso vale tambem para a mao: a tela ja nao
+        # oferece categoria de receita para linha de cartao, e aqui e a
+        # garantia de que nenhum outro caminho grava o que a tela nao oferece
+        if linha and linha.tipo_conta == "cartao":
+            natureza = classify._natureza_por_categoria(conn).get(categoria_id)
+            if natureza == "receita" and categoria_id not in classify.categorias_bidirecionais(conn):
+                raise ValueError(
+                    "cartão de crédito não gera receita: o que entra é compra, e o crédito "
+                    "que aparece é estorno ou pagamento da fatura. Escolha uma categoria "
+                    "de despesa — o estorno vai para a categoria do gasto que ele devolve."
+                )
         valores = dict(
             categoria_id=categoria_id,
             subcategoria_id=subcategoria_id,
@@ -1200,6 +1214,9 @@ def fila_pendentes(
             db.transacoes.c.observacao,
             db.transacoes.c.classificacao_origem,
             db.contas.c.nome.label("conta"),
+            # e o tipo da conta que decide quais categorias a tela oferece:
+            # linha de cartao so vai para despesa
+            db.contas.c.tipo.label("tipo_conta"),
         )
         .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
         .where(*condicoes)
@@ -1254,6 +1271,7 @@ def buscar_transacoes(conn, termo: str = "", limite: int = 100) -> list[dict]:
             db.categorias.c.nome.label("categoria"),
             db.subcategorias.c.nome.label("subcategoria"),
             db.contas.c.nome.label("conta"),
+            db.contas.c.tipo.label("tipo_conta"),
         )
         .select_from(
             db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
@@ -1678,6 +1696,49 @@ def endireitar_upload(engine, upload_id: int) -> int:
                 )
             )
     return len(linhas)
+
+
+def desclassificar_receita_em_cartao(engine) -> int:
+    """Linha de cartao em categoria de receita volta para a fila. Idempotente.
+
+    Antes da natureza ser decidida antes da classificacao, a fatura que entrou
+    positiva teve compras classificadas como renda — e isso virou memoria, que
+    repetia a cada fatura. Essas linhas ficam gravadas erradas mesmo depois do
+    gravador consertado. Aqui elas perdem a categoria e voltam para a fila com
+    a explicacao, onde serao classificadas como qualquer outra pendencia. Roda
+    na subida; quando nao ha nada errado, nao toca em nada.
+    """
+    with engine.begin() as conn:
+        bidirecionais = classify.categorias_bidirecionais(conn)
+        condicoes = [
+            db.contas.c.tipo == "cartao",
+            db.categorias.c.natureza == "receita",
+            db.categorias.c.nome != analytics.CATEGORIA_TRANSFERENCIA,
+        ]
+        if bidirecionais:
+            condicoes.append(~db.transacoes.c.categoria_id.in_(bidirecionais))
+        ids = [
+            linha.id for linha in conn.execute(
+                sa.select(db.transacoes.c.id)
+                .select_from(
+                    db.transacoes
+                    .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+                    .join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+                )
+                .where(*condicoes)
+            )
+        ]
+        if ids:
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(ids))
+                .values(
+                    categoria_id=None, subcategoria_id=None, status="pendente",
+                    confianca=None, classificado_por=None,
+                    observacao="estava numa categoria de receita; cartão não gera receita",
+                )
+            )
+    return len(ids)
 
 
 def endireitar_faturas_gravadas(engine) -> list[dict]:

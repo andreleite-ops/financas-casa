@@ -31,7 +31,14 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
     caber: escolher não recarrega nada, só o Salvar recarrega. É a mesma lista
     que a tela de de-para, o lançamento manual e a Análise IA já usam.
     """
-    natureza = "receita" if item["valor_centavos"] > 0 else "despesa"
+    # linha de cartão só vai para despesa: cartão não gera receita, e o crédito
+    # que aparece (estorno) vai para a categoria do gasto que ele devolve. Pelo
+    # sinal, um estorno abria a lista de receitas — e foi por aí que 24 linhas
+    # do cartão foram parar em "Outras Receitas"
+    if item.get("tipo_conta") == "cartao":
+        natureza = "despesa"
+    else:
+        natureza = "receita" if item["valor_centavos"] > 0 else "despesa"
     if not _opcoes(plano, natureza):
         st.error("Nenhuma categoria cadastrada para esta natureza.")
         return
@@ -105,10 +112,17 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                 if destino is None:
                     st.warning("Escolha uma categoria antes de salvar.")
                     return
-                virou_regra = repo.reclassificar(
-                    engine, item["id"], categoria_id=destino[0], subcategoria_id=destino[1],
-                    pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
-                )
+                try:
+                    virou_regra = repo.reclassificar(
+                        engine, item["id"], categoria_id=destino[0], subcategoria_id=destino[1],
+                        pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
+                    )
+                except ValueError as recusa:
+                    # a lista já não oferece receita para linha de cartão; isto é
+                    # a garantia do gravador aparecendo na tela, se algum outro
+                    # caminho chegar aqui
+                    st.error(str(recusa))
+                    return
                 st.session_state["msg_classificacao"] = (
                     f"Salvo. O sistema vai reconhecer "
                     f"“{sem_marcacao(item['descricao'][:40])}” sozinho "

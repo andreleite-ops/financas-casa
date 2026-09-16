@@ -307,7 +307,7 @@ def render(engine, usuario: dict) -> None:
         st.error(
             "**Dinheiro de cartão contado como receita.** Cartão não gera renda: o que "
             "entra é compra, e o crédito que aparece é estorno ou pagamento da fatura. "
-            "Ou o arquivo foi lido ao contrário (Upload → Histórico → *Inverter o sinal*), "
+            "Ou o arquivo foi lido ao contrário (Upload → Histórico → *Corrigir o sinal*), "
             "ou um estorno foi classificado como receita (reclassifique em "
             "**Classificação**).\n\n" + linhas,
             icon="💳",

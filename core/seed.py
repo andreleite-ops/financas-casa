@@ -195,6 +195,7 @@ def semear(engine=None, ano_metas: int | None = None) -> dict:
     # a que voltou ao erro por um clique a mais no reparo antigo
     from . import repo
     repo.endireitar_faturas_gravadas(engine)
+    repo.desclassificar_receita_em_cartao(engine)
     ano = ano_metas or date.today().year
     with engine.begin() as conn:
         _semear_categorias(conn)
