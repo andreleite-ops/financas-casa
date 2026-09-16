@@ -294,6 +294,25 @@ def render(engine, usuario: dict) -> None:
             unsafe_allow_html=True,
         )
 
+    # A sentinela. Cartao nao gera receita; se alguma linha de cartao esta do
+    # lado da renda, em qualquer mes, a tela diz de qual cartao e quanto — em
+    # vez de deixar um numero estranho para alguem desconfiar
+    suspeitas = painel.get("receita_em_cartao") or []
+    if suspeitas:
+        linhas = "\n".join(
+            f"- **{item['conta']}** · {item['competencia']} · {item['quantos']} lançamento(s) · "
+            f"{fmt_brl(item['total']).replace('$', chr(92) + '$')}"
+            for item in suspeitas[:8]
+        )
+        st.error(
+            "**Dinheiro de cartão contado como receita.** Cartão não gera renda: o que "
+            "entra é compra, e o crédito que aparece é estorno ou pagamento da fatura. "
+            "Ou o arquivo foi lido ao contrário (Upload → Histórico → *Inverter o sinal*), "
+            "ou um estorno foi classificado como receita (reclassifique em "
+            "**Classificação**).\n\n" + linhas,
+            icon="💳",
+        )
+
     if atual["nao_classificado"]:
         st.warning(
             f"{fmt_brl(abs(atual['nao_classificado']))} ainda sem categoria neste mês. "

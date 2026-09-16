@@ -133,6 +133,8 @@ def painel_do_mes(_engine, versao: int, competencia: str, pessoa: str) -> dict:
             "matriz": analytics.tabela_mes_a_mes(conn, ano, pessoa=pessoa),
             "anual": analytics.comparativo_anual(conn, pessoa=pessoa),
             "acumulado": analytics.resumo(conn, ano=ano, pessoa=pessoa),
+            # a sentinela do cartao: independe do mes escolhido, de proposito
+            "receita_em_cartao": analytics.receita_em_cartao(conn),
         }
 
 

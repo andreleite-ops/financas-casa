@@ -666,6 +666,54 @@ def composicao_de_receitas(conn, competencia=None, ano=None, pessoa=None) -> lis
     return sorted(linhas, key=lambda linha: (-linha["total"], linha["origem"]))
 
 
+def receita_em_cartao(conn) -> list[dict]:
+    """Dinheiro de cartao de credito contado como renda — em qualquer mes.
+
+    Num cartao nao existe receita: o que entra e compra, e o credito que aparece
+    e estorno ou o pagamento da propria fatura. Se alguma linha de cartao esta
+    somando do lado da renda, alguma coisa leu o arquivo ao contrario ou alguem
+    classificou um estorno como receita. Foi assim que uma fatura inteira
+    passou por renda tres vezes, e cada vez so se descobriu olhando o numero
+    do mes e estranhando.
+
+    Esta consulta e a resposta para "como vou saber se acontecer de novo": o
+    app olha por conta propria, em todos os meses, toda vez que a tela abre,
+    e diz de qual cartao e quanto. Zero linhas e o normal; qualquer coisa
+    acima disso e um aviso na abertura, nao um numero estranho para se
+    desconfiar.
+    """
+    lado = _lado_da_linha().label("lado")
+    consulta = (
+        sa.select(
+            db.contas.c.nome.label("conta"),
+            db.transacoes.c.competencia,
+            sa.func.count().label("quantos"),
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+        )
+        .select_from(
+            db.transacoes
+            .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(
+            db.transacoes.c.ativo == sa.true(),
+            db.contas.c.tipo == "cartao",
+            sa.or_(
+                db.categorias.c.nome.is_(None),
+                db.categorias.c.nome != CATEGORIA_TRANSFERENCIA,
+            ),
+        )
+        .group_by(db.contas.c.nome, db.transacoes.c.competencia, lado)
+        .having(lado == "receita")
+        .order_by(db.transacoes.c.competencia.desc())
+    )
+    return [
+        {"conta": l.conta, "competencia": l.competencia,
+         "quantos": int(l.quantos or 0), "total": int(l.total or 0)}
+        for l in conn.execute(consulta)
+    ]
+
+
 def receitas_por_pessoa(conn, competencia=None, ano=None) -> list[dict]:
     consulta = (
         sa.select(
