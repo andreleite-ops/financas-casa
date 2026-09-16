@@ -57,6 +57,9 @@ def _ler_tabular_ou_pdf(conteudo: bytes, nome: str, *, tudo_despesa: bool, **kw)
 
 def nubank(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     """Cartao e conta do Nubank. No CSV da fatura o gasto vem positivo."""
+    # este leitor reconhece a fatura pelas proprias colunas; o tipo da conta
+    # nao acrescenta nada aqui, mas nao pode vazar para quem ele chama
+    kw.pop("tudo_despesa", None)
     if _e_planilha(nome):
         kw.pop("senha", None)
         df = tabular.carregar_tabela(conteudo, nome)
@@ -75,17 +78,24 @@ def nubank(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
 
 def xp(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     """Fatura do cartao Visa XP. CALIBRAR com amostra real."""
-    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=True, **kw)
+    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=kw.pop("tudo_despesa", True), **kw)
 
 
 def btg(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     """Fatura do BTG Mastercard. CALIBRAR com amostra real."""
-    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=True, **kw)
+    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=kw.pop("tudo_despesa", True), **kw)
 
 
 def bradesco(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
-    """Extrato de conta corrente Bradesco: tem credito e debito. CALIBRAR."""
-    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=False, **kw)
+    """Bradesco: conta corrente tem os dois lados; o cartao, so um.
+
+    O leitor e escolhido pela instituicao, mas ser cartao e propriedade da
+    CONTA. Fixando `tudo_despesa=False` aqui, a fatura do cartao Bradesco era
+    lida como extrato de conta corrente — as compras ficavam positivas e o mes
+    inteiro entrava do lado errado, por mais que a conta estivesse cadastrada
+    como cartao.
+    """
+    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=kw.pop("tudo_despesa", False), **kw)
 
 
 def itau(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
@@ -95,15 +105,20 @@ def itau(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     cada dia, o sinal é um traço no fim do número e há saldo corrido na mesma
     linha do valor. O leitor genérico não daria conta de nenhuma das três.
     """
+    tudo_despesa = kw.pop("tudo_despesa", False)
     if _e_planilha(nome):
-        return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=False, **kw)
+        return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=tudo_despesa, **kw)
     kw.pop("inverter_sinal", None)
     return leitor_itau.ler(conteudo, nome, **kw)
 
 
 def generico(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
-    """Qualquer instituicao nova, ate ganhar leitor proprio."""
-    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=False, **kw)
+    """Qualquer instituicao nova, ate ganhar leitor proprio.
+
+    Sem leitor proprio, o unico que sabe se o arquivo e de gastos e o tipo da
+    conta escolhida na tela — por isso ele manda aqui.
+    """
+    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=kw.pop("tudo_despesa", False), **kw)
 
 
 LEITORES = {
@@ -134,8 +149,17 @@ def ler_arquivo(
     tipo_conta: str = "corrente",
     **kw,
 ) -> list[Lancamento]:
-    """Ponto de entrada unico do upload."""
+    """Ponto de entrada unico do upload.
+
+    Quem sabe se o arquivo e de gastos e a CONTA, nao a instituicao. O leitor
+    sai do banco (o formato do arquivo e dele); "isto e um cartao" sai do
+    cadastro da conta e manda sobre o padrao do leitor. Sem esta linha, a
+    fatura de um cartao cujo banco tambem tem conta corrente — Bradesco, ou
+    qualquer conta de leitor generico — era lida como extrato: as compras
+    entravam positivas e o mes inteiro caia do lado errado.
+    """
     leitor = LEITORES.get(parser or "generico", generico)
+    kw.setdefault("tudo_despesa", tipo_conta == "cartao")
     lancamentos = leitor(conteudo, nome_arquivo, competencia=competencia, **kw)
     if tipo_conta == "cartao" and competencia:
         lancamentos = ajustar_ano_fatura(lancamentos, competencia)

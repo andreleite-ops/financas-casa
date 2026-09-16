@@ -237,6 +237,17 @@ def _aba_enviar(engine, usuario: dict) -> None:
         # a inversão só faz sentido quando nada no arquivo diz o sinal. Com uma
         # coluna de tipo mapeada, os dois controles disputam a mesma decisão e
         # a inversão desfaz o que a coluna acabou de definir
+        # "Tipo" no cabeçalho não quer dizer D/C — na fatura de cartão a coluna
+        # com esse nome traz "à vista"/"parcelado". Aceitá-la pelo nome fazia o
+        # sistema achar que o arquivo declarava o lado de cada linha, e isso
+        # desligava a inversão da fatura. Aqui vale o conteúdo, inclusive quando
+        # a coluna foi escolhida à mão no campo acima.
+        if mapa.get("tipo") and not tabular.coluna_diz_o_sinal(df[mapa["tipo"]]):
+            st.caption(
+                f"A coluna **{mapa['tipo']}** não traz despesa/receita (D/C) — só um rótulo "
+                "como “à vista” ou “parcelado”. Ela não vai decidir o sinal."
+            )
+            mapa = {**mapa, "tipo": None}
         tem_coluna_de_sinal = bool(mapa.get("tipo") or mapa.get("entrada") or mapa.get("saida"))
         # Num cartão o sinal não é pergunta: a fatura exporta a compra positiva,
         # e quem vem negativo é estorno ou o pagamento da própria fatura. Os

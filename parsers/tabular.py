@@ -122,6 +122,24 @@ def sugerir_mapeamento(colunas, amostra=None) -> dict[str, str | None]:
         if achou:
             usadas.add(achou)
         mapa[papel] = achou
+
+    # "Tipo" no cabecalho nao quer dizer D/C. Na fatura de cartao essa coluna
+    # costuma trazer "a vista"/"parcelado"/"Forma de pagamento" — nomes certos,
+    # conteudo nenhum sobre o sinal. Mapeada assim, ela dizia que o arquivo
+    # declarava o lado de cada linha, e isso desligava a inversao da fatura: as
+    # compras ficavam positivas e o mes inteiro entrava do lado errado.
+    #
+    # `parsers/instituicoes` ja apagava esse papel por fora, o que sempre foi o
+    # sintoma de que a checagem pertencia aqui: quem nao passa pelos leitores
+    # por banco — o mapeamento manual de colunas — ficava sem ela.
+    if amostra is not None and mapa.get("tipo"):
+        coluna = mapa["tipo"]
+        confirma = (
+            coluna in getattr(amostra, "columns", [])
+            and coluna_diz_o_sinal(amostra[coluna])
+        )
+        if not confirma:
+            mapa["tipo"] = None
     return mapa
 
 
