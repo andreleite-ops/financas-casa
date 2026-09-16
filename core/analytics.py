@@ -666,6 +666,43 @@ def composicao_de_receitas(conn, competencia=None, ano=None, pessoa=None) -> lis
     return sorted(linhas, key=lambda linha: (-linha["total"], linha["origem"]))
 
 
+def _de_cartao():
+    return (
+        db.transacoes
+        .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+        .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+    )
+
+
+def _condicoes_de_cartao():
+    return [
+        db.transacoes.c.ativo == sa.true(),
+        db.contas.c.tipo == "cartao",
+        sa.or_(
+            db.categorias.c.nome.is_(None),
+            db.categorias.c.nome != CATEGORIA_TRANSFERENCIA,
+        ),
+    ]
+
+
+def ids_receita_em_cartao(conn) -> list[int]:
+    """As linhas que a sentinela apontaria, uma a uma.
+
+    A varredura da subida usa ESTA lista — a mesma pergunta, nao uma parecida.
+    Na primeira versao a varredura so olhava linha com categoria de receita, e
+    a sentinela tambem olhava linha sem categoria decidida pela natureza ou
+    pelo sinal: as 24 linhas ficaram no aviso depois da subida que devia
+    te-las consertado. Uma pergunta so nao deixa esse vao existir.
+    """
+    return [
+        linha.id for linha in conn.execute(
+            sa.select(db.transacoes.c.id)
+            .select_from(_de_cartao())
+            .where(*_condicoes_de_cartao(), _lado_da_linha() == "receita")
+        )
+    ]
+
+
 def receita_em_cartao(conn) -> list[dict]:
     """Dinheiro de cartao de credito contado como renda — em qualquer mes.
 
@@ -690,19 +727,8 @@ def receita_em_cartao(conn) -> list[dict]:
             sa.func.count().label("quantos"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
-        .select_from(
-            db.transacoes
-            .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
-            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
-        )
-        .where(
-            db.transacoes.c.ativo == sa.true(),
-            db.contas.c.tipo == "cartao",
-            sa.or_(
-                db.categorias.c.nome.is_(None),
-                db.categorias.c.nome != CATEGORIA_TRANSFERENCIA,
-            ),
-        )
+        .select_from(_de_cartao())
+        .where(*_condicoes_de_cartao())
         .group_by(db.contas.c.nome, db.transacoes.c.competencia, lado)
         .having(lado == "receita")
         .order_by(db.transacoes.c.competencia.desc())

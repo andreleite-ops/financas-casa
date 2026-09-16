@@ -162,3 +162,45 @@ def test_varredura_devolve_para_a_fila_o_que_esta_em_receita_no_cartao(engine):
         assert analytics.receita_em_cartao(conn) == []
     # idempotente
     assert repo.desclassificar_receita_em_cartao(engine) == 0
+
+
+def test_varredura_conserta_tudo_o_que_a_sentinela_ve(engine):
+    """As tres formas de "receita em cartao", e a sentinela vazia depois.
+
+    (1) categoria de receita; (2) sem categoria, natureza gravada "receita";
+    (3) sem categoria, sem natureza, valor positivo — linha de antes da trava
+    existir. A primeira varredura so via (1); a sentinela via as tres, e as
+    24 linhas ficaram no aviso depois da subida.
+    """
+    from core.dedup import hash_lancamento
+    from core.texto import normalizar
+
+    cartao = _conta(engine, "cartao", nome="Cartão S")
+    with engine.begin() as conn:
+        outras = _categoria(conn, "Outras Receitas")
+
+        def gravar(descricao, valor, **extra):
+            conn.execute(sa.insert(db.transacoes).values(
+                data=date(2026, 9, 3), competencia="2026-09", descricao=descricao,
+                descricao_norm=normalizar(descricao), valor_centavos=valor, conta_id=cartao,
+                pessoa="Casal", status="pendente", origem="extrato", ativo=True,
+                hash_dedup=hash_lancamento(cartao, date(2026, 9, 3), valor, normalizar(descricao)),
+                **extra,
+            ))
+        gravar("EM CATEGORIA DE RECEITA", -8_495, categoria_id=outras, status="manual")
+        gravar("NATUREZA RECEITA SEM CATEGORIA", -1_500, natureza="receita")
+        gravar("POSITIVA SEM NADA", 5_000)
+
+    with engine.connect() as conn:
+        assert len(analytics.ids_receita_em_cartao(conn)) == 3
+
+    assert repo.desclassificar_receita_em_cartao(engine) == 3
+
+    with engine.connect() as conn:
+        assert analytics.receita_em_cartao(conn) == [], "vazia por construção"
+        assert analytics.ids_receita_em_cartao(conn) == []
+    assert _linha(engine, "EM CATEGORIA DE RECEITA").status == "pendente"
+    assert _linha(engine, "EM CATEGORIA DE RECEITA").categoria_id is None
+    for descricao in ("NATUREZA RECEITA SEM CATEGORIA", "POSITIVA SEM NADA"):
+        assert _linha(engine, descricao).natureza == "despesa"
+    assert repo.desclassificar_receita_em_cartao(engine) == 0

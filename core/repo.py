@@ -1699,39 +1699,38 @@ def endireitar_upload(engine, upload_id: int) -> int:
 
 
 def desclassificar_receita_em_cartao(engine) -> int:
-    """Linha de cartao em categoria de receita volta para a fila. Idempotente.
+    """Tudo o que a sentinela apontaria, consertado na subida. Idempotente.
 
-    Antes da natureza ser decidida antes da classificacao, a fatura que entrou
-    positiva teve compras classificadas como renda — e isso virou memoria, que
-    repetia a cada fatura. Essas linhas ficam gravadas erradas mesmo depois do
-    gravador consertado. Aqui elas perdem a categoria e voltam para a fila com
-    a explicacao, onde serao classificadas como qualquer outra pendencia. Roda
-    na subida; quando nao ha nada errado, nao toca em nada.
+    Usa a MESMA lista da sentinela, linha a linha — nao uma pergunta parecida.
+    Para cada uma: a natureza vira "despesa", que e o que a trava do gravador
+    teria feito se existisse quando a linha entrou. E se ela esta numa
+    categoria de receita, perde a categoria e volta para a fila com a
+    explicacao, onde sera classificada como qualquer outra pendencia.
+
+    Depois disto a sentinela e vazia por construcao; se nao for, o bug esta
+    aqui, e nao em quem classificou.
     """
     with engine.begin() as conn:
-        bidirecionais = classify.categorias_bidirecionais(conn)
-        condicoes = [
-            db.contas.c.tipo == "cartao",
-            db.categorias.c.natureza == "receita",
-            db.categorias.c.nome != analytics.CATEGORIA_TRANSFERENCIA,
-        ]
-        if bidirecionais:
-            condicoes.append(~db.transacoes.c.categoria_id.in_(bidirecionais))
-        ids = [
+        ids = analytics.ids_receita_em_cartao(conn)
+        if not ids:
+            return 0
+        conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_(ids))
+            .values(natureza="despesa")
+        )
+        em_categoria_de_receita = [
             linha.id for linha in conn.execute(
                 sa.select(db.transacoes.c.id)
-                .select_from(
-                    db.transacoes
-                    .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
-                    .join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
-                )
-                .where(*condicoes)
+                .select_from(db.transacoes.join(
+                    db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id))
+                .where(db.transacoes.c.id.in_(ids), db.categorias.c.natureza == "receita")
             )
         ]
-        if ids:
+        if em_categoria_de_receita:
             conn.execute(
                 sa.update(db.transacoes)
-                .where(db.transacoes.c.id.in_(ids))
+                .where(db.transacoes.c.id.in_(em_categoria_de_receita))
                 .values(
                     categoria_id=None, subcategoria_id=None, status="pendente",
                     confianca=None, classificado_por=None,
