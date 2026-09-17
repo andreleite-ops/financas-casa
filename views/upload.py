@@ -490,12 +490,50 @@ def _pdf_e_desta_conta(engine, conta, texto: str | None, *, bloquear: bool) -> b
         return not bloquear
     st.info(
         f"Este extrato é da agência **{ident['agencia']}**, conta **{ident['conta']}** "
-        f"({ident['competencia']}). A conta **{conta['nome']}** não tem agência no "
-        "cadastro, então não dá para conferir se é ela mesma. Cadastre em **Contas e "
-        "cartões → Identificação** e, da próxima vez, o sistema barra o arquivo trocado.",
+        f"({ident['competencia']}). A conta **{conta['nome']}** ainda não tem agência no "
+        "cadastro, então não dá para saber se é ela mesma.",
         icon="🏦",
     )
+    if bloquear:
+        return True
+    # A separação por agência nasce do próprio arquivo, sem formulário: quem
+    # tem duas contas no mesmo banco vê uma opção só no menu até dizer qual é
+    # qual — e o jeito de dizer é aqui, com o PDF na mão. Os números vão para
+    # o banco de dados, nunca para o código.
+    c_sim, c_nao = st.columns(2)
+    if c_sim.button(
+        f"É esta: {conta['nome']} é a agência {ident['agencia']}",
+        key=f"ident_sim:{conta['id']}:{ident['agencia']}", width="stretch",
+    ):
+        repo.identificar_conta(engine, conta["id"], f"{ident['agencia']}/{ident['conta']}")
+        st.rerun()
+    if c_nao.button(
+        f"Não é esta: criar conta nova para a agência {ident['agencia']}",
+        key=f"ident_nova:{conta['id']}:{ident['agencia']}", width="stretch",
+    ):
+        nome_novo = nome_para_agencia(conta, ident["agencia"])
+        try:
+            repo.salvar_conta(
+                engine, nome=nome_novo, tipo=conta["tipo"], titular=conta["titular"],
+                instituicao=conta["instituicao"], parser=conta["parser"],
+                identificador=f"{ident['agencia']}/{ident['conta']}",
+            )
+        except Exception:
+            st.error(f"Já existe uma conta chamada **{nome_novo}**. Escolha-a no menu acima.")
+            return True
+        st.success(f"Conta **{nome_novo}** criada. Escolha-a no menu **Conta / cartão** "
+                   "acima e envie o arquivo de novo.")
+        return True
     return True
+
+
+def nome_para_agencia(conta: dict, agencia: str) -> str:
+    """O nome da conta irmã: o mesmo banco e titular, com a agência no nome.
+
+    "Itaú C/C" vira "Itaú C/C ag. 0660". O menu já acrescenta o titular.
+    """
+    base = conta["nome"].strip()
+    return f"{base} ag. {agencia}"
 
 
 def _conferencia_do_extrato(parser, texto, lancamentos) -> list[str]:

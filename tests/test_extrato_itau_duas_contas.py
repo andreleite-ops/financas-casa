@@ -173,3 +173,10 @@ def test_cadastro_guarda_a_identificacao_e_acha_a_conta_do_pdf(engine):
     with engine.connect() as conn:
         assert repo.conta_pelo_identificador(conn, ident)["id"] == outra
         assert repo.conta_por_id(conn, uma)["identificador"] is None
+
+
+def test_nome_da_conta_irma_leva_a_agencia():
+    from views import upload
+
+    conta = {"nome": "Itaú C/C", "tipo": "corrente", "titular": "Rô"}
+    assert upload.nome_para_agencia(conta, "0660") == "Itaú C/C ag. 0660"
