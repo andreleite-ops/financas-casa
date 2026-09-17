@@ -238,8 +238,9 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
     transferencias = dados_auditoria["transferencias"]
     pagamentos = dados_auditoria["pagamentos_de_fatura"]
     duplicatas = dados_auditoria["duplicatas"]
+    maiores = dados_auditoria.get("maiores") or []
     tem_problema = bool((previsto and realizado) or transferencias or pagamentos or duplicatas)
-    if not tem_problema:
+    if not tem_problema and not maiores:
         return
 
     mes = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
@@ -322,6 +323,22 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                       [p["entrada"]["id"] for p in transferencias]
                 repo.marcar_transferencia(engine, ids, usuario["nome"])
                 st.rerun()
+
+        if maiores:
+            st.markdown("**Os maiores gastos do mês, e de onde vieram**")
+            st.caption(
+                "Ordenados por valor. Duplicata grande aparece aqui como o mesmo número duas "
+                "vezes — em contas ou origens diferentes. A coluna **Arquivo** diz quem trouxe."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
+                     "Descrição": l["descricao"][:48], "Categoria": l["categoria"] or "—",
+                     "Valor": fmt_brl(-l["valor_centavos"]), "Arquivo": l["arquivo"]}
+                    for l in maiores
+                ]),
+                width="stretch", hide_index=True,
+            )
 
         if duplicatas:
             total = sum(abs(d["copia"]["valor_centavos"]) for d in duplicatas)

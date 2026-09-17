@@ -158,6 +158,34 @@ def duplicatas_internas(conn, competencia: str) -> list[dict]:
     return copias
 
 
+def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
+    """Os maiores gastos do mes, com de onde vieram.
+
+    Duplicata grande salta aos olhos numa lista ordenada por valor: o mesmo
+    numero duas vezes, em contas ou origens diferentes. E o que se pede a
+    alguem que diz "tem coisa duplicada" sem conseguir apontar o que.
+    """
+    linhas = [
+        l for l in _linhas_do_mes(conn, competencia)
+        if l["lado"] == "despesa" and l["categoria"] != CATEGORIA_TRANSFERENCIA
+        and l["valor_centavos"] < 0
+    ]
+    arquivos = {
+        u.id: u.arquivo for u in conn.execute(sa.select(db.uploads.c.id, db.uploads.c.arquivo))
+    }
+    ids_upload = {
+        t.id: t.upload_id for t in conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.upload_id)
+            .where(db.transacoes.c.competencia == competencia)
+        )
+    }
+    linhas.sort(key=lambda l: l["valor_centavos"])
+    return [
+        {**l, "arquivo": arquivos.get(ids_upload.get(l["id"])) or l["origem"]}
+        for l in linhas[:quantos]
+    ]
+
+
 def auditar(conn, competencia: str) -> dict:
     por_origem = despesas_por_origem(conn, competencia)
     previsto, realizado = previsto_e_realizado_despesa(por_origem)
@@ -168,4 +196,5 @@ def auditar(conn, competencia: str) -> dict:
         "transferencias": transferencias_nao_marcadas(conn, competencia),
         "pagamentos_de_fatura": pagamentos_de_fatura_soltos(conn, competencia),
         "duplicatas": duplicatas_internas(conn, competencia),
+        "maiores": maiores_debitos(conn, competencia),
     }

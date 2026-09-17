@@ -257,3 +257,16 @@ def test_descartes_do_alcance_errado_sao_devolvidos_uma_vez(engine):
             .values(ativo=False, observacao="descartado na conferência por André")
         )
     assert repo.devolver_descartes_da_conferencia(engine) == 0
+
+
+def test_maiores_debitos_vem_ordenados_e_com_o_arquivo(engine):
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    _extrato(engine, bradesco, [
+        dict(data=date(2026, 8, 3), descricao="PEQUENO", valor_centavos=-1_000),
+        dict(data=date(2026, 8, 4), descricao="GRANDE", valor_centavos=-900_000),
+        dict(data=date(2026, 8, 5), descricao="ENTRADA", valor_centavos=500_000),
+    ])
+    with engine.connect() as conn:
+        maiores = auditoria.maiores_debitos(conn, "2026-08")
+    assert [m["descricao"] for m in maiores] == ["GRANDE", "PEQUENO"]
+    assert maiores[0]["arquivo"] == "extrato.pdf"
