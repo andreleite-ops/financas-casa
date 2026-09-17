@@ -245,6 +245,24 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
 
     mes = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
     with st.expander(f"🔎 Por que a despesa de {mes} está assim — auditoria", expanded=True):
+        if maiores:
+            st.markdown("**Os maiores gastos do mês — de onde vieram, e com o que casam**")
+            st.caption(
+                "Ordenados por valor. **Casa com** diz se o mesmo valor existe em outro lugar: "
+                "na planilha do mês, num “pagamento recebido” de cartão, num crédito de outra "
+                "conta da casa, no total de uma fatura. Linha com “—” não casa com nada."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
+                     "Descrição": l["descricao"][:44], "Categoria": l["categoria"] or "—",
+                     "Valor": fmt_brl(-l["valor_centavos"]), "Casa com": l["casa_com"],
+                     "Arquivo": l["arquivo"]}
+                    for l in maiores
+                ]),
+                width="stretch", hide_index=True,
+            )
+
         if previsto and realizado:
             st.error(
                 f"**Planilha e extratos valendo juntos.** Em {mes} há "
@@ -323,22 +341,6 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                       [p["entrada"]["id"] for p in transferencias]
                 repo.marcar_transferencia(engine, ids, usuario["nome"])
                 st.rerun()
-
-        if maiores:
-            st.markdown("**Os maiores gastos do mês, e de onde vieram**")
-            st.caption(
-                "Ordenados por valor. Duplicata grande aparece aqui como o mesmo número duas "
-                "vezes — em contas ou origens diferentes. A coluna **Arquivo** diz quem trouxe."
-            )
-            st.dataframe(
-                pd.DataFrame([
-                    {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
-                     "Descrição": l["descricao"][:48], "Categoria": l["categoria"] or "—",
-                     "Valor": fmt_brl(-l["valor_centavos"]), "Arquivo": l["arquivo"]}
-                    for l in maiores
-                ]),
-                width="stretch", hide_index=True,
-            )
 
         if duplicatas:
             total = sum(abs(d["copia"]["valor_centavos"]) for d in duplicatas)

@@ -270,3 +270,17 @@ def test_maiores_debitos_vem_ordenados_e_com_o_arquivo(engine):
         maiores = auditoria.maiores_debitos(conn, "2026-08")
     assert [m["descricao"] for m in maiores] == ["GRANDE", "PEQUENO"]
     assert maiores[0]["arquivo"] == "extrato.pdf"
+
+
+def test_maiores_debitos_dizem_com_o_que_casam(engine):
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    _planilha(engine, [dict(data=date(2026, 8, 5), descricao="Condominio", valor_centavos=-150_000)])
+    _extrato(engine, bradesco, [
+        dict(data=date(2026, 8, 12), descricao="DEB AUTOM COND", valor_centavos=-150_000),
+        dict(data=date(2026, 8, 13), descricao="SOZINHO", valor_centavos=-70_000),
+    ])
+    with engine.connect() as conn:
+        maiores = auditoria.maiores_debitos(conn, "2026-08")
+    por_desc = {m["descricao"]: m["casa_com"] for m in maiores}
+    assert por_desc["DEB AUTOM COND"].startswith("planilha: Condominio")
+    assert por_desc["SOZINHO"] == "—"

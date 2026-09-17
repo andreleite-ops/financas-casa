@@ -161,30 +161,64 @@ def duplicatas_internas(conn, competencia: str) -> list[dict]:
 
 
 def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
-    """Os maiores gastos do mes, com de onde vieram.
+    """Os maiores gastos do mes, de onde vieram, e com o que cada um casa.
 
-    Duplicata grande salta aos olhos numa lista ordenada por valor: o mesmo
-    numero duas vezes, em contas ou origens diferentes. E o que se pede a
-    alguem que diz "tem coisa duplicada" sem conseguir apontar o que.
+    Duplicata grande salta aos olhos numa lista ordenada por valor — e mais
+    ainda quando cada linha diz se o mesmo valor existe em outro lugar: na
+    planilha do mes, num "pagamento recebido" de cartao, num credito de outra
+    conta da casa, no total de uma fatura. E o que se pede a quem diz "tem
+    coisa duplicada" sem conseguir apontar o que.
     """
-    linhas = [
-        l for l in _linhas_do_mes(conn, competencia)
+    from . import cartoes
+
+    todas = _linhas_do_mes(conn, competencia)
+    debitos = [
+        l for l in todas
         if l["lado"] == "despesa" and l["categoria"] != CATEGORIA_TRANSFERENCIA
         and l["valor_centavos"] < 0
     ]
-    arquivos = {
-        u.id: u.arquivo for u in conn.execute(sa.select(db.uploads.c.id, db.uploads.c.arquivo))
-    }
+    debitos.sort(key=lambda l: l["valor_centavos"])
+    debitos = debitos[:quantos]
+
+    arquivos = {u.id: u.arquivo for u in conn.execute(sa.select(db.uploads.c.id, db.uploads.c.arquivo))}
     ids_upload = {
         t.id: t.upload_id for t in conn.execute(
             sa.select(db.transacoes.c.id, db.transacoes.c.upload_id)
             .where(db.transacoes.c.competencia == competencia)
         )
     }
-    linhas.sort(key=lambda l: l["valor_centavos"])
+    planilha = [l for l in todas if l["origem"] == "planilha" and l["valor_centavos"] < 0]
+    creditos = [l for l in todas if l["valor_centavos"] > 0 and l["origem"] == "extrato"]
+    recebidos = cartoes.pagamentos_recebidos(conn)
+    totais = cartoes.totais_de_fatura(conn)
+    nomes = {c.id: c.nome for c in conn.execute(sa.select(db.contas.c.id, db.contas.c.nome))}
+
+    def pistas(l) -> str:
+        v = l["valor_centavos"]
+        achados = []
+        for pl in planilha:
+            if pl["id"] != l["id"] and pl["valor_centavos"] == v:
+                achados.append(f"planilha: {pl['descricao'][:22]} {pl['data']:%d/%m}")
+                break
+        for rec in recebidos:
+            if abs(rec["valor"] + v) <= max(100, int(rec["valor"] * 0.005)) \
+                    and abs(rec["data"] - l["data"]) <= cartoes.JANELA_DO_PAGAMENTO:
+                achados.append(f"{rec['nome']}: pagamento recebido {rec['data']:%d/%m}")
+                break
+        for cr in creditos:
+            if cr["conta_id"] != l["conta_id"] and cr["valor_centavos"] == -v \
+                    and abs(cr["data"] - l["data"]) <= JANELA:
+                achados.append(f"crédito em {cr['conta']} {cr['data']:%d/%m}")
+                break
+        for (conta_id, mes), total in totais.items():
+            if total > 0 and abs(total + v) <= max(100, int(total * 0.005)):
+                achados.append(f"total da fatura {nomes.get(conta_id, conta_id)} {mes}")
+                break
+        return " · ".join(achados) if achados else "—"
+
     return [
-        {**l, "arquivo": arquivos.get(ids_upload.get(l["id"])) or l["origem"]}
-        for l in linhas[:quantos]
+        {**l, "arquivo": arquivos.get(ids_upload.get(l["id"])) or l["origem"], "casa_com": pistas(l)}
+        for l in debitos
     ]
 
 
