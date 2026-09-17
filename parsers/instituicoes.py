@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .base import Lancamento, ajustar_ano_fatura
 from . import pdf as leitor_pdf
+from . import extrato_bradesco as leitor_bradesco
 from . import extrato_itau as leitor_itau, fatura_nubank as leitor_nubank, tabular
 
 # Nubank exporta CSV com colunas fixas: date, title, amount (fatura) ou
@@ -94,8 +95,16 @@ def bradesco(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     lida como extrato de conta corrente — as compras ficavam positivas e o mes
     inteiro entrava do lado errado, por mais que a conta estivesse cadastrada
     como cartao.
+
+    O PDF do extrato de conta corrente tem leitor proprio: cada movimento ocupa
+    tres linhas e o sinal so se tira da variacao do saldo — nada disso o
+    leitor generico enxerga.
     """
-    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=kw.pop("tudo_despesa", False), **kw)
+    tudo_despesa = kw.pop("tudo_despesa", False)
+    if not _e_planilha(nome) and not tudo_despesa:
+        kw.pop("inverter_sinal", None)
+        return leitor_bradesco.ler(conteudo, nome, **kw)
+    return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=tudo_despesa, **kw)
 
 
 def itau(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:

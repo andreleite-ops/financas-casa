@@ -10,7 +10,7 @@ import streamlit as st
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl
 from core.texto import sem_marcacao
-from parsers import extrato_itau, instituicoes, pdf, tabular
+from parsers import extrato_bradesco, extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
 from parsers.base import ErroDeLeitura, competencia_predominante
@@ -470,7 +470,7 @@ def _pdf_e_desta_conta(engine, conta, texto: str | None, *, bloquear: bool) -> b
     """
     if not texto:
         return True
-    ident = extrato_itau.identificacao(texto)
+    ident = extrato_itau.identificacao(texto) or extrato_bradesco.identificacao(texto)
     if not ident:
         return True
     bate = extrato_itau.conta_bate(ident, conta.get("identificador"))
@@ -554,10 +554,11 @@ def _conferencia_do_extrato(parser, texto, lancamentos) -> list[str]:
     — e antes de gravar. Foi ela que acusou os R$ 2.240,00 de pacientes que o
     leitor deixava cair.
     """
-    if parser != "itau" or not lancamentos or not texto:
+    leitores = {"itau": extrato_itau, "bradesco": extrato_bradesco}
+    if parser not in leitores or not lancamentos or not texto:
         return []
     try:
-        conferencia = extrato_itau.conferir(texto, lancamentos)
+        conferencia = leitores[parser].conferir(texto, lancamentos)
     except Exception:                      # a conferência é um extra, nunca o obstáculo
         return []
 
