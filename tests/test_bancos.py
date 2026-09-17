@@ -126,8 +126,9 @@ def test_itau_herda_a_data_da_linha_anterior():
     de_seis = [l for l in lancamentos if l.data.day == 6]
     assert len(de_seis) == 6
     assert {l.data.month for l in de_seis} == {7}
-    # o primeiro é o único que trazia a data escrita na linha
-    assert de_seis[0].descricao == "PIX TRANSF FULANA06/07"
+    # o primeiro é o único que trazia a data escrita na linha — e a data que o
+    # banco cola no fim do nome não fica na descrição
+    assert de_seis[0].descricao == "PIX TRANSF FULANA"
 
 
 def test_itau_le_o_traco_no_fim_como_debito():
@@ -138,7 +139,7 @@ def test_itau_le_o_traco_no_fim_como_debito():
         for l in lancamentos if l.descricao == "DA ELETROPAULO 10000001"
     )
     assert eletropaulo == [(1, -para_centavos("171,72")), (31, -para_centavos("43,66"))]
-    entrada = next(l for l in lancamentos if l.descricao == "PIX TRANSF SICRANA06/07")
+    entrada = next(l for l in lancamentos if l.descricao == "PIX TRANSF SICRANA")
     assert entrada.valor_centavos == para_centavos("500,00")
 
 
@@ -237,8 +238,9 @@ def test_itau_acha_a_data_empurrada_pela_legenda_da_segunda_coluna():
     por_descricao = {l.descricao: l.data for l in lancamentos}
     assert por_descricao["DA AGUA 40000001"].month == 8
     assert por_descricao["DA AGUA 40000001"].day == 5
-    # a data dentro da descrição em maiúsculas não manda: a linha é do dia 5
-    assert por_descricao["PIX TRANSF FULANO 16/07"].day == 5
+    # a data colada no fim do nome não manda (a linha é do dia 5) e nem fica
+    # na descrição: é a data do PIX, não parte do nome de quem pagou
+    assert por_descricao["PIX TRANSF FULANO"].day == 5
 
 
 # ---------------------------------------------------------------------------

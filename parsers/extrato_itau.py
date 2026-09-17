@@ -47,18 +47,35 @@ _VALORES_NO_FIM = re.compile(
 
 _DATA_INICIO = re.compile(r"^(\d{2}/\d{2})\s+(.*)$")
 
-# A segunda coluna do PDF (a legenda "A = agendamento", "P = poupança
-# automática") se mistura à primeira e empurra a data para o meio da linha.
-# Sem reconhecer isso, a linha herdava a data da anterior — e, na virada do
-# mês, o lançamento ia para o mês errado.
+# A coluna de legendas do PDF ("A = agendamento", "P = poupança automática",
+# "Para demais siglas, consulte as Notas") se mistura à coluna da
+# movimentação, e a linha chega como "P = poupança automática PIX TRANSF
+# FULANO 03/08 840,00". A legenda é um conjunto fechado de frases, e é isso
+# que se tira do começo da linha — nada mais.
 #
-# O prefixo só é aceito quando tem letra minúscula e nenhum dígito: a legenda é
-# texto corrido em minúsculas, e a descrição do lançamento é toda maiúscula.
-# Sem essa exigência, "PIX TRANSF FULANO 16/07 280,00-" perderia a descrição,
-# porque o 16/07 dela viraria a data da linha.
-_DATA_APOS_LEGENDA = re.compile(
-    r"^(?P<legenda>[^\d]*[a-zà-ÿ][^\d]*?)\s(?P<data>\d{2}/\d{2})\s+(?P<resto>.+)$"
+# A versão anterior tentava adivinhar a legenda por "tem letra minúscula e
+# nenhum dígito". Só que o nome do pagador num PIX vem como o pagador escreveu:
+# "PIX TRANSF Yasmin 10/08 225,00" tem minúscula, e a regra engolia a
+# descrição inteira e jogava a linha fora. Foram R$ 2.240,00 de pacientes que
+# sumiram de um mês da Rô, sem aviso — a conferência pelo total do extrato foi
+# o que acusou.
+_LEGENDA = re.compile(
+    r"^(?:"
+    r"[A-Z]\s*=\s*(?:[a-zà-ÿ]+\s+)+"          # "A =agendamento ", "P = poupança automática "
+    r"|pelaBolsa de Valores\s+"
+    r"|Para demais siglas, consulte as Notas\s+"
+    r"|Explicativas nofinal doextrato\s*"
+    r")"
 )
+
+# No PIX o Itaú cola a data do pagamento no fim do nome, sem espaço: "PIX
+# TRANSF FULANO03/08". Ela não é parte da descrição — e, deixada lá, cada mês
+# viraria uma chave de memória diferente para o mesmo pagador.
+_DATA_COLADA = re.compile(r"\s*\d{2}/\d{2}$")
+
+
+def _sem_legenda(linha: str) -> str:
+    return _LEGENDA.sub("", linha, count=1)
 
 # a movimentação começa depois do saldo anterior e termina no saldo final;
 # fora dessa janela o PDF repete os mesmos valores em quadros de resumo, e
@@ -122,12 +139,89 @@ def totais_declarados(texto: str) -> tuple[int, int] | None:
         return None
 
 
+_MESES = {"jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+          "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12}
+_CABECALHO = re.compile(
+    r"extrato mensal\s+ag\s*(?P<agencia>\d+)\s+cc\s*(?P<conta>[\d.\-]+)\s+"
+    r"(?P<mes>jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\s+(?P<ano>\d{4})",
+    re.IGNORECASE,
+)
+
+
+def identificacao(texto: str) -> dict | None:
+    """De que conta e de que mês é este extrato, pelo próprio cabeçalho.
+
+    A Rô tem duas contas no mesmo banco, com o mesmo leitor e o mesmo layout.
+    Na tela elas são duas opções num menu, e escolher a errada não dá erro
+    nenhum: o extrato entra inteiro na conta vizinha. O cabeçalho do PDF diz a
+    agência e a conta — é isso que a tela compara com o cadastro antes de
+    gravar.
+    """
+    achado = _CABECALHO.search(texto)
+    if not achado:
+        return None
+    return {
+        "agencia": achado.group("agencia"),
+        "conta": achado.group("conta"),
+        "competencia": f"{achado.group('ano')}-{_MESES[achado.group('mes').lower()]:02d}",
+    }
+
+
+def _so_digitos(texto: str) -> str:
+    return re.sub(r"\D", "", texto or "")
+
+
+def conta_bate(ident: dict | None, identificador: str | None) -> bool | None:
+    """O PDF é da conta cadastrada? None quando não há como saber.
+
+    O identificador da conta é o que a pessoa digitou no cadastro — a agência,
+    ou agência e conta. Basta a agência bater; a conta, quando informada,
+    também tem de bater.
+    """
+    if not ident or not identificador:
+        return None
+    digitos = _so_digitos(identificador)
+    agencia, conta = _so_digitos(ident["agencia"]), _so_digitos(ident["conta"])
+    if not digitos.startswith(agencia.lstrip("0")) and agencia not in digitos:
+        return False
+    resto = digitos[len(agencia):] if digitos.startswith(agencia) else ""
+    if resto and conta not in resto and resto not in conta:
+        return False
+    return True
+
+
+_SALDOS = re.compile(
+    r"saldo em\s+\d{2}/\d{2}/\d{2}\s+saldo em\s+\d{2}/\d{2}/\d{2}.*?"
+    rf"R\$\s*({_MOEDA})\s*(-?)\s+R\$\s*({_MOEDA})\s*(-?)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def saldos_declarados(texto: str) -> tuple[int, int] | None:
+    """(saldo anterior, saldo final) em centavos, do quadro do cabeçalho.
+
+    É a segunda régua, independente da primeira: saldo anterior + entradas −
+    saídas tem de dar o saldo final. O quadro soma conta corrente e aplicação
+    automática, e o leitor deixa a aplicação de fora de propósito — e a conta
+    fecha mesmo assim, porque aplicar e resgatar não muda o saldo somado.
+    """
+    achado = _SALDOS.search(texto)
+    if not achado:
+        return None
+    try:
+        anterior = para_centavos(achado.group(1)) * (-1 if achado.group(2) == "-" else 1)
+        final = para_centavos(achado.group(3)) * (-1 if achado.group(4) == "-" else 1)
+    except (ValueError, ArithmeticError):
+        return None
+    return anterior, final
+
+
 def _limpar(descricao: str) -> str:
     return " ".join(descricao.split())
 
 
 def _tem_data(linha: str) -> bool:
-    return bool(_DATA_INICIO.match(linha) or _DATA_APOS_LEGENDA.match(linha))
+    return bool(_DATA_INICIO.match(_sem_legenda(linha)))
 
 
 def janela_da_movimentacao(linhas: list[str]) -> tuple[int, int]:
@@ -173,22 +267,21 @@ def extrair_linhas(
     dia_corrente: date | None = None
 
     for crua in linhas[inicio:fim]:
-        resto = crua
-        no_inicio = _DATA_INICIO.match(crua)
-        apos_legenda = None if no_inicio else _DATA_APOS_LEGENDA.match(crua)
-        if no_inicio or apos_legenda:
-            achado = no_inicio or apos_legenda
-            bruto_data = achado.group(1) if no_inicio else achado.group("data")
-            resto = achado.group(2) if no_inicio else achado.group("resto")
+        # a data só aparece na primeira linha de cada dia; as seguintes são
+        # do mesmo dia, sem data no início
+        resto = _sem_legenda(crua)
+        no_inicio = _DATA_INICIO.match(resto)
+        if no_inicio:
+            resto = no_inicio.group(2)
             try:
-                dia_corrente = ler_data(bruto_data, ano_referencia=ano_ref)
+                dia_corrente = ler_data(no_inicio.group(1), ano_referencia=ano_ref)
             except ErroDeLeitura:
                 pass
 
         no_fim = _VALORES_NO_FIM.search(resto)
         if not no_fim:
             continue
-        descricao = _limpar(resto[: no_fim.start()])
+        descricao = _DATA_COLADA.sub("", _limpar(resto[: no_fim.start()]))
         if not descricao or len(descricao) < 3:
             ignoradas.append(crua)
             continue
@@ -224,14 +317,21 @@ def conferir(texto: str, lancamentos: list[Lancamento]) -> dict:
     declarado = totais_declarados(texto)
     entradas = sum(l.valor_centavos for l in lancamentos if l.valor_centavos > 0)
     saidas = -sum(l.valor_centavos for l in lancamentos if l.valor_centavos < 0)
+    saldos = saldos_declarados(texto)
+    # a segunda régua: o saldo tem de fechar com o que foi lido
+    saldo_fecha = None
+    if saldos is not None:
+        saldo_fecha = saldos[0] + entradas - saidas == saldos[1]
     if declarado is None:
-        return {"confere": None, "entradas": entradas, "saidas": saidas}
+        return {"confere": saldo_fecha, "entradas": entradas, "saidas": saidas,
+                "saldo_fecha": saldo_fecha}
     return {
-        "confere": (entradas, saidas) == declarado,
+        "confere": (entradas, saidas) == declarado and saldo_fecha is not False,
         "entradas": entradas,
         "saidas": saidas,
         "entradas_declaradas": declarado[0],
         "saidas_declaradas": declarado[1],
+        "saldo_fecha": saldo_fecha,
     }
 
 

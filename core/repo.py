@@ -1291,16 +1291,39 @@ def buscar_transacoes(conn, termo: str = "", limite: int = 100) -> list[dict]:
 # --------------------------------------------------------------------------
 # contas e plano de contas
 # --------------------------------------------------------------------------
-def salvar_conta(engine, *, conta_id=None, nome, tipo, titular, instituicao, parser, ativa=True):
+def salvar_conta(engine, *, conta_id=None, nome, tipo, titular, instituicao, parser,
+                 ativa=True, identificador=None):
     with engine.begin() as conn:
         valores = dict(
             nome=nome.strip(), tipo=tipo, titular=titular,
             instituicao=instituicao.strip(), parser=parser, ativa=ativa,
+            identificador=(identificador or "").strip() or None,
         )
         if conta_id:
             conn.execute(sa.update(db.contas).where(db.contas.c.id == conta_id).values(**valores))
             return conta_id
         return conn.execute(sa.insert(db.contas).values(**valores)).inserted_primary_key[0]
+
+
+def identificar_conta(engine, conta_id: int, identificador: str | None) -> None:
+    """Grava a agência/conta como o extrato imprime, para a tela conferir."""
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(db.contas).where(db.contas.c.id == conta_id)
+            .values(identificador=(identificador or "").strip() or None)
+        )
+
+
+def conta_pelo_identificador(conn, ident: dict | None) -> dict | None:
+    """A conta cadastrada de que este extrato é, se alguma bater."""
+    from parsers.extrato_itau import conta_bate
+
+    if not ident:
+        return None
+    for conta in listar_contas(conn, so_ativas=False):
+        if conta_bate(ident, conta.get("identificador")):
+            return conta
+    return None
 
 
 def alternar_conta(engine, conta_id: int, ativa: bool) -> None:

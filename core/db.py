@@ -27,6 +27,10 @@ contas = sa.Table(
     sa.Column("instituicao", sa.String(60), nullable=False),
     sa.Column("parser", sa.String(40), nullable=False, server_default="generico"),
     sa.Column("ativa", sa.Boolean, nullable=False, server_default=sa.true()),
+    # agencia (e conta, se quiser) como o banco imprime no extrato. E o que
+    # deixa a tela conferir se o PDF e mesmo desta conta antes de gravar —
+    # duas contas no mesmo banco sao duas opcoes iguais num menu
+    sa.Column("identificador", sa.String(40)),
     sa.Column("criada_em", sa.DateTime, server_default=sa.func.now()),
 )
 

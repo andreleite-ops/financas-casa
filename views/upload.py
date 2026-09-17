@@ -413,7 +413,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
             help="Muitos bancos protegem o extrato. Costuma ser o CPF, a data de "
                  "nascimento ou os primeiros dígitos do documento.",
         ) or None
-        _diagnostico_pdf(conteudo, senha, competencia, conta)
+        _diagnostico_pdf(engine, conteudo, senha, competencia, conta)
 
     if st.button("Processar arquivo", type="primary"):
         try:
@@ -428,23 +428,88 @@ def _aba_enviar(engine, usuario: dict) -> None:
                 "CSV/Excel — ela passa pela conferência de colunas."
             )
             return
-        avisos = _conferencia_do_extrato(parser, conteudo, senha, lancamentos)
+        texto = _texto_se_pdf(arquivo.name, conteudo, senha)
+        if not _pdf_e_desta_conta(engine, conta, texto, bloquear=True):
+            return
+        avisos = _conferencia_do_extrato(parser, texto, lancamentos)
         _importar(
             engine, conta, lancamentos, arquivo.name, usuario, "extrato", competencia, avisos
         )
 
 
-def _conferencia_do_extrato(parser, conteudo, senha, lancamentos) -> list[str]:
+def _texto_se_pdf(nome: str, conteudo: bytes, senha) -> str | None:
+    """O texto do PDF, uma vez só, para a identificação e a conferência."""
+    if not nome.lower().endswith(".pdf"):
+        return None
+    try:
+        return leitor_pdf.texto_do_pdf(conteudo, senha=senha)
+    except Exception:
+        return None
+
+
+def _pdf_e_desta_conta(engine, conta, texto: str | None, *, bloquear: bool) -> bool:
+    """O extrato é mesmo da conta escolhida no menu?
+
+    Duas contas no mesmo banco, com o mesmo leitor e o mesmo layout, são duas
+    opções iguais num menu — e escolher a errada não dava erro nenhum: o mês
+    inteiro entrava na conta vizinha. O cabeçalho do PDF diz a agência e a
+    conta; o cadastro diz qual é de qual. Aqui os dois se encontram.
+
+    Devolve False só quando há certeza de que é a conta errada. Sem
+    identificador no cadastro não há como conferir — e aí a tela pede que se
+    cadastre, em vez de deixar passar calada.
+    """
+    if not texto:
+        return True
+    ident = extrato_itau.identificacao(texto)
+    if not ident:
+        return True
+    bate = extrato_itau.conta_bate(ident, conta.get("identificador"))
+    if bate:
+        return True
+    with engine.connect() as conn:
+        dona = repo.conta_pelo_identificador(conn, ident)
+    if bate is False:
+        de_quem = f" Pelo cadastro, ele é da conta **{dona['nome']}**." if dona else ""
+        st.error(
+            f"**Este PDF não é da conta {conta['nome']}.** O extrato diz agência "
+            f"**{ident['agencia']}**, conta **{ident['conta']}**; a conta escolhida está "
+            f"cadastrada como **{conta['identificador']}**.{de_quem} Escolha a conta certa "
+            "no menu acima.",
+            icon="🚫",
+        )
+        return not bloquear
+    # sem identificador no cadastro: não dá para conferir
+    if dona and dona["id"] != conta["id"]:
+        st.error(
+            f"**Este PDF parece ser da conta {dona['nome']}**, não de {conta['nome']}: o "
+            f"extrato diz agência {ident['agencia']}, e é {dona['nome']} que está "
+            "cadastrada com ela. Escolha a conta certa no menu acima.",
+            icon="🚫",
+        )
+        return not bloquear
+    st.info(
+        f"Este extrato é da agência **{ident['agencia']}**, conta **{ident['conta']}** "
+        f"({ident['competencia']}). A conta **{conta['nome']}** não tem agência no "
+        "cadastro, então não dá para conferir se é ela mesma. Cadastre em **Contas e "
+        "cartões → Identificação** e, da próxima vez, o sistema barra o arquivo trocado.",
+        icon="🏦",
+    )
+    return True
+
+
+def _conferencia_do_extrato(parser, texto, lancamentos) -> list[str]:
     """Compara o lido com o total que o próprio extrato imprime.
 
     O extrato do Itaú declara, no cabeçalho, quanto entrou e quanto saiu no
-    mês. Nenhuma outra conferência é tão boa: ela pega linha perdida, linha
-    contada duas vezes e sinal trocado de uma vez só — e antes de gravar.
+    mês, e o saldo antes e depois. Nenhuma outra conferência é tão boa: ela
+    pega linha perdida, linha contada duas vezes e sinal trocado de uma vez só
+    — e antes de gravar. Foi ela que acusou os R$ 2.240,00 de pacientes que o
+    leitor deixava cair.
     """
-    if parser != "itau" or not lancamentos:
+    if parser != "itau" or not lancamentos or not texto:
         return []
     try:
-        texto = leitor_pdf.texto_do_pdf(conteudo, senha=senha)
         conferencia = extrato_itau.conferir(texto, lancamentos)
     except Exception:                      # a conferência é um extra, nunca o obstáculo
         return []
@@ -452,12 +517,17 @@ def _conferencia_do_extrato(parser, conteudo, senha, lancamentos) -> list[str]:
     if conferencia.get("confere") is None:
         return []
     if conferencia["confere"]:
+        saldo = " O saldo também fecha." if conferencia.get("saldo_fecha") else ""
         st.success(
             "Confere com o total impresso no extrato: entradas "
-            f"{fmt_brl(conferencia['entradas'])}, saídas {fmt_brl(conferencia['saidas'])}.",
+            f"{fmt_brl(conferencia['entradas'])}, saídas {fmt_brl(conferencia['saidas'])}."
+            + saldo,
             icon="✅",
         )
         return []
+    if "entradas_declaradas" not in conferencia:
+        return ["o saldo do extrato não fecha com o que foi lido — alguma linha ficou de "
+                "fora ou entrou duas vezes. Confira antes de classificar."]
     return [
         "o lido não bate com o total impresso no extrato — entradas "
         f"{fmt_brl(conferencia['entradas'])} contra "
@@ -467,7 +537,7 @@ def _conferencia_do_extrato(parser, conteudo, senha, lancamentos) -> list[str]:
     ]
 
 
-def _diagnostico_pdf(conteudo: bytes, senha, competencia, conta) -> None:
+def _diagnostico_pdf(engine, conteudo: bytes, senha, competencia, conta) -> None:
     """Mostra o que o leitor entendeu do PDF antes de gravar qualquer coisa.
 
     Um leitor que devolve zero lançamentos e mais nada não deixa ninguém
@@ -488,6 +558,10 @@ def _diagnostico_pdf(conteudo: bytes, senha, competencia, conta) -> None:
             "não há texto para ler — baixe a versão CSV/Excel no site do banco."
         )
         return
+
+    # a identificação aparece antes do botão: é o momento de trocar a conta
+    # no menu, não depois de gravar
+    _pdf_e_desta_conta(engine, conta, _texto_se_pdf("x.pdf", conteudo, senha), bloquear=False)
 
     lidos = len(diag["lancamentos"])
     if lidos:
@@ -938,6 +1012,20 @@ def _aba_contas(engine) -> None:
             if c2.button(rotulo, key=f"conta{conta['id']}", width="stretch"):
                 repo.alternar_conta(engine, conta["id"], not conta["ativa"])
                 st.rerun()
+            # a identificação fica num expander de propósito: é preenchida uma
+            # vez por conta, e a lista de contas não precisa ficar carregada
+            # de campos para sempre
+            atual = conta.get("identificador") or ""
+            with st.expander(f"Identificação: {atual or 'não cadastrada'}"):
+                novo = st.text_input(
+                    "Agência (e conta, se quiser)", value=atual,
+                    key=f"ident{conta['id']}", placeholder="Ex.: 1234 ou 1234/56789-0",
+                    help="Como o banco imprime no extrato. Serve para barrar o PDF de uma "
+                         "conta enviado na outra.",
+                )
+                if st.button("Salvar identificação", key=f"salvar_ident{conta['id']}"):
+                    repo.identificar_conta(engine, conta["id"], novo)
+                    st.rerun()
 
     with st.expander("➕ Incluir conta ou cartão"):
         with st.form("nova_conta"):
@@ -954,13 +1042,20 @@ def _aba_contas(engine) -> None:
                 format_func=lambda p: instituicoes.ROTULOS[p],
                 index=list(instituicoes.ROTULOS).index("generico"),
             )
+            identificador = st.text_input(
+                "Agência (e conta, se quiser) — opcional",
+                placeholder="Ex.: 1234 ou 1234/56789-0",
+                help="Como o banco imprime no extrato. Com isso o sistema confere se o PDF "
+                     "enviado é mesmo desta conta e barra o arquivo trocado — importa quando "
+                     "há duas contas no mesmo banco.",
+            )
             if st.form_submit_button("Incluir", type="primary"):
                 if not nome.strip() or not instituicao.strip():
                     st.error("Preencha nome e instituição.")
                 else:
                     repo.salvar_conta(
                         engine, nome=nome, tipo=tipo, titular=titular,
-                        instituicao=instituicao, parser=parser,
+                        instituicao=instituicao, parser=parser, identificador=identificador,
                     )
                     st.success(f"Conta {nome} incluída.")
                     st.rerun()
