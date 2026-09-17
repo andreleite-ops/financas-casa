@@ -989,6 +989,18 @@ def _aba_critica(engine, usuario: dict) -> None:
 
     if critica["divergencias"]:
         st.markdown("#### Divergências — qual versão vale?")
+        exatas = sum(1 for item in critica["divergencias"] if item["diferenca"] == 0)
+        if exatas:
+            st.caption(
+                f"{exatas} delas têm **o mesmo valor no centavo** — é o mesmo gasto escrito "
+                "de outro jeito (o condomínio anotado no dia 5 e debitado no dia 10). Nenhuma "
+                "pede decisão; as de valor diferente continuam abaixo, uma a uma."
+            )
+            if st.button(f"Vale o extrato nas {exatas} de valor igual", type="primary",
+                         key="critica_exatas"):
+                total = reconcile.aposentar_pares_exatos(engine, usuario["nome"])
+                st.success(f"{total} linha(s) da planilha conferidas com o extrato.")
+                st.rerun()
         for item in critica["divergencias"]:
             planilha, extrato = item["planilha"], item["extrato"]
             with st.container(border=True):

@@ -7,7 +7,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from core import analytics, db, repo
+from core import analytics, db, reconcile, repo
 from core.money import fmt_brl, fmt_mil
 from ui import dados, graficos
 from ui.tema import BOM, CRITICO, SERIE_DESPESA, SERIE_POUPANCA
@@ -262,6 +262,17 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 ]),
                 width="stretch", hide_index=True,
             )
+            if st.button(
+                f"Aposentar as linhas da planilha de {mes} que têm o mesmo valor no extrato",
+                key=f"aud_exatas_{competencia}",
+                help="Só as de valor igual no centavo: é o mesmo gasto escrito de outro "
+                     "jeito. As de valor diferente ficam para a Crítica, uma a uma.",
+            ):
+                total = reconcile.aposentar_pares_exatos(engine, usuario["nome"], competencia)
+                st.session_state["msg_auditoria"] = f"{total} linha(s) da planilha aposentadas."
+                st.rerun()
+            if recado := st.session_state.pop("msg_auditoria", None):
+                st.success(recado)
 
         if pagamentos:
             total = -sum(l["valor_centavos"] for l in pagamentos)

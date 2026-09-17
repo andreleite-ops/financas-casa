@@ -186,3 +186,38 @@ def descartar_da_planilha(engine, ids: list[int], usuario: str) -> int:
             .values(ativo=False, observacao=f"descartado na conferência por {usuario}")
         )
     return len(ids)
+
+
+def aposentar_pares_exatos(engine, usuario: str, competencia: str | None = None) -> int:
+    """Vale o extrato em todas as divergencias de valor exato, de uma vez.
+
+    Uma divergencia com diferenca zero e o mesmo gasto escrito de outro jeito
+    — o condominio anotado no dia 5 e debitado no dia 10. Resolve-las uma a
+    uma, num mes com cem delas, nao e razoavel; e nenhuma pede decisao, porque
+    o valor bate no centavo. As de valor diferente continuam na tela, uma a
+    uma: essas pedem alguem olhando.
+    """
+    with engine.connect() as conn:
+        critica = criticar(conn)
+    pares = [
+        (item["planilha"]["id"], item["extrato"]["id"]) for item in critica["divergencias"]
+        if item["diferenca"] == 0
+        and (competencia is None or item["planilha"]["competencia"] == competencia)
+    ]
+    if not pares:
+        return 0
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_([p for p, _ in pares]))
+            .values(ativo=False, observacao=f"conferido em massa com o extrato por {usuario}")
+        )
+        # o lado do extrato ganha a mesma marca que a conferencia do upload
+        # deixa: e por ela que a critica conta o par como conferido, em vez de
+        # listar a linha do banco como "faltava na planilha"
+        conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_([e for _, e in pares]))
+            .values(observacao="conferido com a planilha")
+        )
+    return len(pares)

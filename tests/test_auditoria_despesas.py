@@ -147,3 +147,30 @@ def test_mes_limpo_nao_tem_o_que_dizer(engine):
     with engine.connect() as conn:
         r = auditoria.auditar(conn, "2026-08")
     assert r["previsto"] == 0 and r["transferencias"] == [] and r["pagamentos_de_fatura"] == [] and r["duplicatas"] == []
+
+
+def test_aposentar_em_massa_so_os_pares_de_valor_exato(engine):
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    _planilha(engine, [
+        dict(data=date(2026, 8, 5), descricao="Condominio", valor_centavos=-150_000),
+        dict(data=date(2026, 8, 6), descricao="Luz", valor_centavos=-18_000),
+        dict(data=date(2026, 8, 7), descricao="Feira", valor_centavos=-9_000),   # em dinheiro
+    ])
+    _extrato(engine, bradesco, [
+        dict(data=date(2026, 8, 12), descricao="DEB AUTOM COND EDIF X", valor_centavos=-150_000),
+        dict(data=date(2026, 8, 13), descricao="DA ELETROPAULO 1", valor_centavos=-18_450),
+    ])
+    with engine.connect() as conn:
+        antes = auditoria.auditar(conn, "2026-08")
+    assert (antes["previsto"], antes["realizado"]) == (177_000, 168_450)
+
+    assert reconcile.aposentar_pares_exatos(engine, "André", "2026-08") == 1
+    with engine.connect() as conn:
+        depois = auditoria.auditar(conn, "2026-08")
+        critica = reconcile.criticar(conn)
+    assert depois["previsto"] == 27_000, "só o condomínio saiu; luz (divergente) e feira ficam"
+    # "Luz" e "DA ELETROPAULO" não se reconhecem nem pelo nome nem pelo valor:
+    # ficam para alguém decidir, cada uma do seu lado da crítica
+    assert {i["descricao"] for i in critica["so_planilha"]} == {"Luz", "Feira"}
+    assert [i["descricao"] for i in critica["faltantes"]] == ["DA ELETROPAULO 1"]
+    assert reconcile.aposentar_pares_exatos(engine, "André", "2026-08") == 0
