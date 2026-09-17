@@ -123,13 +123,22 @@ def pagamentos_de_fatura_soltos(conn, competencia: str) -> list[dict]:
     As compras ja sao despesa na fatura; o pagamento e so o dinheiro saindo
     para cobri-las. Somado como despesa, o mes paga o cartao duas vezes.
     """
-    return [
-        l for l in _linhas_do_mes(conn, competencia)
-        if l["origem"] == "extrato" and l["tipo_conta"] == "corrente"
-        and l["valor_centavos"] < 0
-        and l["categoria"] != CATEGORIA_TRANSFERENCIA
-        and _PAGAMENTO_DE_FATURA.search(l["descricao_norm"] or l["descricao"])
-    ]
+    from . import cartoes
+
+    emissores = cartoes.emissores(conn)
+    totais = cartoes.totais_de_fatura(conn) if emissores else {}
+    achados = []
+    for l in _linhas_do_mes(conn, competencia):
+        if (l["origem"] != "extrato" or l["tipo_conta"] != "corrente"
+                or l["valor_centavos"] >= 0 or l["categoria"] == CATEGORIA_TRANSFERENCIA):
+            continue
+        motivo = cartoes.reconhecer(
+            l["descricao"], l["valor_centavos"], competencia,
+            emissores_cadastrados=emissores, totais=totais,
+        )
+        if motivo:
+            achados.append({**l, "motivo": motivo})
+    return achados
 
 
 def duplicatas_internas(conn, competencia: str) -> list[dict]:

@@ -83,7 +83,8 @@ def test_auditoria_ve_planilha_e_extrato_valendo_juntos(engine):
     assert (resultado["previsto"], resultado["realizado"]) == (150_000, 150_000)
 
 
-def test_pagamento_de_fatura_no_extrato_e_apontado_e_marcado(engine):
+def test_pagamento_de_fatura_no_extrato_ja_entra_como_transferencia(engine):
+    """O gravador reconhece o pagamento na entrada: a auditoria não tem o que apontar."""
     bradesco = _conta(engine, "Bradesco C/C teste")
     _extrato(engine, bradesco, [
         dict(data=date(2026, 8, 10), descricao="PAGTO ELETRON COBRANCA NUBANK",
@@ -91,15 +92,37 @@ def test_pagamento_de_fatura_no_extrato_e_apontado_e_marcado(engine):
         dict(data=date(2026, 8, 11), descricao="SUPERMERCADO Y", valor_centavos=-30_000),
     ])
     with engine.connect() as conn:
+        assert auditoria.pagamentos_de_fatura_soltos(conn, "2026-08") == []
+        resultado = auditoria.auditar(conn, "2026-08")
+    assert resultado["realizado"] == 30_000, "só o mercado é despesa"
+
+
+def test_pagamento_gravado_por_fora_do_gravador_e_apontado_e_marcado(engine):
+    """A auditoria não confia no gravador: olha o banco como ele está."""
+    from core.dedup import hash_lancamento
+    from core.texto import normalizar
+
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    with engine.begin() as conn:
+        conn.execute(sa.insert(db.transacoes).values(
+            data=date(2026, 8, 10), competencia="2026-08",
+            descricao="PAGTO ELETRON COBRANCA NUBANK",
+            descricao_norm=normalizar("PAGTO ELETRON COBRANCA NUBANK"),
+            valor_centavos=-5_355_331, conta_id=bradesco, pessoa="Casal", status="pendente",
+            origem="extrato", ativo=True,
+            hash_dedup=hash_lancamento(bradesco, date(2026, 8, 10), -5_355_331,
+                                       normalizar("PAGTO ELETRON COBRANCA NUBANK")),
+        ))
+    with engine.connect() as conn:
         soltos = auditoria.pagamentos_de_fatura_soltos(conn, "2026-08")
     assert [l["valor_centavos"] for l in soltos] == [-5_355_331]
+    assert soltos[0]["motivo"].startswith("pagamento")
 
     repo.marcar_transferencia(engine, [l["id"] for l in soltos], "André",
                               subcategoria="Pagamento de Fatura")
     with engine.connect() as conn:
         assert auditoria.pagamentos_de_fatura_soltos(conn, "2026-08") == []
-        resultado = auditoria.auditar(conn, "2026-08")
-    assert resultado["realizado"] == 30_000, "só o mercado é despesa"
+        assert auditoria.auditar(conn, "2026-08")["realizado"] == 0
 
 
 def test_transferencia_entre_contas_da_casa_e_apontada(engine):

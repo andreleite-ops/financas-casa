@@ -7,7 +7,7 @@ from datetime import date
 
 import sqlalchemy as sa
 
-from . import ai, analytics, classify, db, dedup
+from . import ai, analytics, cartoes, classify, db, dedup
 from parsers.base import endireitar, fatura_invertida
 from .texto import normalizar, pessoa_na_descricao
 
@@ -356,6 +356,12 @@ def importar(
 
         regras = classify.carregar_regras(conn)
         naturezas = classify._natureza_por_categoria(conn)
+        # o que o detector de pagamento de cartao precisa: os cartoes
+        # cadastrados e o total de cada fatura ja importada
+        emissores = cartoes.emissores(conn) if conta["tipo"] == "corrente" else []
+        totais_fatura = cartoes.totais_de_fatura(conn) if emissores else {}
+        transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
+        pagamento_fatura_id = _id_da_subcategoria(conn, transferencia_id, "Pagamento de Fatura")
         donos_de_categoria = classify.donos_por_categoria(conn)
         bidirecionais = classify.categorias_bidirecionais(conn)
         traducoes = listar_de_para(conn)
@@ -461,6 +467,21 @@ def importar(
                 subcategoria_id = achado.subcategoria_id
                 status, confianca = achado.status, achado.confianca
 
+            # O pagamento da fatura do cartao, reconhecido pelo que o sistema
+            # ja sabe — o cadastro dos cartoes e o total de cada fatura — e nao
+            # por regra de texto. Vale por cima de qualquer classificacao que
+            # nao seja transferencia: as compras ja sao despesa na fatura, e
+            # este debito e so o dinheiro mudando de bolso.
+            if emissores and lan.valor_centavos < 0 and categoria_id != transferencia_id:
+                motivo = cartoes.reconhecer(
+                    lan.descricao, lan.valor_centavos, competencia_da_linha,
+                    emissores_cadastrados=emissores, totais=totais_fatura,
+                )
+                if motivo and transferencia_id:
+                    categoria_id, subcategoria_id = transferencia_id, pagamento_fatura_id
+                    status, confianca = "auto_regra", 0.95
+                    achado.explicacao = motivo
+
             # quem diz de quem é o gasto, em ordem: a coluna de pessoa do
             # arquivo, a regra, a própria descrição ("ALMOÇO ANDRÉ") e a
             # categoria que é de uma pessoa por natureza (Filhos & Pensão).
@@ -477,6 +498,8 @@ def importar(
             padrao = PESSOA_PADRAO if lan.valor_centavos < 0 else pessoa_padrao
             pessoa = _pessoa_valida(declarado, padrao)
             observacao = decisao.motivo or None
+            if (achado.explicacao or "").startswith("pagamento d"):
+                observacao = achado.explicacao
 
             if decisao.situacao == "confere_planilha":
                 # o do extrato prevalece e herda a classificacao da planilha
@@ -1137,6 +1160,67 @@ def apagar_de_para(engine, rotulo: str) -> int:
             ).rowcount
         conn.execute(sa.delete(db.de_para).where(db.de_para.c.rotulo == rotulo))
     return devolvidos
+
+
+def _id_da_categoria(conn, nome: str) -> int | None:
+    return conn.execute(sa.select(db.categorias.c.id).where(db.categorias.c.nome == nome)).scalar()
+
+
+def _id_da_subcategoria(conn, categoria_id: int | None, nome: str) -> int | None:
+    if categoria_id is None:
+        return None
+    return conn.execute(
+        sa.select(db.subcategorias.c.id).where(
+            db.subcategorias.c.categoria_id == categoria_id, db.subcategorias.c.nome == nome,
+        )
+    ).scalar()
+
+
+def marcar_pagamentos_de_cartao(engine) -> int:
+    """Passa por todo debito de conta corrente ja gravado e marca os pagamentos
+    de cartao que ainda estao contados como despesa. Idempotente; roda na subida.
+
+    E o que conserta o que entrou antes do detector existir: o pagamento do
+    Nubank e do XP no extrato do Bradesco de agosto, somados as compras que ja
+    estavam nas faturas.
+    """
+    with engine.begin() as conn:
+        emissores = cartoes.emissores(conn)
+        if not emissores:
+            return 0
+        totais = cartoes.totais_de_fatura(conn)
+        transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
+        if transferencia_id is None:
+            return 0
+        pagamento_id = _id_da_subcategoria(conn, transferencia_id, "Pagamento de Fatura")
+        candidatos = conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.descricao,
+                      db.transacoes.c.valor_centavos, db.transacoes.c.competencia)
+            .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+            .where(
+                db.contas.c.tipo == "corrente",
+                db.transacoes.c.origem == "extrato",
+                db.transacoes.c.ativo == sa.true(),
+                db.transacoes.c.valor_centavos < 0,
+                sa.or_(db.transacoes.c.categoria_id.is_(None),
+                       db.transacoes.c.categoria_id != transferencia_id),
+            )
+        ).all()
+        marcados = 0
+        for linha in candidatos:
+            motivo = cartoes.reconhecer(
+                linha.descricao, linha.valor_centavos, linha.competencia,
+                emissores_cadastrados=emissores, totais=totais,
+            )
+            if not motivo:
+                continue
+            conn.execute(
+                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                .values(categoria_id=transferencia_id, subcategoria_id=pagamento_id,
+                        status="auto_regra", confianca=0.95, observacao=motivo)
+            )
+            marcados += 1
+    return marcados
 
 
 def marcar_transferencia(engine, ids: list[int], usuario: str,
