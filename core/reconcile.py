@@ -10,6 +10,8 @@ extrato importado nao vira "faltante" - nao ha o que conferir ali.
 
 from __future__ import annotations
 
+from datetime import date
+
 import sqlalchemy as sa
 
 from . import db
@@ -32,7 +34,12 @@ def _periodos_com_as_duas_origens(conn) -> set[str]:
     for linha in conn.execute(consulta):
         if linha.origem in por_origem:
             por_origem[linha.origem].add(linha.competencia)
-    return por_origem["planilha"] & por_origem["extrato"]
+    # So mes fechado. No mes em curso o extrato e parcial por definicao, e "o
+    # que so esta na planilha" e o resto do mes que ainda nao aconteceu —
+    # inclusive as receitas previstas. Foi assim que um clique em "descartar
+    # o que so esta na planilha" zerou a renda de setembro.
+    em_curso = date.today().strftime("%Y-%m")
+    return {c for c in por_origem["planilha"] & por_origem["extrato"] if c < em_curso}
 
 
 def _filtro_periodos(periodos: set[str]):
@@ -80,6 +87,9 @@ def criticar(conn) -> dict:
                 escopo,
                 db.transacoes.c.origem == "extrato",
                 db.transacoes.c.ativo == sa.true(),
+                # a critica e de gastos: receita prevista tem o proprio
+                # pareamento e nunca pode estar ao alcance do "descartar"
+                db.transacoes.c.valor_centavos < 0,
                 sa.or_(
                     db.transacoes.c.observacao.is_(None),
                     db.transacoes.c.observacao != "conferido com a planilha",
@@ -98,6 +108,7 @@ def criticar(conn) -> dict:
                 escopo,
                 db.transacoes.c.origem == "planilha",
                 db.transacoes.c.ativo == sa.true(),
+                db.transacoes.c.valor_centavos < 0,
             )
             .order_by(db.transacoes.c.data)
         )

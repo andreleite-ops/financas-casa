@@ -1041,7 +1041,12 @@ def _aba_critica(engine, usuario: dict) -> None:
             ),
             width="stretch", hide_index=True,
         )
-        if st.button("Descartar todos os que só estão na planilha"):
+        st.caption(
+            "Só despesas de **meses fechados** entram aqui. O mês em curso e as receitas "
+            "previstas ficam de fora de propósito: o extrato parcial não diz que o resto "
+            "do mês não vai acontecer."
+        )
+        if st.button(f"Descartar os {len(critica['so_planilha'])} que só estão na planilha"):
             total = reconcile.descartar_da_planilha(
                 engine, [i["id"] for i in critica["so_planilha"]], usuario["nome"]
             )

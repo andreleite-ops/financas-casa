@@ -197,3 +197,63 @@ def test_aposentar_em_massa_so_os_pares_de_valor_exato(engine):
     assert {i["descricao"] for i in critica["so_planilha"]} == {"Luz", "Feira"}
     assert [i["descricao"] for i in critica["faltantes"]] == ["DA ELETROPAULO 1"]
     assert reconcile.aposentar_pares_exatos(engine, "André", "2026-08") == 0
+
+
+def test_critica_ignora_o_mes_em_curso(engine):
+    """No mês em curso o extrato é parcial: o que só está na planilha é o futuro."""
+    from datetime import date as _d
+
+    hoje = _d.today()
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    _planilha(engine, [
+        dict(data=_d(hoje.year, hoje.month, 28), descricao="Condominio", valor_centavos=-150_000),
+        dict(data=_d(hoje.year, hoje.month, 5), descricao="PRO LABORE", valor_centavos=5_000_000),
+    ])
+    _extrato(engine, bradesco, [
+        dict(data=_d(hoje.year, hoje.month, 2), descricao="PADARIA", valor_centavos=-3_000),
+    ])
+    with engine.connect() as conn:
+        critica = reconcile.criticar(conn)
+    assert critica["sem_conferencia"] is True
+    assert critica["so_planilha"] == []
+
+
+def test_critica_e_so_de_despesas(engine):
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    _planilha(engine, [
+        dict(data=date(2026, 8, 5), descricao="PRO LABORE", valor_centavos=5_000_000),
+        dict(data=date(2026, 8, 6), descricao="Feira", valor_centavos=-9_000),
+    ])
+    _extrato(engine, bradesco, [
+        dict(data=date(2026, 8, 12), descricao="PADARIA", valor_centavos=-3_000),
+    ])
+    with engine.connect() as conn:
+        critica = reconcile.criticar(conn)
+    assert [i["descricao"] for i in critica["so_planilha"]] == ["Feira"]
+    assert all(i["valor_centavos"] < 0 for i in critica["faltantes"])
+
+
+def test_descartes_do_alcance_errado_sao_devolvidos_uma_vez(engine):
+    bradesco = _conta(engine, "Bradesco C/C teste")
+    _planilha(engine, [dict(data=date(2026, 9, 5), descricao="PRO LABORE", valor_centavos=5_000_000)])
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(db.transacoes).where(db.transacoes.c.descricao == "PRO LABORE")
+            .values(ativo=False, observacao="descartado na conferência por André")
+        )
+        # a fixture já subiu o app uma vez; aqui é a primeira subida com este
+        # código, depois do descarte — o estado de produção
+        conn.execute(sa.delete(db.config).where(db.config.c.chave == repo.DEVOLUCAO_DA_CONFERENCIA))
+    assert repo.devolver_descartes_da_conferencia(engine) == 1
+    with engine.connect() as conn:
+        linha = conn.execute(
+            sa.select(db.transacoes.c.ativo).where(db.transacoes.c.descricao == "PRO LABORE")
+        ).scalar_one()
+    assert linha is True
+    # uma vez só: um descarte legítimo feito depois não volta
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(db.transacoes).where(db.transacoes.c.descricao == "PRO LABORE")
+            .values(ativo=False, observacao="descartado na conferência por André")
+        )
+    assert repo.devolver_descartes_da_conferencia(engine) == 0

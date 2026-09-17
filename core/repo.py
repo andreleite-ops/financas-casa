@@ -1176,6 +1176,47 @@ def _id_da_subcategoria(conn, categoria_id: int | None, nome: str) -> int | None
     ).scalar()
 
 
+def _config(conn, chave: str) -> str | None:
+    return conn.execute(sa.select(db.config.c.valor).where(db.config.c.chave == chave)).scalar()
+
+
+def _gravar_config(conn, chave: str, valor: str) -> None:
+    if _config(conn, chave) is None:
+        conn.execute(sa.insert(db.config).values(chave=chave, valor=valor))
+    else:
+        conn.execute(sa.update(db.config).where(db.config.c.chave == chave).values(valor=valor))
+
+
+DEVOLUCAO_DA_CONFERENCIA = "conferencia_devolvida_2026_09"
+
+
+def devolver_descartes_da_conferencia(engine) -> int:
+    """Devolve ao mes o que a critica descartou enquanto o alcance dela estava
+    errado. Roda uma vez so; a marca fica em `config`.
+
+    A critica passou a olhar todo mes com planilha e extrato — e o mes em curso
+    entrou, com o extrato parcial. "O que so esta na planilha" ali era o resto
+    do mes que ainda nao tinha acontecido, receitas previstas incluidas, e o
+    botao de descartar apagou tudo isso. Como a critica nunca tinha rodado
+    antes, todo descarte que existe veio desse alcance errado: volta tudo, e
+    quem quiser descartar de novo faz isso com o alcance certo.
+    """
+    with engine.begin() as conn:
+        if _config(conn, DEVOLUCAO_DA_CONFERENCIA):
+            return 0
+        resultado = conn.execute(
+            sa.update(db.transacoes)
+            .where(
+                db.transacoes.c.ativo == sa.false(),
+                db.transacoes.c.observacao.like("descartado na conferência por %"),
+            )
+            .values(ativo=True,
+                    observacao="devolvido: a conferência alcançava o mês em curso")
+        )
+        _gravar_config(conn, DEVOLUCAO_DA_CONFERENCIA, "1")
+    return resultado.rowcount or 0
+
+
 def marcar_pagamentos_de_cartao(engine) -> int:
     """Passa por todo debito de conta corrente ja gravado e marca os pagamentos
     de cartao que ainda estao contados como despesa. Idempotente; roda na subida.
