@@ -90,6 +90,11 @@ def receitas_nao_recorrentes(
     return int(total or 0)
 
 
+def _sinal():
+    """+1 para entrada, -1 para saida — para agrupar sem misturar os lados."""
+    return sa.case((db.transacoes.c.valor_centavos > 0, 1), else_=-1)
+
+
 def _base(competencia: str | None = None, ano: int | None = None, pessoa: str | None = None):
     filtros = [db.transacoes.c.ativo == sa.true()]
     if competencia:
@@ -118,6 +123,12 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
             # natureza declarada pela origem; decide o lado quando falta categoria
             db.transacoes.c.natureza.label("natureza_origem"),
             db.subcategorias.c.nome.label("subcategoria"),
+            # o sinal entra no agrupamento de proposito: sem ele, a entrada e a
+            # saida ainda sem categoria caiam no mesmo grupo e se anulavam —
+            # um PIX de R$ 20.000 enviado sumia dentro do pro-labore de
+            # R$ 20.596 recebido, e o mes mostrava R$ 596 de receita e
+            # nenhuma despesa. O lado se decide linha a linha, nunca na soma
+            _sinal().label("sinal"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
@@ -132,6 +143,7 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza,
             db.subcategorias.c.nome,
+            _sinal(),
         )
     )
     receitas = despesas = poupanca = sem_classe = nao_recorrentes = 0
@@ -337,6 +349,7 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
             db.categorias.c.nome.label("categoria"),
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza.label("natureza_origem"),
+            _sinal().label("sinal"),   # o lado se decide linha a linha (ver `resumo`)
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
@@ -349,6 +362,7 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
             db.categorias.c.nome,
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza,
+            _sinal(),
         )
     )
     meses: dict[str, dict] = {}

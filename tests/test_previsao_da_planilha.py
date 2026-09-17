@@ -109,3 +109,19 @@ def test_planilha_de_meses_passados_nao_e_tocada_sem_extrato(engine):
     planilha = _conta(engine, "Planilha da casa", titular="Casal")
     _planilha(engine, planilha, date(2026, 3, 5), 2_000_000)
     assert _receitas(engine, "2026-03") == 2_000_000
+
+
+def test_o_confira_nao_poe_em_duvida_meses_fechados_da_planilha(engine):
+    """O salário de julho na planilha é história: um crédito de agosto parecido
+    não pode gerar o convite para apagá-lo. Só o mesmo mês entra na pergunta."""
+    planilha = _conta(engine, "Planilha da casa", titular="Casal")
+    corrente = _conta(engine, "Conta Salário")
+    _planilha(engine, planilha, date(2026, 7, 5), 2_059_621)          # julho, história
+    _planilha(engine, planilha, date(2026, 8, 5), 1_500_000, "BONUS")  # agosto, não casa por valor
+
+    resumo = _extrato(engine, corrente, [
+        Lancamento(data=date(2026, 8, 7), descricao="PIX RECEBIDO REM: EMPRESA", valor_centavos=1_139_600),
+    ])
+    meses_perguntados = {item["competencia"] for item in resumo["previsoes_a_conferir"]}
+    assert "2026-07" not in meses_perguntados
+    assert meses_perguntados <= {"2026-08"}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import date
 
 import sqlalchemy as sa
@@ -217,6 +218,7 @@ def _previsoes_por_conferir(conn, sem_par: list[dict]) -> list[dict]:
             db.transacoes.c.descricao,
             db.transacoes.c.valor_centavos,
             db.transacoes.c.pessoa,
+            db.transacoes.c.origem,
         )
         .where(
             db.transacoes.c.origem.in_(dedup.ORIGENS_DE_PREVISAO),
@@ -228,8 +230,20 @@ def _previsoes_por_conferir(conn, sem_par: list[dict]) -> list[dict]:
     )
     saida = []
     for previsao in conn.execute(consulta):
-        parecidas = [
+        # A janela de meses vizinhos e para a previsao digitada a mao, que tem
+        # mes aproximado. A linha da planilha tem data exata — e, nos meses ja
+        # fechados, e historia, nao previsao: o salario de julho na planilha
+        # nao pode ser posto em duvida por um credito de agosto. Sem este
+        # limite, o extrato de agosto listava julho e setembro inteiros como
+        # "confira se e o mesmo dinheiro", com o convite para apagar.
+        if previsao.origem == "planilha" and previsao.competencia not in meses:
+            continue
+        candidatas = [
             linha for linha in sem_par
+            if previsao.origem != "planilha" or linha["competencia"] == previsao.competencia
+        ]
+        parecidas = [
+            linha for linha in candidatas
             if abs(linha["valor_centavos"] - previsao.valor_centavos)
             <= FOLGA_PARA_PERGUNTAR * max(linha["valor_centavos"], previsao.valor_centavos)
         ]
@@ -473,6 +487,14 @@ def importar(
             # por regra de texto. Vale por cima de qualquer classificacao que
             # nao seja transferencia: as compras ja sao despesa na fatura, e
             # este debito e so o dinheiro mudando de bolso.
+            if (conta["tipo"] == "corrente" and (lan.origem or origem) == "extrato"
+                    and categoria_id != transferencia_id and transferencia_id):
+                propria = _transferencia_propria(lan.descricao, lan.valor_centavos)
+                if propria:
+                    categoria_id = transferencia_id
+                    subcategoria_id = _id_da_subcategoria(conn, transferencia_id, propria[0])
+                    status, confianca = "auto_regra", 0.95
+                    achado.explicacao = propria[1]
             if emissores and lan.valor_centavos < 0 and categoria_id != transferencia_id:
                 motivo = cartoes.reconhecer(
                     lan.descricao, lan.valor_centavos, competencia_da_linha,
@@ -500,7 +522,7 @@ def importar(
             padrao = PESSOA_PADRAO if lan.valor_centavos < 0 else pessoa_padrao
             pessoa = _pessoa_valida(declarado, padrao)
             observacao = decisao.motivo or None
-            if (achado.explicacao or "").startswith("pagamento d"):
+            if (achado.explicacao or "").startswith(("pagamento d", "transferência entre", "resgate de")):
                 observacao = achado.explicacao
 
             if decisao.situacao == "confere_planilha":
@@ -1217,6 +1239,123 @@ def devolver_descartes_da_conferencia(engine) -> int:
         )
         _gravar_config(conn, DEVOLUCAO_DA_CONFERENCIA, "1")
     return resultado.rowcount or 0
+
+
+# quem, no texto de um PIX ou TED, esta na outra ponta
+_PREFIXO_CONTRAPARTE = re.compile(
+    r"\b(?:REMET|REM|DEST|DES|PIX TRANSF|TED TRANSF|TED)\b\s*"
+)
+_NOMES_DA_CASA = {"ANDRE": "André", "RO": "Rô", "ROSANA": "Rô"}
+# a outra ponta e uma instituicao financeira: o dinheiro e do proprio dono,
+# voltando de uma aplicacao — resgate, nao renda
+_INSTITUICAO = re.compile(
+    r"\b(BANCO|BCO|INVESTIMENTOS?|CORRETORA|DTVM|CCTVM|PACTUAL|ASSET|TESOURO|"
+    r"NU PAGAMENTOS|INTER S ?A|XP|BTG)\b"
+)
+
+
+def _contraparte(descricao: str) -> list[str]:
+    """As palavras de quem esta na outra ponta, ou nada."""
+    from core.texto import sem_acento
+
+    texto = re.sub(r"[.:;,/\-]", " ", sem_acento(descricao).upper())
+    texto = " ".join(texto.split())
+    # o marcador da outra ponta vem DEPOIS do historico: em "TED TRANSF ELET
+    # DISPON REMET ANDRE", o "TED TRANSF" do comeco e o historico, e o
+    # "REMET" do fim e quem manda. Vale a ultima ocorrencia
+    achados = list(_PREFIXO_CONTRAPARTE.finditer(texto))
+    if not achados:
+        return []
+    resto = re.sub(r"^[\d ]+", "", texto[achados[-1].end():]).strip()   # "102 0001 FULANA" -> "FULANA"
+    return resto.split()
+
+
+def contraparte_da_casa(descricao: str) -> str | None:
+    """A pessoa da casa que e a outra ponta deste PIX/TED — ou None.
+
+    "PIX RECEBIDO REM: Andre Luiz Rodrigues" e o Andre mandando para si mesmo
+    de outra conta; "TED-TRANSF ELET DISPON REMET.ANDRE LUIZ" idem. Isso nao e
+    renda, e o PIX dele para a Ro nao e gasto: e dinheiro mudando de bolso
+    dentro da casa.
+
+    A comparacao e por palavra inteira, nunca por comeco — a mesma regra do
+    portador do cartao. A primeira versao comparava por prefixo, e os apelidos
+    de uma letra ("R", "C") fizeram RAFAEL virar Ro e CAIXA LOTERIAS virar
+    Casal. ANDREA, paciente da Ro, nao e ANDRE. Os apelidos do segredo (nome
+    completo como sai no extrato) entram tambem, por palavras inteiras.
+    """
+    from core.texto import sem_acento
+
+    palavras = _contraparte(descricao)
+    if not palavras:
+        return None
+    apelidos = {**APELIDOS_PESSOA, **_apelidos_configurados()}
+    for apelido, pessoa in apelidos.items():
+        chave = " ".join(sem_acento(apelido).upper().split())
+        if len(chave) < 3:
+            continue
+        n = len(chave.split())
+        if " ".join(palavras[:n]) == chave:
+            return pessoa
+    return _NOMES_DA_CASA.get(palavras[0])
+
+
+def resgate_de_investimento(descricao: str, valor_centavos: int) -> bool:
+    """Credito cuja outra ponta e uma instituicao financeira: resgate, nao renda.
+
+    "PIX RECEBIDO REM: BANCO INTER SA" e o dinheiro do proprio dono voltando de
+    uma aplicacao. O salario vem de uma empresa ("TAG PARTNERS LTDA."), o
+    paciente vem com nome de gente; o banco como remetente e o proprio dono.
+    Entrava como pro-labore — R$ 11.944,57 de resgate virando renda de agosto.
+    """
+    if valor_centavos <= 0:
+        return False
+    palavras = _contraparte(descricao)
+    return bool(palavras) and bool(_INSTITUICAO.search(" ".join(palavras)))
+
+
+def _transferencia_propria(descricao: str, valor_centavos: int) -> tuple[str, str] | None:
+    """(subcategoria, motivo) quando o lancamento e dinheiro da propria casa."""
+    pessoa = contraparte_da_casa(descricao)
+    if pessoa:
+        return "Entre Contas Próprias", f"transferência entre contas da casa ({pessoa})"
+    if resgate_de_investimento(descricao, valor_centavos):
+        return "Aplicação / Resgate", "resgate de aplicação: a outra ponta é uma instituição financeira"
+    return None
+
+
+def marcar_transferencias_proprias(engine) -> int:
+    """Passa pelos PIX/TED ja gravados em conta corrente e marca os que sao
+    entre contas da casa. Idempotente; roda na subida."""
+    with engine.begin() as conn:
+        transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
+        if transferencia_id is None:
+            return 0
+        candidatos = conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.descricao, db.transacoes.c.valor_centavos)
+            .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+            .where(
+                db.contas.c.tipo == "corrente",
+                db.transacoes.c.origem == "extrato",
+                db.transacoes.c.ativo == sa.true(),
+                sa.or_(db.transacoes.c.categoria_id.is_(None),
+                       db.transacoes.c.categoria_id != transferencia_id),
+            )
+        ).all()
+        marcados = 0
+        for linha in candidatos:
+            achado = _transferencia_propria(linha.descricao, linha.valor_centavos)
+            if not achado:
+                continue
+            subcategoria, motivo = achado
+            conn.execute(
+                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                .values(categoria_id=transferencia_id,
+                        subcategoria_id=_id_da_subcategoria(conn, transferencia_id, subcategoria),
+                        status="auto_regra", confianca=0.95, observacao=motivo)
+            )
+            marcados += 1
+    return marcados
 
 
 def marcar_pagamentos_de_cartao(engine) -> int:
