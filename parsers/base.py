@@ -195,3 +195,20 @@ def endireitar(lancamentos: list[Lancamento]) -> list[Lancamento]:
     "despesa", e o gravador a preenche logo depois.
     """
     return [replace(lan, valor_centavos=-lan.valor_centavos) for lan in lancamentos]
+
+
+def competencia_predominante(lancamentos: list[Lancamento]) -> str | None:
+    """O mes em que a maioria do lote conta — o mes de verdade do arquivo.
+
+    Para conta corrente e isto que vai no registro do upload, nao o menu. O
+    menu abria no mes de hoje, e um extrato de agosto enviado em setembro
+    ficava registrado como setembro: o mapa "o que falta carregar" dizia que
+    setembro tinha sido carregado com o mes ainda nem fechado.
+    """
+    contagem: dict[str, int] = {}
+    for lan in lancamentos:
+        mes = lan.competencia or f"{lan.data.year:04d}-{lan.data.month:02d}"
+        contagem[mes] = contagem.get(mes, 0) + 1
+    if not contagem:
+        return None
+    return max(sorted(contagem), key=lambda m: contagem[m])

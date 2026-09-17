@@ -1553,6 +1553,25 @@ def cobertura(conn, competencias: list[str]) -> dict[tuple[int, str], dict]:
     }
 
 
+def lancamentos_da_conta_no_mes(conn, conta_id: int, competencia: str) -> list[dict]:
+    """O que exatamente esta numa conta num mes, com o arquivo que trouxe.
+
+    E a resposta para "o mapa diz que setembro foi carregado, e nao foi": em vez
+    de discutir com o mapa, olha-se as linhas — e o arquivo de onde vieram.
+    """
+    consulta = (
+        sa.select(
+            db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.descricao,
+            db.transacoes.c.valor_centavos, db.transacoes.c.ativo, db.transacoes.c.origem,
+            db.uploads.c.arquivo,
+        )
+        .select_from(db.transacoes.outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id))
+        .where(db.transacoes.c.conta_id == conta_id, db.transacoes.c.competencia == competencia)
+        .order_by(db.transacoes.c.data, db.transacoes.c.id)
+    )
+    return [dict(l._mapping) for l in conn.execute(consulta)]
+
+
 def cobertura_planilha(conn, competencias: list[str]) -> dict[str, dict]:
     """O mesmo mapa, para a planilha de carga inicial.
 

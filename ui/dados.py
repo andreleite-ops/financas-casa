@@ -331,3 +331,9 @@ def auditoria_do_mes(_engine, versao: int, competencia: str) -> dict:
     """Por onde a despesa do mês pode estar dobrando — com os ids para consertar."""
     with _engine.connect() as conn:
         return auditoria.auditar(conn, competencia)
+
+
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
+def lancamentos_da_conta_no_mes(_engine, versao: int, conta_id: int, competencia: str) -> list[dict]:
+    with _engine.connect() as conn:
+        return repo.lancamentos_da_conta_no_mes(conn, conta_id, competencia)

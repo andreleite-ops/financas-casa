@@ -13,7 +13,7 @@ from core.texto import sem_marcacao
 from parsers import extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
-from parsers.base import ErroDeLeitura
+from parsers.base import ErroDeLeitura, competencia_predominante
 from ui import dados
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
@@ -111,15 +111,24 @@ def _aba_enviar(engine, usuario: dict) -> None:
             "Sem competência: a planilha traz vários meses, e o mês de cada lançamento "
             "sai da própria linha."
         )
+    elif conta["tipo"] == "corrente":
+        # em conta corrente cada lançamento usa a própria data, e o menu não
+        # mudava nada — exceto o registro do upload, que guardava o mês de hoje
+        # e fazia o mapa dizer que setembro estava carregado com agosto. Sem
+        # menu, sem armadilha: o mês sai do arquivo
+        competencia = None
+        c2.caption(
+            "Sem competência: em conta corrente cada lançamento usa a própria data, e o "
+            "mês do arquivo é o que os lançamentos disserem."
+        )
     else:
         competencia = c2.selectbox(
             "Competência", _competencias_sugeridas(),
             # abre no mês de hoje, não no primeiro da lista: os meses à frente
             # existem para a fatura de cartão, e não são o caso comum
             index=MESES_A_FRENTE,
-            help="Mês de referência. Em extrato de conta corrente, cada lançamento usa a "
-                 "própria data. Em fatura de cartão, use o mês em que ela vence. A lista "
-                 "vai de cinco anos atrás a dois à frente — dá para digitar o mês "
+            help="O mês em que a fatura vence — é nele que as compras contam. A lista "
+                 "vai de cinco anos atrás a dois à frente; dá para digitar o mês "
                  "(“2027-03”) em vez de rolar.",
         )
     # só serve para completar data sem ano, o caso da fatura de cartão
@@ -642,6 +651,9 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
         )
         return
 
+    if conta["tipo"] == "corrente":
+        competencia = competencia_predominante(lancamentos)
+
     with st.spinner(f"Classificando {len(lancamentos)} lançamentos…"):
         resumo = repo.importar(
             engine,
@@ -803,10 +815,12 @@ def _aba_mapa(engine) -> None:
         for competencia in competencias:
             celula = mapa.get((conta["id"], competencia))
             if competencia == atual:
-                # mês em curso: o extrato ainda nem fechou, não conta como falta
+                # mês em curso: o extrato ainda nem fechou. O que já existe aqui
+                # é parcial por definição — um "✓ carregado" no mês de hoje
+                # dizia que setembro estava pronto com o mês pela metade
                 celulas.append(
-                    f"<td class='futuro'><span class='ok'>✓<small>{celula['ativos']}</small>"
-                    "</span></td>" if celula else "<td class='futuro'>em curso</td>"
+                    f"<td class='futuro'><span class='dup'>parcial<small>{celula['ativos']}"
+                    "</small></span></td>" if celula else "<td class='futuro'>em curso</td>"
                 )
             elif not celula:
                 faltando += 1
@@ -830,6 +844,35 @@ def _aba_mapa(engine) -> None:
         + linha_planilha + "".join(linhas) + "</table></div>",
         unsafe_allow_html=True,
     )
+    # o que exatamente há numa célula: em vez de discutir com o mapa, olha-se
+    # as linhas e o arquivo de onde vieram
+    with st.expander("Ver o que há numa conta num mês"):
+        e1, e2 = st.columns(2)
+        conta_alvo = e1.selectbox("Conta", contas, format_func=lambda c: c["nome"],
+                                  key="mapa_conta")
+        mes_alvo = e2.selectbox("Mês", list(reversed(competencias)), key="mapa_mes")
+        itens = dados.lancamentos_da_conta_no_mes(
+            engine, dados.versao(), conta_alvo["id"], mes_alvo
+        )
+        if not itens:
+            st.caption("Nada nesta conta neste mês.")
+        else:
+            st.caption(
+                f"{len(itens)} lançamento(s), {sum(1 for i in itens if i['ativo'])} valendo. "
+                "A coluna **Arquivo** diz de onde cada um veio — para desfazer um upload "
+                "errado, use **Histórico**."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Data": f"{i['data']:%d/%m/%Y}", "Descrição": i["descricao"],
+                     "Valor": fmt_brl(i["valor_centavos"]),
+                     "Vale": "sim" if i["ativo"] else "não",
+                     "Arquivo": i["arquivo"] or i["origem"]}
+                    for i in itens
+                ]),
+                width="stretch", hide_index=True,
+            )
+
     st.markdown(
         "<span class='nota'><b style='color:#14532D'>✓</b> carregado, com o número de "
         "lançamentos &nbsp;·&nbsp; <b>·</b> ainda não carregado &nbsp;·&nbsp; "
