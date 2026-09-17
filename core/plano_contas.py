@@ -52,9 +52,28 @@ CONTAS_INICIAIS = [
     ("BTG Mastercard", "cartao", "André", "BTG", "btg"),
     ("Nubank Mastercard", "cartao", "Casal", "Nubank", "nubank"),
     ("Bradesco C/C", "corrente", "André", "Bradesco", "bradesco"),
-    ("Itaú C/C", "corrente", "Rô", "Itaú", "itau"),
+    # a Ro tem duas contas no Itau, com o mesmo leitor e o mesmo layout: sao
+    # duas opcoes no menu, e o extrato de uma enviado na outra e barrado pela
+    # agencia impressa no PDF (ver AGENCIA_DA_CONTA)
+    ("Itaú 8839", "corrente", "Rô", "Itaú", "itau"),
+    ("Itaú 0660", "corrente", "Rô", "Itaú", "itau"),
     ("Conjunta C/C", "corrente", "Casal", "Itaú", "itau"),
 ]
+
+# So a agencia — o numero da filial do banco, o mesmo que vai em qualquer
+# boleto. O numero da conta em si nao entra aqui: este repositorio e publico,
+# e ele fica so no banco de dados, onde a tela de upload o aprende do proprio
+# PDF na primeira vez ("E esta: ... e a agencia X").
+AGENCIA_DA_CONTA = {
+    "Itaú 8839": "8839",
+    "Itaú 0660": "0660",
+}
+
+# o nome antigo da conta da Ro, de quando o cadastro tinha uma so: quem ja
+# tem historico nela continua com ele, so o nome muda
+RENOMEAR_CONTAS = {
+    "Itaú C/C": "Itaú 8839",
+}
 
 # As tres fontes de renda da casa, ditas pelo Andre. Ficam separadas das demais
 # regras porque so elas dizem tambem DE QUEM e o dinheiro, e isso e o que

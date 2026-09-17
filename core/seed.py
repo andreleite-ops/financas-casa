@@ -13,7 +13,9 @@ import sqlalchemy as sa
 
 from . import db
 from .plano_contas import (
+    AGENCIA_DA_CONTA,
     CONTAS_INICIAIS,
+    RENOMEAR_CONTAS,
     DESPESAS,
     METAS_INICIAIS,
     RECEITAS,
@@ -74,16 +76,35 @@ def _semear_categorias(conn) -> None:
 
 
 def _semear_contas(conn) -> None:
+    """As contas iniciais, e a migracao de quem ja tinha o cadastro antigo.
+
+    Idempotente: renomeia o nome antigo uma vez (o historico fica preso a
+    conta, so o nome muda), cria o que falta, preenche a agencia de quem ainda
+    nao tem. Rodar de novo nao mexe em nada.
+    """
     existentes = {linha.nome for linha in conn.execute(sa.select(db.contas.c.nome))}
+    for antigo, novo in RENOMEAR_CONTAS.items():
+        if antigo in existentes and novo not in existentes:
+            conn.execute(
+                sa.update(db.contas).where(db.contas.c.nome == antigo).values(nome=novo)
+            )
+            existentes = (existentes - {antigo}) | {novo}
     _inserir_em_lote(
         conn, db.contas,
         [
             {"nome": nome, "tipo": tipo, "titular": titular,
-             "instituicao": inst, "parser": parser}
+             "instituicao": inst, "parser": parser,
+             "identificador": AGENCIA_DA_CONTA.get(nome)}
             for nome, tipo, titular, inst, parser in CONTAS_INICIAIS
             if nome not in existentes
         ],
     )
+    for nome, agencia in AGENCIA_DA_CONTA.items():
+        conn.execute(
+            sa.update(db.contas)
+            .where(db.contas.c.nome == nome, db.contas.c.identificador.is_(None))
+            .values(identificador=agencia)
+        )
 
 
 def _semear_regras(conn) -> int:
