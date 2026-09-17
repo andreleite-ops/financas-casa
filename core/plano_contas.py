@@ -273,6 +273,14 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
     # entrada, é somado como receita — uma renda que nunca existiu.
     ("PAGAMENTO EM", "Transferências entre Contas", "Pagamento de Fatura"),
     ("PAGAMENTO CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
+    # como o extrato da conta corrente escreve o pagamento do cartao — o
+    # debito que cobre uma fatura cujas compras ja sao despesa la
+    ("PAGTO CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PGTO CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PAG CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("PAGAMENTO CARTOES", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("DEB AUTOM CARTAO", "Transferências entre Contas", "Pagamento de Fatura"),
+    ("CARTAO DE CREDITO", "Transferências entre Contas", "Pagamento de Fatura"),
     ("DARF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IRPF", "Financeiras & Impostos", "Imposto de Renda"),
     ("IMPOSTO DE RENDA", "Financeiras & Impostos", "Imposto de Renda"),

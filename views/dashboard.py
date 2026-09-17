@@ -7,7 +7,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from core import analytics, db
+from core import analytics, db, repo
 from core.money import fmt_brl, fmt_mil
 from ui import dados, graficos
 from ui.tema import BOM, CRITICO, SERIE_DESPESA, SERIE_POUPANCA
@@ -220,6 +220,122 @@ def _competencia_de_abertura(engine, competencias: list[str]) -> str:
     return passados[0] if passados else competencias[0]
 
 
+def _reais(centavos: int) -> str:
+    return fmt_brl(centavos).replace("$", chr(92) + "$")
+
+
+def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
+    """Por onde a despesa deste mês pode estar dobrando — e o conserto ao lado.
+
+    Extrato de conta corrente chegando em cima da planilha e das faturas dobra
+    despesa de três jeitos, e nenhum é erro de digitação: o mesmo gasto na
+    planilha e no extrato; o pagamento da fatura somado às compras que já
+    estão nela; dinheiro andando entre as contas da casa. Cada um aparece
+    aqui com o botão que resolve.
+    """
+    dados_auditoria = dados.auditoria_do_mes(engine, dados.versao(), competencia)
+    previsto, realizado = dados_auditoria["previsto"], dados_auditoria["realizado"]
+    transferencias = dados_auditoria["transferencias"]
+    pagamentos = dados_auditoria["pagamentos_de_fatura"]
+    duplicatas = dados_auditoria["duplicatas"]
+    tem_problema = bool((previsto and realizado) or transferencias or pagamentos or duplicatas)
+    if not tem_problema:
+        return
+
+    mes = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
+    with st.expander(f"🔎 Por que a despesa de {mes} está assim — auditoria", expanded=True):
+        if previsto and realizado:
+            st.error(
+                f"**Planilha e extratos valendo juntos.** Em {mes} há "
+                f"{_reais(previsto)} de despesa vinda da **planilha** e {_reais(realizado)} "
+                "vinda de **extratos**. O mesmo gasto nas duas conta duas vezes. O "
+                "pente-fino, gasto a gasto, está em **Upload → 🔍 Crítica planilha × "
+                "extratos** — ela mostra o que bateu, o que divergiu e o que só a planilha "
+                "tem, com um botão para cada caso.",
+                icon="📚",
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Origem": i["origem"], "Conta": i["conta"],
+                     "Lançamentos": i["quantos"], "Despesa": fmt_brl(i["total"])}
+                    for i in dados_auditoria["por_origem"]
+                ]),
+                width="stretch", hide_index=True,
+            )
+
+        if pagamentos:
+            total = -sum(l["valor_centavos"] for l in pagamentos)
+            st.warning(
+                f"**{len(pagamentos)} pagamento(s) de fatura contados como despesa** "
+                f"({_reais(total)}). As compras já são despesa na fatura; o pagamento é só "
+                "o dinheiro saindo para cobri-las.",
+                icon="💳",
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
+                     "Descrição": l["descricao"], "Valor": fmt_brl(-l["valor_centavos"])}
+                    for l in pagamentos
+                ]),
+                width="stretch", hide_index=True,
+            )
+            if st.button("Marcar como pagamento de fatura (transferência)",
+                         key=f"aud_fatura_{competencia}"):
+                repo.marcar_transferencia(
+                    engine, [l["id"] for l in pagamentos], usuario["nome"],
+                    subcategoria="Pagamento de Fatura",
+                )
+                st.rerun()
+
+        if transferencias:
+            total = sum(p["valor"] for p in transferencias)
+            st.warning(
+                f"**{len(transferencias)} transferência(s) entre contas da casa** "
+                f"({_reais(total)}): saída numa conta, entrada noutra, mesmo valor, até três "
+                "dias. Contadas como despesa de um lado e receita do outro.",
+                icon="🔁",
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Saiu de": p["saida"]["conta"], "Em": f"{p['saida']['data']:%d/%m}",
+                     "Entrou em": p["entrada"]["conta"],
+                     "Descrição (saída)": p["saida"]["descricao"],
+                     "Valor": fmt_brl(p["valor"])}
+                    for p in transferencias
+                ]),
+                width="stretch", hide_index=True,
+            )
+            if st.button("Marcar os dois lados como transferência",
+                         key=f"aud_transf_{competencia}"):
+                ids = [p["saida"]["id"] for p in transferencias] + \
+                      [p["entrada"]["id"] for p in transferencias]
+                repo.marcar_transferencia(engine, ids, usuario["nome"])
+                st.rerun()
+
+        if duplicatas:
+            total = sum(abs(d["copia"]["valor_centavos"]) for d in duplicatas)
+            st.warning(
+                f"**{len(duplicatas)} lançamento(s) em duplicidade exata** ({_reais(total)}): "
+                "mesma conta, dia, valor e descrição, duas vezes.",
+                icon="📄",
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Data": f"{d['copia']['data']:%d/%m}", "Conta": d["copia"]["conta"],
+                     "Descrição": d["copia"]["descricao"],
+                     "Valor": fmt_brl(d["copia"]["valor_centavos"])}
+                    for d in duplicatas
+                ]),
+                width="stretch", hide_index=True,
+            )
+            if st.button("Desativar as cópias", key=f"aud_dup_{competencia}"):
+                repo.desativar_transacoes(
+                    engine, [d["copia"]["id"] for d in duplicatas],
+                    f"duplicidade exata desativada na auditoria por {usuario['nome']}",
+                )
+                st.rerun()
+
+
 def render(engine, usuario: dict) -> None:
     competencias = dados.competencias(engine, dados.versao())
 
@@ -319,6 +435,8 @@ def render(engine, usuario: dict) -> None:
             "Resolva na tela **Classificação** para os números fecharem.",
             icon="🏷️",
         )
+
+    _auditoria_das_despesas(engine, usuario, competencia)
 
     st.markdown("### Gasto por categoria")
     st.markdown(

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from core import analytics, db, dedup, reconcile, repo
+from core import analytics, auditoria, db, dedup, reconcile, repo
 
 TTL = 300
 # Quantas respostas guardar por função. A chave inclui a versão dos dados, e a
@@ -324,3 +324,10 @@ def faltando_subcategoria(_engine, versao: int, competencia: str | None,
         return repo.sem_subcategoria(
             conn, competencia=competencia, limite=500, categoria_id=categoria_id
         )
+
+
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
+def auditoria_do_mes(_engine, versao: int, competencia: str) -> dict:
+    """Por onde a despesa do mês pode estar dobrando — com os ids para consertar."""
+    with _engine.connect() as conn:
+        return auditoria.auditar(conn, competencia)

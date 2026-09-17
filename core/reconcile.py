@@ -18,28 +18,25 @@ from .texto import chave_estabelecimento
 JANELA_DIAS = 5
 
 
-def _periodos_com_as_duas_origens(conn) -> set[tuple[int, str]]:
-    consulta = (
-        sa.select(db.transacoes.c.conta_id, db.transacoes.c.competencia, db.transacoes.c.origem)
-        .distinct()
-    )
-    por_origem: dict[str, set[tuple[int, str]]] = {"planilha": set(), "extrato": set()}
+def _periodos_com_as_duas_origens(conn) -> set[str]:
+    """Os meses em que existe planilha E extrato — em qualquer conta.
+
+    Comparava por (conta, mês). Só que a planilha mora numa conta reservada
+    só dela, e o extrato mora na conta do banco: a interseção por conta era
+    vazia por construção, e a crítica respondia "ainda não há período com as
+    duas origens" para sempre. A ferramenta feita para pegar despesa dobrada
+    nunca chegou a rodar — e as despesas de agosto dobraram sem ninguém ver.
+    """
+    consulta = sa.select(db.transacoes.c.competencia, db.transacoes.c.origem).distinct()
+    por_origem: dict[str, set[str]] = {"planilha": set(), "extrato": set()}
     for linha in conn.execute(consulta):
         if linha.origem in por_origem:
-            por_origem[linha.origem].add((linha.conta_id, linha.competencia))
+            por_origem[linha.origem].add(linha.competencia)
     return por_origem["planilha"] & por_origem["extrato"]
 
 
-def _filtro_periodos(periodos: set[tuple[int, str]]):
-    return sa.or_(
-        *[
-            sa.and_(
-                db.transacoes.c.conta_id == conta_id,
-                db.transacoes.c.competencia == competencia,
-            )
-            for conta_id, competencia in periodos
-        ]
-    )
+def _filtro_periodos(periodos: set[str]):
+    return db.transacoes.c.competencia.in_(sorted(periodos))
 
 
 def criticar(conn) -> dict:
@@ -107,17 +104,21 @@ def criticar(conn) -> dict:
     ]
 
     # o que sobrou na planilha pode ser divergencia de valor/data com o extrato
-    por_chave: dict[tuple[int, str], list[dict]] = {}
+    # sem a conta na chave: a planilha anota o gasto sem dizer de qual conta
+    # saiu, e exigir a mesma conta era o outro jeito de nunca casar nada
+    por_chave: dict[str, list[dict]] = {}
+    por_valor: dict[tuple[str, int], list[dict]] = {}
     for item in faltantes:
         chave = chave_estabelecimento(item["descricao"])
         if chave:
-            por_chave.setdefault((item["conta"], chave), []).append(item)
+            por_chave.setdefault(chave, []).append(item)
+        por_valor.setdefault((item["competencia"], item["valor_centavos"]), []).append(item)
 
     divergencias, so_planilha = [], []
     usados: set[int] = set()
     for item in restantes_planilha:
         chave = chave_estabelecimento(item["descricao"])
-        candidatos = por_chave.get((item["conta"], chave), []) if chave else []
+        candidatos = por_chave.get(chave, []) if chave else []
         par = None
         for candidato in candidatos:
             if candidato["id"] in usados:
@@ -125,6 +126,14 @@ def criticar(conn) -> dict:
             if abs((candidato["data"] - item["data"]).days) <= JANELA_DIAS:
                 par = candidato
                 break
+        # a descrição digitada nunca é a do banco; o mesmo valor, no mesmo mês,
+        # com qualquer dia, é o segundo jeito de reconhecer o mesmo gasto — o
+        # condomínio anotado no dia 5 e debitado no dia 10
+        if par is None:
+            for candidato in por_valor.get((item["competencia"], item["valor_centavos"]), []):
+                if candidato["id"] not in usados:
+                    par = candidato
+                    break
         if par:
             usados.add(par["id"])
             divergencias.append(

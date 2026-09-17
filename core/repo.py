@@ -1139,6 +1139,46 @@ def apagar_de_para(engine, rotulo: str) -> int:
     return devolvidos
 
 
+def marcar_transferencia(engine, ids: list[int], usuario: str,
+                         subcategoria: str = "Entre Contas Próprias") -> int:
+    """Poe as linhas em Transferencias entre Contas: nem gasto nem ganho."""
+    if not ids:
+        return 0
+    with engine.begin() as conn:
+        categoria_id = conn.execute(
+            sa.select(db.categorias.c.id)
+            .where(db.categorias.c.nome == analytics.CATEGORIA_TRANSFERENCIA)
+        ).scalar()
+        if categoria_id is None:
+            return 0
+        subcategoria_id = conn.execute(
+            sa.select(db.subcategorias.c.id).where(
+                db.subcategorias.c.categoria_id == categoria_id,
+                db.subcategorias.c.nome == subcategoria,
+            )
+        ).scalar()
+        conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_(ids))
+            .values(categoria_id=categoria_id, subcategoria_id=subcategoria_id,
+                    status="manual", confianca=1.0, classificado_por=usuario)
+        )
+    return len(ids)
+
+
+def desativar_transacoes(engine, ids: list[int], motivo: str) -> int:
+    """Tira as linhas dos relatorios sem apaga-las: da para voltar atras."""
+    if not ids:
+        return 0
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_(ids))
+            .values(ativo=False, observacao=motivo)
+        )
+    return len(ids)
+
+
 def reativar_transacao(engine, transacao_id: int) -> bool:
     """Devolve ao mes um lancamento que um upload tinha desligado.
 
