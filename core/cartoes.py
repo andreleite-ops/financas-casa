@@ -18,6 +18,7 @@ E, como terceira rede, as redacoes genericas de pagamento de cartao.
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 
 import sqlalchemy as sa
 
@@ -89,6 +90,41 @@ def totais_de_fatura(conn) -> dict[tuple[int, str], int]:
     return {(l.conta_id, l.competencia): -int(l.total or 0) for l in conn.execute(consulta)}
 
 
+# quantos dias entre o debito na conta corrente e o "pagamento recebido" que
+# a fatura imprime: o boleto pago hoje aparece no cartao hoje ou amanha
+JANELA_DO_PAGAMENTO = timedelta(days=5)
+
+
+def pagamentos_recebidos(conn) -> list[dict]:
+    """Os creditos de pagamento que as faturas ja importadas trazem.
+
+    A fatura de agosto imprime "Pagamento recebido" com o valor que pagou a de
+    julho. E o dado que a fatura de julho daria — sem precisar da fatura de
+    julho. E o que fecha a transicao da planilha para os extratos: o mes cujas
+    compras estao na planilha e cujo pagamento esta no extrato do banco.
+    """
+    consulta = (
+        sa.select(db.transacoes.c.conta_id, db.contas.c.nome, db.transacoes.c.data,
+                  db.transacoes.c.valor_centavos)
+        .select_from(
+            db.transacoes
+            .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(
+            db.contas.c.tipo == "cartao",
+            db.transacoes.c.ativo == sa.true(),
+            db.transacoes.c.valor_centavos > 0,
+            sa.or_(db.categorias.c.nome == CATEGORIA_TRANSFERENCIA,
+                   db.transacoes.c.descricao_norm.like("%PAGAMENTO%")),
+        )
+    )
+    return [
+        {"conta_id": l.conta_id, "nome": l.nome, "data": l.data, "valor": int(l.valor_centavos)}
+        for l in conn.execute(consulta)
+    ]
+
+
 def _meses_vizinhos(competencia: str) -> list[str]:
     ano, mes = int(competencia[:4]), int(competencia[5:7])
     saida = []
@@ -106,6 +142,7 @@ def _meses_vizinhos(competencia: str) -> list[str]:
 def reconhecer(
     descricao: str, valor_centavos: int, competencia: str, *,
     emissores_cadastrados: list[dict], totais: dict[tuple[int, str], int],
+    data: date | None = None, recebidos: list[dict] | None = None,
 ) -> str | None:
     """Por que este debito e o pagamento de um cartao — ou None.
 
@@ -117,6 +154,15 @@ def reconhecer(
         return None
     texto = normalizar(descricao)
     pago = -valor_centavos
+
+    # 0) o cartao diz que recebeu este valor nestes dias: e o pagamento dele.
+    #    Nao precisa da fatura do mes anterior — a fatura seguinte ja imprime
+    #    o "pagamento recebido" com o valor
+    if data is not None:
+        for rec in recebidos or ():
+            folga = max(FOLGA_CENTAVOS, int(rec["valor"] * FOLGA_RELATIVA))
+            if abs(rec["valor"] - pago) <= folga and abs(rec["data"] - data) <= JANELA_DO_PAGAMENTO:
+                return f"pagamento da fatura {rec['nome']} (recebido em {rec['data']:%d/%m})"
 
     # 1) o valor bate com o total de uma fatura importada, deste mes ou vizinho
     for emissor in emissores_cadastrados:

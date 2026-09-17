@@ -124,3 +124,39 @@ def test_reconhecer_explica_o_motivo():
                               emissores_cadastrados=emissores, totais=totais) is None
     assert cartoes.reconhecer("QUALQUER", 3_221_232, "2026-08",
                               emissores_cadastrados=emissores, totais=totais) is None
+
+
+def test_a_transicao_da_planilha_o_pagamento_recebido_da_fatura_seguinte_basta(engine):
+    """Julho está na planilha, não vai ser importado. O pagamento de julho está
+    no Bradesco de agosto — e a fatura de agosto imprime "Pagamento recebido"
+    com esse valor. É o que fecha a conta sem a fatura de julho."""
+    cartao = _conta(engine, "Nubank teste", "cartao", "Nubank")
+    corrente = _conta(engine, "Bradesco teste", "corrente", "Bradesco")
+    # a fatura de agosto (CSV): compras de agosto e o pagamento da de julho
+    _importar(engine, cartao, [
+        dict(data=date(2026, 8, 2), descricao="POSTO", valor_centavos=-50_000, competencia="2026-08"),
+        dict(data=date(2026, 8, 12), descricao="Pagamento recebido", valor_centavos=2_987_654, competencia="2026-08"),
+    ], competencia="2026-08")
+    # o Bradesco de agosto: o boleto, com texto generico, um dia antes
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 11), descricao="PAGTO ELETRON COBRANCA 00123", valor_centavos=-2_987_654),
+        dict(data=date(2026, 8, 11), descricao="PAGTO ELETRON COBRANCA 00777", valor_centavos=-2_987_654 + 500_000),
+    ])
+    agosto = _resumo(engine, "2026-08")
+    assert agosto["despesas"] == 50_000 + (2_987_654 - 500_000), "o boleto do cartão saiu; o outro boleto fica"
+    assert agosto["transferencias"] == 2_987_654 - 2_987_654
+
+
+def test_a_varredura_pega_o_pagamento_recebido_ja_gravado(engine):
+    cartao = _conta(engine, "Nubank teste", "cartao", "Nubank")
+    corrente = _conta(engine, "Bradesco teste", "corrente", "Bradesco")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 11), descricao="PAGTO ELETRON COBRANCA 00123", valor_centavos=-2_987_654),
+    ])
+    assert _resumo(engine, "2026-08")["despesas"] == 2_987_654
+    _importar(engine, cartao, [
+        dict(data=date(2026, 8, 12), descricao="Pagamento recebido", valor_centavos=2_987_654, competencia="2026-08"),
+        dict(data=date(2026, 8, 2), descricao="POSTO", valor_centavos=-50_000, competencia="2026-08"),
+    ], competencia="2026-08")
+    assert repo.marcar_pagamentos_de_cartao(engine) == 1
+    assert _resumo(engine, "2026-08")["despesas"] == 50_000

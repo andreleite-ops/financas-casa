@@ -127,6 +127,7 @@ def pagamentos_de_fatura_soltos(conn, competencia: str) -> list[dict]:
 
     emissores = cartoes.emissores(conn)
     totais = cartoes.totais_de_fatura(conn) if emissores else {}
+    recebidos = cartoes.pagamentos_recebidos(conn) if emissores else []
     achados = []
     for l in _linhas_do_mes(conn, competencia):
         if (l["origem"] != "extrato" or l["tipo_conta"] != "corrente"
@@ -135,6 +136,7 @@ def pagamentos_de_fatura_soltos(conn, competencia: str) -> list[dict]:
         motivo = cartoes.reconhecer(
             l["descricao"], l["valor_centavos"], competencia,
             emissores_cadastrados=emissores, totais=totais,
+            data=l["data"], recebidos=recebidos,
         )
         if motivo:
             achados.append({**l, "motivo": motivo})

@@ -360,6 +360,7 @@ def importar(
         # cadastrados e o total de cada fatura ja importada
         emissores = cartoes.emissores(conn) if conta["tipo"] == "corrente" else []
         totais_fatura = cartoes.totais_de_fatura(conn) if emissores else {}
+        recebidos = cartoes.pagamentos_recebidos(conn) if emissores else []
         transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
         pagamento_fatura_id = _id_da_subcategoria(conn, transferencia_id, "Pagamento de Fatura")
         donos_de_categoria = classify.donos_por_categoria(conn)
@@ -476,6 +477,7 @@ def importar(
                 motivo = cartoes.reconhecer(
                     lan.descricao, lan.valor_centavos, competencia_da_linha,
                     emissores_cadastrados=emissores, totais=totais_fatura,
+                    data=lan.data, recebidos=recebidos,
                 )
                 if motivo and transferencia_id:
                     categoria_id, subcategoria_id = transferencia_id, pagamento_fatura_id
@@ -1230,13 +1232,15 @@ def marcar_pagamentos_de_cartao(engine) -> int:
         if not emissores:
             return 0
         totais = cartoes.totais_de_fatura(conn)
+        recebidos = cartoes.pagamentos_recebidos(conn)
         transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
         if transferencia_id is None:
             return 0
         pagamento_id = _id_da_subcategoria(conn, transferencia_id, "Pagamento de Fatura")
         candidatos = conn.execute(
             sa.select(db.transacoes.c.id, db.transacoes.c.descricao,
-                      db.transacoes.c.valor_centavos, db.transacoes.c.competencia)
+                      db.transacoes.c.valor_centavos, db.transacoes.c.competencia,
+                      db.transacoes.c.data)
             .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
             .where(
                 db.contas.c.tipo == "corrente",
@@ -1252,6 +1256,7 @@ def marcar_pagamentos_de_cartao(engine) -> int:
             motivo = cartoes.reconhecer(
                 linha.descricao, linha.valor_centavos, linha.competencia,
                 emissores_cadastrados=emissores, totais=totais,
+                data=linha.data, recebidos=recebidos,
             )
             if not motivo:
                 continue
