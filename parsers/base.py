@@ -150,10 +150,13 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str,
     ano, mes = int(competencia[:4]), int(competencia[5:7])
     for lan in lancamentos:
         distancia = (lan.data.year - ano) * 12 + lan.data.month - mes
+        # mes muito a frente da fatura e do ano passado (a compra de 28/12 na
+        # fatura de janeiro). O contrario nao existe: uma data meses antes
+        # da fatura e parcela de compra antiga, e fica no ano em que esta —
+        # a versao que a jogava para o ano seguinte mandava "TV 12/12" de
+        # 05/01 para janeiro do ano que vem
         if distancia > 1:
             lan.data = _trocar_ano(lan.data, lan.data.year - 1)
-        elif distancia < -10:
-            lan.data = _trocar_ano(lan.data, lan.data.year + 1)
     inicio = inicio_do_ciclo(lancamentos)
     for lan in lancamentos:
         lan.competencia = competencia_da_compra(lan.data, competencia, lan.descricao,
@@ -161,10 +164,10 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str,
     return lancamentos
 
 
-# um ciclo de fatura dura um mes; o que esta mais de 40 dias antes da ultima
+# um ciclo de fatura dura um mes; o que esta mais de 32 dias antes da ultima
 # compra do arquivo nao e compra do ciclo — e parcela, ou lancamento antigo,
 # datado de quando a compra original aconteceu
-DURACAO_MAXIMA_DO_CICLO = timedelta(days=40)
+DURACAO_MAXIMA_DO_CICLO = timedelta(days=32)
 
 
 def inicio_do_ciclo(lancamentos: list[Lancamento]) -> date | None:

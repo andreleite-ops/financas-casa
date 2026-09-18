@@ -43,7 +43,7 @@ def _colunas():
     return (
         db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.descricao,
         db.transacoes.c.descricao_norm, db.transacoes.c.valor_centavos,
-        db.transacoes.c.origem, db.transacoes.c.conta_id,
+        db.transacoes.c.origem, db.transacoes.c.conta_id, db.transacoes.c.upload_id,
         db.contas.c.nome.label("conta"), db.contas.c.tipo.label("tipo_conta"),
         db.categorias.c.nome.label("categoria"),
     )
@@ -169,6 +169,10 @@ def duplicatas_internas(conn, competencia: str) -> list[dict]:
     for l in _linhas_do_mes(conn, competencia):
         chave = (l["conta_id"], l["data"], l["valor_centavos"], l["descricao_norm"])
         if chave in vistos:
+            # a mesma linha duas vezes NO MESMO arquivo e compra repetida
+            # (dois ingressos iguais no mesmo dia), nao copia
+            if vistos[chave]["upload_id"] is not None and vistos[chave]["upload_id"] == l["upload_id"]:
+                continue
             copias.append({"original": vistos[chave], "copia": l})
         else:
             vistos[chave] = l

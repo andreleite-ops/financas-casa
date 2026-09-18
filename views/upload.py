@@ -13,7 +13,7 @@ from core.texto import sem_marcacao
 from parsers import extrato_bradesco, extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
-from parsers.base import ErroDeLeitura, competencia_predominante
+from parsers.base import ErroDeLeitura, ajustar_ano_fatura, competencia_predominante
 from ui import dados, graficos
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
@@ -408,6 +408,10 @@ def _aba_enviar(engine, usuario: dict) -> None:
             except ErroDeLeitura as exc:
                 st.error(f"Não consegui ler: {exc}")
                 return
+            # o mapeamento manual passa pela mesma regra do leitor de fatura:
+            # a compra conta no mes da compra, a parcela no ciclo
+            if conta["tipo"] == "cartao" and competencia:
+                lancamentos = ajustar_ano_fatura(lancamentos, competencia)
             _importar(engine, conta, lancamentos, arquivo.name, usuario,
                       "planilha" if e_planilha else "extrato", competencia, avisos,
                       pessoa_padrao=pessoa_arquivo)
@@ -667,6 +671,13 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
             competencia=competencia,
             pessoa_padrao=pessoa_padrao,
         )
+
+    # o que a subida faria no proximo reboot, feito agora: a fatura que
+    # acabou de entrar pode ter compras datadas num mes da planilha, e pode
+    # ser a fatura que um debito ja gravado no banco estava pagando
+    if conta["tipo"] == "cartao":
+        repo.aplicar_meses_da_planilha(engine)
+        repo.marcar_pagamentos_de_cartao(engine)
 
     st.success(f"Arquivo processado: {resumo['lidos']} lançamentos lidos.")
 
@@ -1118,13 +1129,13 @@ def _criticas_encerradas(engine, encerradas: list[str]) -> None:
     rotulos = ", ".join(
         f"{graficos.rotulo_mes(c).lower()}/{c[2:4]}" for c in encerradas
     )
-    c1, c2 = st.columns([3, 1.2])
-    c1.caption(f"Crítica encerrada por você em: **{rotulos}** — tudo como está.")
-    escolha = c2.selectbox("Reabrir", ["—", *encerradas], label_visibility="collapsed",
-                           key="crit_reabrir")
-    if escolha != "—":
-        reconcile.reabrir_critica(engine, escolha)
-        st.rerun()
+    # discreto: o mes encerrado nao volta a pedir atencao; reabrir fica
+    # guardado, para quem for procurar
+    with st.expander(f"Crítica encerrada em {rotulos} — tudo como está"):
+        escolha = st.selectbox("Reabrir um mês", ["—", *encerradas], key="crit_reabrir")
+        if escolha != "—" and st.button("Reabrir", key="crit_reabrir_btn"):
+            reconcile.reabrir_critica(engine, escolha)
+            st.rerun()
 
 
 def _aba_manual(engine, usuario: dict) -> None:

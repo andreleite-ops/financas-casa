@@ -35,6 +35,10 @@ SUBCATEGORIAS_NAO_RECORRENTES = ("Venda de Bens",)
 # receitas; aparece a parte, como a poupanca, para o dinheiro continuar
 # visivel sem contaminar o resultado do mes.
 CATEGORIA_TRANSFERENCIA = "Transferências entre Contas"
+# a compra de cartao datada num mes que e so da planilha fica desligada com
+# esta marca (ver repo.aplicar_meses_da_planilha); mora aqui porque cartoes
+# e repo precisam dela e repo importa os dois
+MARCA_MES_DA_PLANILHA = "mês da planilha: a compra já está anotada nela"
 
 
 def _id_poupanca(conn) -> int | None:
@@ -224,11 +228,14 @@ def por_categoria(
         )
         .group_by(db.categorias.c.id, db.categorias.c.nome)
     )
+    # despesa e positiva, e o estorno abate: -soma, nunca abs — com abs um
+    # mes em que o estorno passava o gasto virava gasto de novo
+    sinal = -1 if natureza == "despesa" else 1
     linhas = [
         {
             "categoria_id": linha.id,
             "categoria": linha.nome,
-            "total": abs(int(linha.total or 0)),
+            "total": sinal * int(linha.total or 0),
             "qtd": linha.qtd,
         }
         for linha in conn.execute(consulta)
@@ -246,27 +253,33 @@ def por_subcategoria(conn, categoria_id: int, competencia=None, ano=None, pessoa
     consulta = (
         sa.select(
             db.subcategorias.c.nome,
+            db.categorias.c.natureza,
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
             sa.func.count(db.transacoes.c.id).label("qtd"),
         )
         .select_from(
-            db.transacoes.outerjoin(
-                db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id
-            )
+            db.transacoes
+            .join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
         .where(*_base(competencia, ano, pessoa), db.transacoes.c.categoria_id == categoria_id)
-        .group_by(db.subcategorias.c.nome)
+        .group_by(db.subcategorias.c.nome, db.categorias.c.natureza)
     )
     linhas = [
         {
             "subcategoria": linha.nome or "— sem subcategoria —",
             "detalhada": linha.nome is not None,
-            "total": abs(int(linha.total or 0)),
+            "total": _pelo_lado(linha.natureza, int(linha.total or 0)),
             "qtd": linha.qtd,
         }
         for linha in conn.execute(consulta)
     ]
     return sorted(linhas, key=lambda linha: -linha["total"])
+
+
+def _pelo_lado(natureza: str | None, total: int) -> int:
+    """Despesa positiva (estorno abate), receita como esta."""
+    return total if natureza == "receita" else -total
 
 
 def subcategorias_de_todas(conn, competencia=None, ano=None, pessoa=None) -> dict[int, list[dict]]:
@@ -283,16 +296,17 @@ def subcategorias_de_todas(conn, competencia=None, ano=None, pessoa=None) -> dic
         sa.select(
             db.transacoes.c.categoria_id,
             db.subcategorias.c.nome,
+            db.categorias.c.natureza,
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
             sa.func.count(db.transacoes.c.id).label("qtd"),
         )
         .select_from(
-            db.transacoes.outerjoin(
-                db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id
-            )
+            db.transacoes
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
         .where(*_base(competencia, ano, pessoa))
-        .group_by(db.transacoes.c.categoria_id, db.subcategorias.c.nome)
+        .group_by(db.transacoes.c.categoria_id, db.subcategorias.c.nome, db.categorias.c.natureza)
     )
     saida: dict[int, list[dict]] = {}
     for linha in conn.execute(consulta):
@@ -409,6 +423,8 @@ def _consulta_da_matriz(ano: int, pessoa: str | None):
     justamente esse o dinheiro que fazia a tabela não fechar com o card do
     topo, que sempre contou o pendente.
     """
+    # o sinal entra no agrupamento pelo mesmo motivo do resumo: sem ele a
+    # entrada e a saida sem categoria se anulavam no mesmo grupo
     return (
         sa.select(
             db.categorias.c.nome,
@@ -416,6 +432,7 @@ def _consulta_da_matriz(ano: int, pessoa: str | None):
             db.transacoes.c.natureza.label("natureza_origem"),
             db.transacoes.c.categoria_id,
             db.transacoes.c.competencia,
+            _sinal().label("sinal"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
@@ -426,7 +443,7 @@ def _consulta_da_matriz(ano: int, pessoa: str | None):
         .where(*_base(ano=ano, pessoa=pessoa))
         .group_by(
             db.categorias.c.nome, db.categorias.c.natureza, db.transacoes.c.natureza,
-            db.transacoes.c.categoria_id, db.transacoes.c.competencia,
+            db.transacoes.c.categoria_id, db.transacoes.c.competencia, _sinal(),
         )
     )
 
@@ -462,14 +479,15 @@ def tabela_mes_a_mes(conn, ano: int, pessoa: str | None = None) -> dict:
         mes = linha.competencia[5:7]
         meses.add(mes)
         acumulado = matriz.setdefault(nome, {})
-        acumulado[mes] = acumulado.get(mes, 0) + abs(int(linha.total or 0))
+        # despesa positiva; o estorno (positivo numa categoria de gasto) abate
+        acumulado[mes] = acumulado.get(mes, 0) - int(linha.total or 0)
 
     anterior: dict[str, int] = {}
     for linha in conn.execute(_consulta_da_matriz(ano - 1, pessoa)):
         nome = _nome_da_linha(linha)
         if nome is None:
             continue
-        anterior[nome] = anterior.get(nome, 0) + abs(int(linha.total or 0))
+        anterior[nome] = anterior.get(nome, 0) - int(linha.total or 0)
 
     ordem_meses = sorted(meses)
     meses_ja_decorridos = meses_decorridos(ano)
@@ -523,6 +541,7 @@ def comparativo_anual(conn, pessoa: str | None = None) -> list[dict]:
             db.transacoes.c.categoria_id,
             db.transacoes.c.natureza.label("natureza_origem"),
             db.subcategorias.c.nome.label("subcategoria"),
+            _sinal().label("sinal"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
@@ -534,7 +553,7 @@ def comparativo_anual(conn, pessoa: str | None = None) -> list[dict]:
         .group_by(
             ano_sql, db.categorias.c.natureza, db.categorias.c.nome,
             db.transacoes.c.categoria_id, db.transacoes.c.natureza,
-            db.subcategorias.c.nome,
+            db.subcategorias.c.nome, _sinal(),
         )
     )
     por_ano: dict[int, dict] = {}
@@ -586,10 +605,12 @@ def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
-            db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            db.transacoes
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
             .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
-        .where(*_base(ano=ano), db.categorias.c.natureza == "receita")
+        # a entrada ainda sem categoria conta no card; tem de contar aqui
+        .where(*_base(ano=ano), _lado_da_linha() == "receita")
         .group_by(
             db.transacoes.c.pessoa, db.transacoes.c.classificacao_origem,
             db.subcategorias.c.nome, db.categorias.c.nome, db.transacoes.c.competencia,
@@ -603,7 +624,7 @@ def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
         chave = (
             registro.pessoa,
             (registro.fonte or "—").strip() or "—",
-            registro.tipo or registro.categoria,
+            registro.tipo or registro.categoria or SEM_CATEGORIA,
         )
         alvo = linhas.setdefault(chave, {})
         alvo[mes] = alvo.get(mes, 0) + int(registro.total or 0)
@@ -862,7 +883,9 @@ def orcamento(
     """
     do_mes = resumo_do_mes or resumo(conn, competencia=competencia)
     if renda_base is None:
-        renda_base = do_mes["receitas"]
+        # a meta e percentual da renda que se repete: venda de bem nao afrouxa
+        # o orcamento do mes
+        renda_base = do_mes["renda_recorrente"]
     if gastos_do_mes is None:
         gastos_do_mes = por_categoria(conn, competencia=competencia)
     gastos = {linha["categoria_id"]: linha for linha in gastos_do_mes}
@@ -949,7 +972,7 @@ def _somar_cobertura(linhas) -> dict:
     total = classificado = com_sub = 0
     qtd_total = qtd_sem_categoria = qtd_sem_sub = 0
     for linha in linhas:
-        if linha.categoria == CATEGORIA_TRANSFERENCIA:
+        if linha.categoria in (CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA):
             continue
         valor, qtd = abs(int(linha.total or 0)), int(linha.qtd)
         total += valor
@@ -1296,6 +1319,9 @@ def contexto_para_ia(conn, competencia: str) -> str:
                 )
 
     maiores = lancamentos(conn, competencia=competencia, natureza="despesa", limite=500)
+    # pagamento de fatura e aporte nao sao gasto: fora da lista, como no card
+    maiores = [m for m in maiores
+               if m["categoria"] not in (CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA)]
     maiores = sorted(maiores, key=lambda linha: linha["valor_centavos"])[:10]
     if maiores:
         linhas += ["", "Dez maiores saídas do mês:"]
@@ -1355,7 +1381,14 @@ def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3) -
             db.transacoes.c.competencia,
             db.transacoes.c.valor_centavos,
         )
-        .where(*_base(ano=ano), db.transacoes.c.valor_centavos < 0)
+        .select_from(
+            db.transacoes.outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        # o pagamento da fatura se repete todo mes e nao e compromisso: e o
+        # mesmo dinheiro das compras; o aporte tampouco e gasto
+        .where(*_base(ano=ano), db.transacoes.c.valor_centavos < 0,
+               sa.or_(db.categorias.c.nome.is_(None),
+                      db.categorias.c.nome.not_in((CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA))))
     )
     por_chave: dict[str, dict] = {}
     for linha in conn.execute(consulta):

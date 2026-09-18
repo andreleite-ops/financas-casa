@@ -672,3 +672,58 @@ def test_corrigir_o_mes_da_fatura_recoloca_as_parcelas(engine):
     assert repo.mudar_mes_da_fatura(engine, resultado["upload_id"], "2026-08") == 1
     assert _resumo(engine, "2026-09")["despesas"] == 0
     assert _resumo(engine, "2026-08")["despesas"] == 100_304 + 20_000
+
+
+def test_detector_de_pagamento_de_cartao_nao_pega_cartorio_nem_corretora():
+    from core import cartoes
+
+    emissores = [{"id": 1, "nome": "Visa XP", "tokens": ["XP", "XP INVESTIMENTOS", "BANCO XP"]},
+                 {"id": 2, "nome": "Nubank", "tokens": ["NUBANK", "NU PAGAMENTOS"]}]
+
+    def r(texto):
+        return cartoes.reconhecer(texto, -100_000, "2026-08", emissores_cadastrados=emissores, totais={})
+
+    assert r("PAGTO ELETRON COBRANCA BANCO XP S A")
+    assert r("PAGTO ELETRON COBRANCA XP INVESTIMENTOS")
+    assert r("PAGAMENTO CARTAO NUBANK")
+    assert r("PAGTO FATURA CARTAO 1234")
+    assert r("PAGAMENTO CARTORIO 3 NOTAS") is None
+    assert r("PAGTO BOLETO FATURA VIVO") is None
+    assert r("PAGAMENTO DE TITULO FATURA ENEL") is None
+    assert r("ANUIDADE CARTAO DE CREDITO") is None
+    assert r("TED DES XP INVESTIMENTOS CCTVM") is None
+    assert r("PIX ENVIADO DES BTG PACTUAL INVESTIMENTOS") is None
+
+
+def test_soma_por_categoria_nao_usa_abs(engine):
+    """Estorno maior que o gasto abate, nao vira gasto de novo; e a matriz
+    mes a mes fecha com o card."""
+    from core import analytics
+
+    corrente = _conta(engine, "Banco teste", "corrente")
+    with engine.connect() as conn:
+        lazer = conn.execute(
+            sa.select(db.categorias.c.id).where(db.categorias.c.nome == "Lazer & Viagens")
+        ).scalar_one()
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 3), descricao="ZZZ ENTRADA SEM REGRA", valor_centavos=2_000_000),
+        dict(data=date(2026, 8, 4), descricao="ZZZ SAIDA SEM REGRA", valor_centavos=-2_000_000),
+        dict(data=date(2026, 8, 5), descricao="ZZZ GASTO", valor_centavos=-10_000),
+        dict(data=date(2026, 8, 6), descricao="ZZZ DEVOLUCAO", valor_centavos=50_000),
+    ])
+    with engine.begin() as conn:
+        conn.execute(sa.update(db.transacoes)
+                     .where(db.transacoes.c.descricao.in_(["ZZZ GASTO", "ZZZ DEVOLUCAO"]))
+                     .values(categoria_id=lazer, status="manual"))
+    with engine.connect() as conn:
+        resumo = analytics.resumo(conn, competencia="2026-08")
+        anual = analytics.comparativo_anual(conn)[0]
+        matriz = analytics.tabela_mes_a_mes(conn, 2026)
+        cats = {c["categoria"]: c["total"] for c in analytics.por_categoria(conn, competencia="2026-08")}
+    assert resumo["receitas"] == 2_000_000 and resumo["despesas"] == 2_000_000 - 40_000
+    assert anual["receitas"] == resumo["receitas"] and anual["despesas"] == resumo["despesas"]
+    linhas = {l["categoria"]: l["meses"]["08"] for l in matriz["linhas"]}
+    assert linhas["Lazer & Viagens"] == -40_000
+    assert linhas[analytics.SEM_CATEGORIA] == 2_000_000
+    assert cats["Lazer & Viagens"] == -40_000
+    assert sum(linhas.values()) == resumo["despesas"]

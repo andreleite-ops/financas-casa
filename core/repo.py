@@ -487,8 +487,11 @@ def importar(
             # por regra de texto. Vale por cima de qualquer classificacao que
             # nao seja transferencia: as compras ja sao despesa na fatura, e
             # este debito e so o dinheiro mudando de bolso.
+            # a memoria aprendida (o dono ja ensinou este texto) vale acima
+            # dos detectores, aqui como na varredura da subida
+            ensinado = achado.status == "auto_memoria" and categoria_id is not None
             if (conta["tipo"] == "corrente" and (lan.origem or origem) == "extrato"
-                    and categoria_id != transferencia_id and transferencia_id):
+                    and categoria_id != transferencia_id and transferencia_id and not ensinado):
                 propria = _transferencia_propria(lan.descricao, lan.valor_centavos)
                 if propria:
                     categoria_id = transferencia_id
@@ -501,7 +504,7 @@ def importar(
             # corrente, e sem esta porta o detector a tratava como banco e
             # julho perdia a fatura inteira.
             if (emissores and lan.valor_centavos < 0 and categoria_id != transferencia_id
-                    and (lan.origem or origem) == "extrato"):
+                    and (lan.origem or origem) == "extrato" and not ensinado):
                 motivo = cartoes.reconhecer(
                     lan.descricao, lan.valor_centavos, competencia_da_linha,
                     emissores_cadastrados=emissores, totais=totais_fatura,
@@ -1517,7 +1520,7 @@ def contar_cartao_pela_compra(engine) -> dict:
     return {"movidas": movidas, "conferidas": conferidas}
 
 
-MARCA_MES_DA_PLANILHA = "mês da planilha: a compra já está anotada nela"
+MARCA_MES_DA_PLANILHA = analytics.MARCA_MES_DA_PLANILHA
 
 
 def meses_so_da_planilha(conn) -> set[str]:

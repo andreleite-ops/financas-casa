@@ -23,7 +23,7 @@ from datetime import date, timedelta
 import sqlalchemy as sa
 
 from . import db
-from .analytics import CATEGORIA_TRANSFERENCIA
+from .analytics import CATEGORIA_TRANSFERENCIA, MARCA_MES_DA_PLANILHA
 from .texto import normalizar
 
 # como o emissor aparece no extrato de outro banco, alem do proprio nome
@@ -38,9 +38,21 @@ ALIASES = {
 # nomes curtos demais para serem procurados soltos numa descricao
 _MINIMO_DE_LETRAS = 4
 
+# "CART" so como palavra: CARTORIO nao e cartao. "FATURA" so ao lado de
+# cartao: a fatura da luz e da operadora e gasto
 _REDACAO = re.compile(
-    r"(PAG|PGTO|PAGTO|PAGAMENTO)\S*\s.*(CART|FATURA)|FATURA.*CART|CARTAO DE CREDITO",
+    r"(PAG|PGTO|PAGTO|PAGAMENTO)\S*\s.*\bCART(AO|OES)?\b|FATURA.*\bCART(AO|OES)?\b"
+    r"|\bCART(AO|OES)?\b.*FATURA|CARTAO DE CREDITO",
 )
+# o que nunca e pagamento de fatura, seja qual for o resto do texto
+_NAO_E_PAGAMENTO = re.compile(
+    r"\b(ANUIDADE|TARIFA|JUROS|MULTA|IOF|CARTORIO|APLIC|APLICACAO|RESGATE)\b"
+)
+# TED, PIX ou DOC para a corretora e aporte, nao pagamento de cartao. O
+# boleto ("PAGTO ELETRON COBRANCA") para o mesmo emissor continua sendo a
+# fatura: e assim que o banco escreve o pagamento do cartao do XP
+_TRANSFERENCIA = re.compile(r"\b(TED|PIX|DOC|TRANSF\w*)\b")
+_CORRETORA = re.compile(r"\b(INVEST|INVESTIMENTOS|CCTVM|DTVM|CORRETORA|ASSET)\b")
 
 # quanto o debito pode diferir do total da fatura e ainda ser o pagamento dela:
 # um real, ou meio por cento — juros de um dia de atraso, arredondamento
@@ -85,7 +97,11 @@ def totais_de_fatura(conn) -> dict[tuple[int, str], int]:
         )
         .where(
             db.contas.c.tipo == "cartao",
-            db.transacoes.c.ativo == sa.true(),
+            # a compra desligada por "mes da planilha" continua na fatura que
+            # o banco cobrou: sem ela o total encolhe e o pagamento nao e
+            # reconhecido — e vira despesa em cima das compras
+            sa.or_(db.transacoes.c.ativo == sa.true(),
+                   db.transacoes.c.observacao == MARCA_MES_DA_PLANILHA),
             sa.or_(db.categorias.c.nome.is_(None),
                    db.categorias.c.nome != CATEGORIA_TRANSFERENCIA),
         )
@@ -181,6 +197,13 @@ def reconhecer(
             folga = max(FOLGA_CENTAVOS, int(total * FOLGA_RELATIVA))
             if abs(total - pago) <= folga:
                 return f"pagamento da fatura {emissor['nome']} de {mes}"
+
+    # daqui em diante so o texto decide, e ha textos que nunca sao pagamento
+    # de fatura: anuidade, tarifa, cartorio, aporte na corretora
+    if _NAO_E_PAGAMENTO.search(texto):
+        return None
+    if _TRANSFERENCIA.search(texto) and _CORRETORA.search(texto):
+        return None
 
     # 2) cita o emissor de um cartao cadastrado — e nao e um PIX para alguem
     #    que por acaso tem conta la

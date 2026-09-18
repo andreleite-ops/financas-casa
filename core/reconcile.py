@@ -15,6 +15,7 @@ from datetime import date
 import sqlalchemy as sa
 
 from . import db
+from .analytics import CATEGORIA_POUPANCA, CATEGORIA_TRANSFERENCIA
 from .texto import chave_estabelecimento
 
 JANELA_DIAS = 5
@@ -148,12 +149,15 @@ def criticar(conn) -> dict:
         db.contas.c.nome.label("conta"),
     )
     juncao = db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+    com_categoria = juncao.outerjoin(
+        db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id
+    )
 
     faltantes = [
         dict(linha._mapping)
         for linha in conn.execute(
             sa.select(*colunas)
-            .select_from(juncao)
+            .select_from(com_categoria)
             .where(
                 escopo,
                 db.transacoes.c.origem == "extrato",
@@ -161,6 +165,13 @@ def criticar(conn) -> dict:
                 # a critica e de gastos: receita prevista tem o proprio
                 # pareamento e nunca pode estar ao alcance do "descartar"
                 db.transacoes.c.valor_centavos < 0,
+                # pagamento de fatura, transferencia e aporte nao sao gasto:
+                # parear a TED para a corretora com o "APORTE" da planilha
+                # aposentava a poupanca do mes
+                sa.or_(
+                    db.categorias.c.nome.is_(None),
+                    db.categorias.c.nome.not_in((CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA)),
+                ),
                 sa.or_(
                     db.transacoes.c.observacao.is_(None),
                     db.transacoes.c.observacao != "conferido com a planilha",
