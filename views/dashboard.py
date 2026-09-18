@@ -645,6 +645,23 @@ def render(engine, usuario: dict) -> None:
                         ]),
                         width="stretch", hide_index=True,
                     )
+                linhas = explodida.get("linhas") or []
+                if not do_ano and linhas:
+                    with st.expander(
+                        f"Os {len(linhas)} lançamento(s) de {escolhida} em "
+                        f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
+                    ):
+                        st.dataframe(
+                            pd.DataFrame([
+                                {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
+                                 "Descrição": l["descricao"][:48],
+                                 "Subcategoria": l["subcategoria"] or "—",
+                                 "Valor": fmt_brl(abs(l["valor_centavos"])),
+                                 "Arquivo": l["arquivo"] or l["origem"]}
+                                for l in sorted(linhas, key=lambda l: l["valor_centavos"])
+                            ]),
+                            width="stretch", hide_index=True,
+                        )
                 sem_detalhe = next((f for f in fatias if not f["detalhada"]), None)
                 if sem_detalhe:
                     aviso, botao = st.columns([3, 1.2])

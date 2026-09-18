@@ -816,11 +816,15 @@ def lancamentos(
             db.categorias.c.natureza,
             db.subcategorias.c.nome.label("subcategoria"),
             db.contas.c.nome.label("conta"),
+            db.transacoes.c.origem,
+            # de que arquivo a linha veio: e a resposta para "eu nao subi isso"
+            db.uploads.c.arquivo,
         )
         .select_from(
             db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
             .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
             .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
+            .outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id)
         )
         .where(*_base(competencia, ano, pessoa))
         .order_by(db.transacoes.c.data.desc(), db.transacoes.c.id.desc())

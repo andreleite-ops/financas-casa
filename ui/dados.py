@@ -307,6 +307,13 @@ def categoria_explodida(_engine, versao: int, categoria_id: int, ano: int,
                 **({"ano": ano} if competencia is None else {"competencia": competencia}),
                 pessoa=pessoa,
             ),
+            # no mes, a lista linha a linha: "que gasto e esse?" se responde
+            # olhando os lancamentos, com o arquivo de onde cada um veio
+            "linhas": (
+                analytics.lancamentos(conn, competencia=competencia, pessoa=pessoa,
+                                      categoria_id=categoria_id)
+                if competencia else []
+            ),
         }
 
 
