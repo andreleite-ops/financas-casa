@@ -1797,9 +1797,25 @@ def buscar_transacoes(conn, termo: str = "", limite: int = 100) -> list[dict]:
         .limit(limite)
     )
     if termo:
-        alvo = f"%{normalizar(termo)}%"
-        consulta = consulta.where(db.transacoes.c.descricao_norm.like(alvo))
+        centavos = _termo_em_centavos(termo)
+        if centavos is not None:
+            # "3351,65" ou "3.351,65": toda linha com esse valor, de qualquer
+            # origem — e o jeito de saber se a planilha tem o mesmo gasto que
+            # a fatura, quando a descricao digitada nao lembra a do banco
+            consulta = consulta.where(sa.func.abs(db.transacoes.c.valor_centavos) == centavos)
+        else:
+            alvo = f"%{normalizar(termo)}%"
+            consulta = consulta.where(db.transacoes.c.descricao_norm.like(alvo))
     return [dict(linha._mapping) for linha in conn.execute(consulta)]
+
+
+def _termo_em_centavos(termo: str) -> int | None:
+    """"3.351,65" -> 335165; "3351,65" -> 335165; "1500" -> 150000; texto -> None."""
+    limpo = termo.strip().replace("R$", "").replace(" ", "")
+    if not re.fullmatch(r"-?\d{1,3}(\.\d{3})*(,\d{1,2})?|-?\d+(,\d{1,2})?", limpo):
+        return None
+    limpo = limpo.replace(".", "").replace(",", ".").lstrip("-")
+    return round(float(limpo) * 100)
 
 
 # --------------------------------------------------------------------------

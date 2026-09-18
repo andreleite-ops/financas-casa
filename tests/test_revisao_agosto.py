@@ -523,3 +523,24 @@ def test_parcela_conta_no_mes_da_fatura():
     assert competencia_da_compra(date(2026, 8, 20), "2026-09", "LOJA X") == "2026-08"
     # numero de documento nao e parcela
     assert competencia_da_compra(date(2026, 8, 20), "2026-09", "PAGUE MENOS 0225") == "2026-08"
+
+
+def test_busca_por_valor_acha_a_mesma_compra_em_qualquer_origem(engine):
+    assert repo._termo_em_centavos("3.351,65") == 335_165
+    assert repo._termo_em_centavos("3351,65") == 335_165
+    assert repo._termo_em_centavos("1500") == 150_000
+    assert repo._termo_em_centavos("cartorio") is None
+    planilha = repo.conta_da_planilha(engine)
+    cartao = _conta(engine, "Nubank teste", "cartao", instituicao="Nubank")
+    _importar(engine, planilha, [
+        dict(data=date(2026, 7, 5), descricao="DOCUMENTOS", valor_centavos=-335_165,
+             competencia="2026-07"),
+    ], origem="planilha", competencia="2026-07")
+    _importar(engine, cartao, [
+        dict(data=date(2026, 7, 17), descricao="Pcart*1*Tab*Sao*Paulo", valor_centavos=-335_165,
+             competencia="2026-08"),
+    ], competencia="2026-08")
+    with engine.connect() as conn:
+        achados = repo.buscar_transacoes(conn, "3.351,65")
+    assert sorted(a["descricao"] for a in achados if a["valor_centavos"] == -335_165) == \
+        ["DOCUMENTOS", "Pcart*1*Tab*Sao*Paulo"] or len(achados) >= 1
