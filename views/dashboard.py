@@ -265,7 +265,12 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 width="stretch", hide_index=True,
             )
 
-        if previsto and realizado and encerrada:
+        # no mes em curso a planilha e previsao, e previsao vale ate o extrato
+        # chegar: nao ha "valendo juntos" para alarmar
+        em_curso = competencia >= date.today().strftime("%Y-%m")
+        if previsto and realizado and em_curso:
+            pass
+        elif previsto and realizado and encerrada:
             # o dono ja olhou e disse "fica como esta": informacao, nao alarme
             st.info(
                 f"Em {mes} valem {_reais(previsto)} da **planilha** ao lado de "
@@ -284,6 +289,8 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 "tem, com um botão para cada caso.",
                 icon="📚",
             )
+            # a conferencia pelo valor ja acontece na importacao; o que sobra
+            # se decide na Critica, que tem os botoes certos e o "fica como esta"
             st.dataframe(
                 pd.DataFrame([
                     {"Origem": i["origem"], "Conta": i["conta"],
@@ -292,17 +299,6 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 ]),
                 width="stretch", hide_index=True,
             )
-            if st.button(
-                f"Aposentar as linhas da planilha de {mes} que têm o mesmo valor no extrato",
-                key=f"aud_exatas_{competencia}",
-                help="Só as de valor igual no centavo: é o mesmo gasto escrito de outro "
-                     "jeito. As de valor diferente ficam para a Crítica, uma a uma.",
-            ):
-                total = reconcile.aposentar_pares_exatos(engine, usuario["nome"], competencia)
-                st.session_state["msg_auditoria"] = f"{total} linha(s) da planilha aposentadas."
-                st.rerun()
-            if recado := st.session_state.pop("msg_auditoria", None):
-                st.success(recado)
 
         if pagamentos:
             total = -sum(l["valor_centavos"] for l in pagamentos)
