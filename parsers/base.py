@@ -161,17 +161,27 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str,
     return lancamentos
 
 
-def inicio_do_ciclo(lancamentos: list[Lancamento]) -> date | None:
-    """O primeiro dia do ciclo da fatura: a data mais antiga de compra a vista.
+# um ciclo de fatura dura um mes; o que esta mais de 40 dias antes da ultima
+# compra do arquivo nao e compra do ciclo — e parcela, ou lancamento antigo,
+# datado de quando a compra original aconteceu
+DURACAO_MAXIMA_DO_CICLO = timedelta(days=40)
 
-    Parcela nao entra na conta — no XP ela vem datada da compra original,
-    meses atras, e faria o ciclo comecar em abril.
+
+def inicio_do_ciclo(lancamentos: list[Lancamento]) -> date | None:
+    """O primeiro dia do ciclo da fatura, tirado do proprio arquivo.
+
+    A fatura e uma janela de um mes que termina na ultima compra. A data
+    mais antiga dentro dessa janela e o inicio do ciclo. O que vem datado de
+    antes (a parcela que o XP imprime com a data da compra original, meses
+    atras) fica de fora da conta — e e justamente o que depois vai contar no
+    mes em que o ciclo comeca.
     """
-    datas = [
-        lan.data for lan in lancamentos
-        if lan.data and lan.valor_centavos < 0 and not e_parcela(lan.descricao)
-    ]
-    return min(datas) if datas else None
+    datas = [lan.data for lan in lancamentos if lan.data and lan.valor_centavos < 0]
+    if not datas:
+        return None
+    ultimo = max(datas)
+    no_ciclo = [d for d in datas if d >= ultimo - DURACAO_MAXIMA_DO_CICLO]
+    return min(no_ciclo)
 
 
 def e_parcela(descricao: str | None) -> bool:
@@ -196,17 +206,18 @@ def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str 
     de 17 a 31 de julho em agosto — e julho ja as tinha, item a item, na
     planilha — e as de 14 a 31 de agosto em setembro.
 
-    Parcela conta no ciclo da fatura que a cobra, em qualquer cartao. O que
-    muda entre cartoes e so a data impressa: o Nubank imprime o dia em que a
-    parcela entrou no ciclo (14/08, dentro dele) e ai a data serve; o XP
-    imprime a compra original (10/06, antes do ciclo) e ai vale o mes em que
-    o ciclo comeca. O ciclo sai do proprio arquivo: a primeira compra a
-    vista dele.
+    Parcela conta no ciclo da fatura que a cobra, em qualquer cartao — e
+    isso vale para toda linha datada de antes do ciclo, tenha ou nao a
+    palavra "parcela" (o XP nem a escreve). O que muda entre cartoes e so a
+    data impressa: o Nubank imprime o dia em que a parcela entrou no ciclo
+    (14/08, dentro dele) e ai a data serve; o XP imprime a compra original
+    (10/06, antes do ciclo) e ai vale o mes em que o ciclo comeca. O ciclo
+    sai do proprio arquivo.
 
-    Data muito longe do mes da fatura e lancamento fora do ciclo: vale o
-    mes da fatura.
+    Sem ciclo conhecido, data muito longe do mes da fatura e lancamento fora
+    do ciclo: vale o mes da fatura.
     """
-    if e_parcela(descricao) and inicio_do_ciclo and dia < inicio_do_ciclo:
+    if inicio_do_ciclo and dia < inicio_do_ciclo:
         return f"{inicio_do_ciclo.year:04d}-{inicio_do_ciclo.month:02d}"
     ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
     distancia = (dia.year - ano) * 12 + dia.month - mes

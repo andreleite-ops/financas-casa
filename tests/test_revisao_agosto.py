@@ -529,14 +529,16 @@ def test_parcela_conta_no_ciclo_da_fatura_em_qualquer_cartao():
     assert inicio_do_ciclo(nubank) == date(2026, 8, 14)
     assert [l.competencia for l in nubank] == ["2026-08", "2026-08", "2026-09", "2026-09"]
 
+    # o XP nem escreve "parcela": a linha datada de antes do ciclo e cobranca do ciclo
     xp = ajustar_ano_fatura([
-        Lancamento(date(2026, 6, 10), "PAGUE MENOS 0225 PARC 03/06", -100_304),
-        Lancamento(date(2026, 4, 7), "EINSTEIN MORUMBI PARC 05/10", -57_640),
+        Lancamento(date(2026, 6, 10), "PAGUE MENOS 0225", -100_304),
+        Lancamento(date(2026, 4, 7), "EINSTEIN MORUMBI", -57_640),
+        Lancamento(date(2026, 6, 1), "CARRERA NI VOL", -68_100),
         Lancamento(date(2026, 8, 2), "POSTO", -20_000),
         Lancamento(date(2026, 8, 30), "MERCADO", -30_000),
     ], "2026-09")
     assert inicio_do_ciclo(xp) == date(2026, 8, 2)
-    assert [l.competencia for l in xp] == ["2026-08", "2026-08", "2026-08", "2026-08"]
+    assert [l.competencia for l in xp] == ["2026-08"] * 5
 
     # sem ciclo conhecido, parcela de fora do ciclo vale o mes da fatura
     assert competencia_da_compra(date(2026, 6, 10), "2026-09", "LOJA PARC 03/06") == "2026-09"

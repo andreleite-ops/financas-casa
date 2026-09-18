@@ -1487,7 +1487,7 @@ def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | N
 
 # v4: a parcela conta no ciclo da fatura que a cobra, em qualquer cartao; a
 # marca nova faz a passagem rodar de novo sobre o que ja esta gravado
-CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v4"
+CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v5"
 
 
 def contar_cartao_pela_compra(engine) -> dict:
@@ -1549,7 +1549,7 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
     Devolve (quantas mudaram, meses que receberam linha). Com `upload_id`,
     so as linhas daquele arquivo.
     """
-    from parsers.base import competencia_da_compra, e_parcela
+    from parsers.base import DURACAO_MAXIMA_DO_CICLO, competencia_da_compra
 
     consulta = (
         sa.select(db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.competencia,
@@ -1566,13 +1566,16 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
     if upload_id is not None:
         consulta = consulta.where(db.transacoes.c.upload_id == upload_id)
     linhas = conn.execute(consulta).all()
-    # o ciclo de cada fatura sai das linhas dela: a primeira compra a vista
-    inicio_por_upload: dict[int | None, date] = {}
+    # o ciclo de cada fatura sai das linhas dela: a janela de um mes que
+    # termina na ultima compra (a mesma regra de parsers.base.inicio_do_ciclo)
+    datas_por_upload: dict[int | None, list[date]] = {}
     for linha in linhas:
-        if linha.valor_centavos < 0 and not e_parcela(linha.descricao):
-            atual = inicio_por_upload.get(linha.upload_id)
-            if atual is None or linha.data < atual:
-                inicio_por_upload[linha.upload_id] = linha.data
+        if linha.valor_centavos < 0:
+            datas_por_upload.setdefault(linha.upload_id, []).append(linha.data)
+    inicio_por_upload: dict[int | None, date] = {}
+    for chave, datas in datas_por_upload.items():
+        ultimo = max(datas)
+        inicio_por_upload[chave] = min(d for d in datas if d >= ultimo - DURACAO_MAXIMA_DO_CICLO)
     movidas, meses = 0, set()
     for linha in linhas:
         fatura = linha.mes_da_fatura or linha.competencia
