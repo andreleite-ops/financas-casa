@@ -544,3 +544,49 @@ def test_busca_por_valor_acha_a_mesma_compra_em_qualquer_origem(engine):
         achados = repo.buscar_transacoes(conn, "3.351,65")
     assert sorted(a["descricao"] for a in achados if a["valor_centavos"] == -335_165) == \
         ["DOCUMENTOS", "Pcart*1*Tab*Sao*Paulo"] or len(achados) >= 1
+
+
+def test_mes_so_da_planilha_nao_conta_compra_de_cartao(engine):
+    """Julho e da planilha (anotada a mao, sem extrato de banco): a compra de
+    17/07 que a fatura de agosto traz nao conta em julho; a linha da planilha
+    que o pareamento tinha aposentado volta; agosto, com extrato, segue."""
+    cartao = _conta(engine, "Nubank teste", "cartao", instituicao="Nubank")
+    banco = _conta(engine, "Bradesco teste", "corrente")
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 7, 15), descricao="FARMACIA", valor_centavos=-90_883,
+             competencia="2026-07"),
+        dict(data=date(2026, 7, 15), descricao="ADVOGADO", valor_centavos=-100_000,
+             competencia="2026-07"),
+        dict(data=date(2026, 8, 5), descricao="MERCADO", valor_centavos=-86_728,
+             competencia="2026-08"),
+    ], origem="planilha", competencia="2026-07")
+    _importar(engine, cartao, [
+        dict(data=date(2026, 7, 14), descricao="Drogaria Sao Paulo", valor_centavos=-90_883,
+             competencia="2026-07"),
+        dict(data=date(2026, 7, 17), descricao="Pcart Tab Sao Paulo", valor_centavos=-335_165,
+             competencia="2026-07"),
+        dict(data=date(2026, 8, 2), descricao="POSTO", valor_centavos=-20_000,
+             competencia="2026-08"),
+    ], competencia="2026-08")
+    _importar(engine, banco, [
+        dict(data=date(2026, 8, 7), descricao="COND EDIF", valor_centavos=-262_500),
+    ])
+    # a farmacia da planilha foi aposentada pela compra da fatura (mesmo valor, 1 dia)
+    assert _linha(engine, "FARMACIA").ativo is False
+
+    feito = repo.aplicar_meses_da_planilha(engine)
+    assert feito == {"retiradas": 2, "devolvidas": 0, "planilha_de_volta": 1}
+    assert _resumo(engine, "2026-07")["despesas"] == 90_883 + 100_000, "julho = planilha"
+    assert _resumo(engine, "2026-08")["despesas"] == 86_728 + 20_000 + 262_500
+    assert _linha(engine, "Pcart Tab Sao Paulo").observacao == repo.MARCA_MES_DA_PLANILHA
+    assert repo.aplicar_meses_da_planilha(engine) == {"retiradas": 0, "devolvidas": 0,
+                                                       "planilha_de_volta": 0}
+
+    # se um dia o extrato de julho entrar, a compra volta a contar
+    _importar(engine, banco, [
+        dict(data=date(2026, 7, 20), descricao="TARIFA", valor_centavos=-1_000),
+    ])
+    feito = repo.aplicar_meses_da_planilha(engine)
+    assert feito["devolvidas"] == 2
+    assert _linha(engine, "Pcart Tab Sao Paulo").ativo is True

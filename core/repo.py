@@ -1536,6 +1536,92 @@ def contar_cartao_pela_compra(engine) -> dict:
     return {"movidas": movidas, "conferidas": conferidas}
 
 
+MARCA_MES_DA_PLANILHA = "mês da planilha: a compra já está anotada nela"
+
+
+def meses_so_da_planilha(conn) -> set[str]:
+    """Os meses que tem planilha e nao tem extrato de conta corrente.
+
+    Ate julho a casa vive da planilha, anotada dia a dia; o primeiro extrato
+    de banco e o de agosto, e nenhum de julho vai entrar. Nesses meses a
+    planilha e a verdade inteira.
+    """
+    por_origem: dict[str, set[str]] = {"planilha": set(), "banco": set()}
+    linhas = conn.execute(
+        sa.select(db.transacoes.c.competencia, db.transacoes.c.origem, db.contas.c.tipo)
+        .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+        .distinct()
+    )
+    for linha in linhas:
+        if linha.origem == "planilha":
+            por_origem["planilha"].add(linha.competencia)
+        elif linha.origem == "extrato" and linha.tipo == "corrente":
+            por_origem["banco"].add(linha.competencia)
+    return por_origem["planilha"] - por_origem["banco"]
+
+
+def aplicar_meses_da_planilha(engine) -> dict:
+    """Num mes que e so da planilha, a compra de cartao datada nele nao conta.
+
+    A fatura de agosto traz compras de 17 a 31 de julho, e julho e da
+    planilha: o dono anotou o mes inteiro a mao, do jeito dele, e nao vai
+    importar extrato nenhum de julho. Contar a compra da fatura por cima da
+    anotacao dobrava o que ele anotou; tentar parear pelo valor aposentava
+    metade e deixava a outra metade dobrada. A regra fecha o assunto: mes
+    sem extrato de banco, vale a planilha; a compra de cartao datada nele
+    fica de fora, marcada, e volta sozinha se um dia o extrato daquele mes
+    entrar. Idempotente; roda na subida.
+    """
+    with engine.begin() as conn:
+        meses = meses_so_da_planilha(conn)
+        cartao = (
+            db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+        )
+        ids_cartao = [
+            l.id for l in conn.execute(
+                sa.select(db.transacoes.c.id).select_from(cartao)
+                .where(db.contas.c.tipo == "cartao", db.transacoes.c.origem == "extrato",
+                       db.transacoes.c.ativo == sa.true(),
+                       db.transacoes.c.competencia.in_(sorted(meses)) if meses else sa.false())
+            )
+        ]
+        retiradas = 0
+        if ids_cartao:
+            retiradas = conn.execute(
+                sa.update(db.transacoes).where(db.transacoes.c.id.in_(ids_cartao))
+                .values(ativo=False, observacao=MARCA_MES_DA_PLANILHA)
+            ).rowcount or 0
+        # o caminho de volta: o mes ganhou extrato, a compra volta a contar
+        devolvidas = conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.ativo == sa.false(),
+                   db.transacoes.c.observacao == MARCA_MES_DA_PLANILHA,
+                   db.transacoes.c.competencia.not_in(sorted(meses)) if meses else sa.true())
+            .values(ativo=True, observacao=None)
+        ).rowcount or 0
+        # e a planilha desses meses volta inteira: o que a conferencia pelo
+        # valor tinha aposentado contra uma compra que agora nao vale
+        planilha_de_volta = 0
+        if meses:
+            uploads_de_cartao = (
+                sa.select(db.uploads.c.id)
+                .select_from(db.uploads.join(db.contas, db.uploads.c.conta_id == db.contas.c.id))
+                .where(db.contas.c.tipo == "cartao")
+            )
+            planilha_de_volta = conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.origem == "planilha",
+                       db.transacoes.c.ativo == sa.false(),
+                       db.transacoes.c.competencia.in_(sorted(meses)),
+                       # so o que uma fatura de cartao aposentou: a compra que
+                       # a aposentou e a que deixa de contar
+                       db.transacoes.c.substituido_por.in_(uploads_de_cartao))
+                .values(ativo=True, substituido_por=None,
+                        observacao="devolvida: o mês é da planilha")
+            ).rowcount or 0
+    return {"retiradas": retiradas, "devolvidas": devolvidas, "planilha_de_volta": planilha_de_volta}
+
+
 def aposentar_previsoes_de_meses_fechados(engine) -> int:
     """Passa pelos meses fechados que ja tem extrato e aposenta a receita
     prevista da pessoa titular. Idempotente; roda na subida — e o que

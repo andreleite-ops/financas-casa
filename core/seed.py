@@ -221,6 +221,7 @@ def semear(engine=None, ano_metas: int | None = None) -> dict:
     repo.marcar_transferencias_proprias(engine)
     repo.devolver_descartes_da_conferencia(engine)
     repo.contar_cartao_pela_compra(engine)
+    repo.aplicar_meses_da_planilha(engine)
     repo.aposentar_previsoes_de_meses_fechados(engine)
     ano = ano_metas or date.today().year
     with engine.begin() as conn:
