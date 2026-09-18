@@ -590,3 +590,25 @@ def test_mes_so_da_planilha_nao_conta_compra_de_cartao(engine):
     feito = repo.aplicar_meses_da_planilha(engine)
     assert feito["devolvidas"] == 2
     assert _linha(engine, "Pcart Tab Sao Paulo").ativo is True
+
+
+def test_mes_em_curso_sem_extrato_nao_e_mes_da_planilha(engine):
+    """Setembro ainda nao tem extrato de banco, mas vem depois do primeiro
+    (agosto): e mes dos uploads, so que atrasado. As compras de setembro
+    ficam."""
+    cartao = _conta(engine, "Nubank teste", "cartao", instituicao="Nubank")
+    banco = _conta(engine, "Bradesco teste", "corrente")
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 9, 5), descricao="PREVISAO", valor_centavos=-23_220,
+             competencia="2026-09"),
+    ], origem="planilha", competencia="2026-09")
+    _importar(engine, banco, [
+        dict(data=date(2026, 8, 7), descricao="COND EDIF", valor_centavos=-262_500),
+    ])
+    _importar(engine, cartao, [
+        dict(data=date(2026, 9, 7), descricao="BOOKING", valor_centavos=-272_653,
+             competencia="2026-09"),
+    ], competencia="2026-09")
+    assert repo.aplicar_meses_da_planilha(engine)["retiradas"] == 0
+    assert _resumo(engine, "2026-09")["despesas"] == 23_220 + 272_653

@@ -1540,11 +1540,13 @@ MARCA_MES_DA_PLANILHA = "mês da planilha: a compra já está anotada nela"
 
 
 def meses_so_da_planilha(conn) -> set[str]:
-    """Os meses que tem planilha e nao tem extrato de conta corrente.
+    """Os meses de planilha anteriores ao primeiro extrato de conta corrente.
 
     Ate julho a casa vive da planilha, anotada dia a dia; o primeiro extrato
     de banco e o de agosto, e nenhum de julho vai entrar. Nesses meses a
-    planilha e a verdade inteira.
+    planilha e a verdade inteira. Depois do primeiro extrato, nao: o mes em
+    curso ainda sem extrato (setembro) e o mes seguinte antes do upload sao
+    meses dos uploads, so que atrasados.
     """
     por_origem: dict[str, set[str]] = {"planilha": set(), "banco": set()}
     linhas = conn.execute(
@@ -1557,7 +1559,10 @@ def meses_so_da_planilha(conn) -> set[str]:
             por_origem["planilha"].add(linha.competencia)
         elif linha.origem == "extrato" and linha.tipo == "corrente":
             por_origem["banco"].add(linha.competencia)
-    return por_origem["planilha"] - por_origem["banco"]
+    if not por_origem["banco"]:
+        return set()
+    primeiro_extrato = min(por_origem["banco"])
+    return {c for c in por_origem["planilha"] if c < primeiro_extrato}
 
 
 def aplicar_meses_da_planilha(engine) -> dict:
