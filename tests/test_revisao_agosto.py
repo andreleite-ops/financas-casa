@@ -612,3 +612,24 @@ def test_mes_em_curso_sem_extrato_nao_e_mes_da_planilha(engine):
     ], competencia="2026-09")
     assert repo.aplicar_meses_da_planilha(engine)["retiradas"] == 0
     assert _resumo(engine, "2026-09")["despesas"] == 23_220 + 272_653
+
+
+def test_mes_da_planilha_sai_da_critica(engine):
+    cartao = _conta(engine, "Nubank teste", "cartao", instituicao="Nubank")
+    banco = _conta(engine, "Bradesco teste", "corrente")
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 7, 5), descricao="LUZ", valor_centavos=-17_172, competencia="2026-07"),
+        dict(data=date(2026, 8, 5), descricao="PADARIA", valor_centavos=-7_071, competencia="2026-08"),
+    ], origem="planilha", competencia="2026-07")
+    _importar(engine, cartao, [
+        dict(data=date(2026, 7, 17), descricao="Pcart", valor_centavos=-335_165, competencia="2026-07"),
+    ], competencia="2026-08")
+    _importar(engine, banco, [
+        dict(data=date(2026, 8, 7), descricao="COND EDIF", valor_centavos=-262_500),
+    ])
+    repo.aplicar_meses_da_planilha(engine)
+    with engine.connect() as conn:
+        critica = reconcile.criticar(conn)
+    assert critica["periodos"] == 1
+    assert [i["descricao"] for i in critica["so_planilha"]] == ["PADARIA"]

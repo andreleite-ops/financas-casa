@@ -29,7 +29,13 @@ def _periodos_com_as_duas_origens(conn) -> set[str]:
     duas origens" para sempre. A ferramenta feita para pegar despesa dobrada
     nunca chegou a rodar — e as despesas de agosto dobraram sem ninguém ver.
     """
-    consulta = sa.select(db.transacoes.c.competencia, db.transacoes.c.origem).distinct()
+    # so o que esta valendo: a compra de cartao desligada por "mes da
+    # planilha" nao faz de julho um mes com extrato
+    consulta = (
+        sa.select(db.transacoes.c.competencia, db.transacoes.c.origem)
+        .where(db.transacoes.c.ativo == sa.true())
+        .distinct()
+    )
     por_origem: dict[str, set[str]] = {"planilha": set(), "extrato": set()}
     for linha in conn.execute(consulta):
         if linha.origem in por_origem:
