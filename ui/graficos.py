@@ -130,6 +130,10 @@ def rosca_categorias(dados: list[dict], limite: int = 5):
     """
     if not dados:
         return None
+    # categoria com estorno maior que o gasto fica negativa e nao tem fatia
+    dados = [d for d in dados if d["total"] > 0]
+    if not dados:
+        return None
     principais = dados[:limite]
     resto = sum(linha["total"] for linha in dados[limite:])
     total = sum(linha["total"] for linha in dados) or 1

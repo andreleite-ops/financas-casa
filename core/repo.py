@@ -2534,11 +2534,13 @@ def endireitar_faturas_gravadas(engine) -> list[dict]:
 
     # uma consulta decide quais faturas estao invertidas; so essas sao
     # reabertas. Antes era uma leitura por fatura em todo start
+    # linha de valor zero nao entra na proporcao, como em fatura_invertida
     positivos = sa.func.sum(sa.case((db.transacoes.c.valor_centavos > 0, 1), else_=0))
+    com_valor = sa.func.sum(sa.case((db.transacoes.c.valor_centavos != 0, 1), else_=0))
     with engine.connect() as conn:
         candidatos = conn.execute(
             sa.select(db.uploads.c.id, db.uploads.c.arquivo,
-                      positivos.label("positivos"), sa.func.count().label("total"))
+                      positivos.label("positivos"), com_valor.label("total"))
             .select_from(
                 db.uploads
                 .join(db.contas, db.uploads.c.conta_id == db.contas.c.id)
@@ -2550,7 +2552,7 @@ def endireitar_faturas_gravadas(engine) -> list[dict]:
         ).all()
     corrigidos = []
     for upload in candidatos:
-        if upload.total < MINIMO_PARA_DECIDIR:
+        if not upload.total or upload.total < MINIMO_PARA_DECIDIR:
             continue
         if upload.positivos / upload.total < PROPORCAO_DE_GASTO:
             continue

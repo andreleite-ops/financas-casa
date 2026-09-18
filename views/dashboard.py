@@ -15,7 +15,8 @@ from ui.tema import BOM, CRITICO, SERIE_DESPESA, SERIE_POUPANCA
 
 def _barra_categoria(item: dict, teto: int) -> str:
     nome, realizado, meta = item["categoria"], item["realizado"], item["meta"]
-    largura = (realizado / teto * 100) if teto else 0
+    # realizado negativo (estorno maior que o gasto) e barra vazia, nao invertida
+    largura = max(0, realizado / teto * 100) if teto and teto > 0 else 0
     posicao_meta = (meta / teto * 100) if teto and meta else None
     estourou = item["estourou"]
 

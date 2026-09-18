@@ -104,9 +104,8 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                 st.caption(
                     f"{realizados} já chegaram no extrato e estão riscados: o valor que vale "
                     "passou a ser o do extrato, e a linha aqui ficou só como histórico do que "
-                    "você tinha previsto. Se algum foi riscado por engano — um arquivo lido "
-                    "com o sinal trocado faz uma compra de cartão parecer a receita do mês —, "
-                    "**Voltar a valer** o traz de volta."
+                    "você tinha previsto. Se um extrato errado riscou uma previsão, desfazer "
+                    "esse upload no Histórico a devolve."
                 )
             for item in ja_lancados:
                 linha, botao = st.columns([5, 1])

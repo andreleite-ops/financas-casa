@@ -1260,6 +1260,10 @@ def _aba_historico(engine) -> None:
             if m2.button("Corrigir o mês da fatura", width="stretch",
                          key=f"btn_mes_fatura_{escolha['id']}"):
                 movidas = repo.mudar_mes_da_fatura(engine, escolha["id"], novo_mes)
+                # a mesma esteira que segue um upload de fatura: uma compra
+                # pode ter entrado ou saido de um mes da planilha
+                repo.aplicar_meses_da_planilha(engine)
+                repo.marcar_pagamentos_de_cartao(engine)
                 st.success(f"Mês da fatura: {novo_mes}. {movidas} lançamento(s) mudaram de mês.")
                 st.rerun()
         if c_apaga.button("Desfazer importação", type="secondary", width="stretch"):
