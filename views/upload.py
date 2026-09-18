@@ -1006,14 +1006,21 @@ def _aba_critica(engine, usuario: dict) -> None:
                 st.rerun()
         for item in critica["divergencias"]:
             planilha, extrato = item["planilha"], item["extrato"]
+            partes = item.get("extratos") or [extrato]
+            if len(partes) > 1:
+                lado_extrato = " + ".join(
+                    f"{p['data']:%d/%m} {fmt_brl(p['valor_centavos'])}" for p in partes
+                ) + f" (soma de {len(partes)} lançamentos do extrato)"
+            else:
+                lado_extrato = (f"{extrato['data']:%d/%m} · {fmt_brl(extrato['valor_centavos'])} "
+                                f"(diferença de {fmt_brl(abs(item['diferenca']))})")
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1.1])
                 c1.markdown(
                     f"**{planilha['descricao']}**<br>"
                     f"<span class='nota'>Planilha: {planilha['data']:%d/%m} · "
                     f"{fmt_brl(planilha['valor_centavos'])} &nbsp;|&nbsp; "
-                    f"Extrato: {extrato['data']:%d/%m} · {fmt_brl(extrato['valor_centavos'])} "
-                    f"(diferença de {fmt_brl(abs(item['diferenca']))})</span>",
+                    f"Extrato: {lado_extrato}</span>",
                     unsafe_allow_html=True,
                 )
                 b1, b2 = c2.columns(2)

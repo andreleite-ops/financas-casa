@@ -82,7 +82,7 @@ def encerrar_critica(engine, competencia: str, usuario: str) -> int:
             if item["planilha"]["competencia"] != competencia:
                 continue
             if item["diferenca"] == 0:
-                exatos.append((item["planilha"]["id"], item["extrato"]["id"]))
+                exatos.append((item["planilha"]["id"], [e["id"] for e in item["extratos"]]))
             else:
                 ids.append(item["planilha"]["id"])
         if ids:
@@ -220,12 +220,34 @@ def criticar(conn) -> dict:
                 {
                     "planilha": item,
                     "extrato": par,
+                    "extratos": [par],
                     "diferenca": par["valor_centavos"] - item["valor_centavos"],
                     "dias": (par["data"] - item["data"]).days,
                 }
             )
         else:
             so_planilha.append(item)
+
+    # a planilha anota "PENSAO 15.800" e o banco paga em dois PIX de 7.900:
+    # o mesmo dinheiro, que nenhum valor igual ao centavo reconhece. Soma de
+    # dois ou tres debitos do mes, para linhas grandes, e o terceiro jeito
+    ainda_so_planilha = []
+    for item in so_planilha:
+        partes = _soma_de_partes(item, faltantes, usados)
+        if partes:
+            usados.update(p["id"] for p in partes)
+            divergencias.append(
+                {
+                    "planilha": item,
+                    "extrato": partes[0],
+                    "extratos": partes,
+                    "diferenca": 0,
+                    "dias": (partes[0]["data"] - item["data"]).days,
+                }
+            )
+        else:
+            ainda_so_planilha.append(item)
+    so_planilha = ainda_so_planilha
 
     faltantes = [item for item in faltantes if item["id"] not in usados]
 
@@ -238,6 +260,41 @@ def criticar(conn) -> dict:
         "sem_conferencia": False,
         "encerradas": sorted(encerradas),
     }
+
+
+# a soma de partes so vale para linha grande, e cada parte tem de ser uma
+# fatia relevante: 145,00 = 100,00 + 45,00 de duas linhas sem relacao e
+# coincidencia facil; 15.800 = 7.900 + 7.900 no mesmo mes nao e
+MINIMO_PARA_SOMA = 100_000
+FRACAO_MINIMA_DA_PARTE = 0.10
+
+
+def _soma_de_partes(item: dict, faltantes: list[dict], usados: set[int]) -> list[dict] | None:
+    alvo = item["valor_centavos"]
+    if -alvo < MINIMO_PARA_SOMA:
+        return None
+    candidatos = [
+        f for f in faltantes
+        if f["id"] not in usados and f["competencia"] == item["competencia"]
+        and -f["valor_centavos"] >= -alvo * FRACAO_MINIMA_DA_PARTE
+        and -f["valor_centavos"] < -alvo
+    ]
+    candidatos.sort(key=lambda f: (f["data"], f["id"]))
+    por_valor: dict[int, list[dict]] = {}
+    for f in candidatos:
+        por_valor.setdefault(f["valor_centavos"], []).append(f)
+    # pares
+    for a in candidatos:
+        for b in por_valor.get(alvo - a["valor_centavos"], []):
+            if b["id"] != a["id"]:
+                return [a, b]
+    # trios
+    for i, a in enumerate(candidatos):
+        for b in candidatos[i + 1:]:
+            for c in por_valor.get(alvo - a["valor_centavos"] - b["valor_centavos"], []):
+                if c["id"] not in (a["id"], b["id"]):
+                    return [a, b, c]
+    return None
 
 
 def resolver_divergencia(engine, *, planilha_id: int, manter: str, usuario: str) -> None:
@@ -281,7 +338,8 @@ def aposentar_pares_exatos(engine, usuario: str, competencia: str | None = None)
     with engine.connect() as conn:
         critica = criticar(conn)
     pares = [
-        (item["planilha"]["id"], item["extrato"]["id"]) for item in critica["divergencias"]
+        (item["planilha"]["id"], [e["id"] for e in item["extratos"]])
+        for item in critica["divergencias"]
         if item["diferenca"] == 0
         and (competencia is None or item["planilha"]["competencia"] == competencia)
     ]
@@ -292,9 +350,9 @@ def aposentar_pares_exatos(engine, usuario: str, competencia: str | None = None)
     return len(pares)
 
 
-def _aposentar_pares(conn, pares: list[tuple[int, int]], usuario: str) -> None:
-    """Aposenta a linha da planilha de cada par (planilha_id, extrato_id)."""
-    extratos = [e for _, e in pares]
+def _aposentar_pares(conn, pares: list[tuple[int, list[int]]], usuario: str) -> None:
+    """Aposenta a linha da planilha de cada par (planilha_id, [extrato_ids])."""
+    extratos = [e for _, es in pares for e in es]
     # a linha da planilha aponta para o upload do extrato que a substituiu: e
     # por esse ponteiro que desfazer o upload a devolve ao mes. Uma consulta
     # para os uploads e um update por upload — cem pares no Supabase nao
@@ -307,8 +365,8 @@ def _aposentar_pares(conn, pares: list[tuple[int, int]], usuario: str) -> None:
         )
     }
     por_upload: dict[int | None, list[int]] = {}
-    for planilha_id, extrato_id in pares:
-        por_upload.setdefault(upload_por_extrato.get(extrato_id), []).append(planilha_id)
+    for planilha_id, extrato_ids in pares:
+        por_upload.setdefault(upload_por_extrato.get(extrato_ids[0]), []).append(planilha_id)
     for upload_id, ids in por_upload.items():
         conn.execute(
             sa.update(db.transacoes)

@@ -86,6 +86,9 @@ def previsto_e_realizado_despesa(por_origem: list[dict]) -> tuple[int, int]:
     return previsto, realizado
 
 
+_MARCADOR_DE_NOME = re.compile(r"\b(REMET|REM|DEST|DES|PIX TRANSF)\b")
+
+
 def transferencias_nao_marcadas(conn, competencia: str) -> list[dict]:
     """Saida numa conta da casa e entrada noutra, mesmo valor, ate tres dias.
 
@@ -94,9 +97,21 @@ def transferencias_nao_marcadas(conn, competencia: str) -> list[dict]:
     infla os dois totais pelo mesmo valor. So aparece aqui o par em que pelo
     menos um lado ainda nao esta em Transferencias.
     """
+    from .repo import contraparte_da_casa
+    from .texto import sem_acento
+
+    def para_terceiro(l) -> bool:
+        # o texto nomeia quem esta na outra ponta, e nao e ninguem da casa: um
+        # PIX de paciente e um PIX a uma clinica de 600 no mesmo dia nao sao
+        # transferencia entre as contas da casa. So os marcadores que de fato
+        # nomeiam a outra ponta contam; um "TED" seco pode ser so o historico
+        texto = sem_acento(l["descricao"]).upper()
+        nomeia = bool(_MARCADOR_DE_NOME.search(texto))
+        return nomeia and contraparte_da_casa(l["descricao"]) is None
+
     linhas = [l for l in _linhas_do_mes(conn, competencia) if l["origem"] == "extrato"]
-    saidas = [l for l in linhas if l["valor_centavos"] < 0]
-    entradas = [l for l in linhas if l["valor_centavos"] > 0]
+    saidas = [l for l in linhas if l["valor_centavos"] < 0 and not para_terceiro(l)]
+    entradas = [l for l in linhas if l["valor_centavos"] > 0 and not para_terceiro(l)]
     usadas: set[int] = set()
     pares = []
     for s in saidas:

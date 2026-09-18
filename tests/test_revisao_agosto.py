@@ -402,3 +402,50 @@ def test_fica_como_esta_nao_deixa_o_par_de_valor_igual_contar_duas_vezes(engine)
     assert _linha(engine, "JORNAL").ativo is False, "valor igual: é o mesmo gasto"
     assert _linha(engine, "PENSAO").ativo is True
     assert _resumo(engine, "2026-08")["despesas"] == 1_580_000 + 6_990
+
+
+def test_linha_da_planilha_igual_a_soma_de_dois_pix_e_o_mesmo_gasto(engine):
+    """"PENSAO 15.800" na planilha e dois PIX de 7.900 no banco."""
+    planilha = repo.conta_da_planilha(engine)
+    corrente = _conta(engine, "Banco teste", "corrente")
+    _importar(engine, planilha, [
+        dict(data=date(2026, 8, 5), descricao="PENSAO ALIMENTICIA", valor_centavos=-1_580_000,
+             competencia="2026-08"),
+        dict(data=date(2026, 8, 5), descricao="PADARIA", valor_centavos=-14_500,
+             competencia="2026-08"),
+    ], origem="planilha", competencia="2026-08")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 5), descricao="PIX ENVIADO DES: FILHO UM", valor_centavos=-790_000),
+        dict(data=date(2026, 8, 5), descricao="PIX ENVIADO DES: FILHA DOIS", valor_centavos=-790_000),
+        dict(data=date(2026, 8, 9), descricao="PADARIA DO ZE", valor_centavos=-10_000),
+        dict(data=date(2026, 8, 12), descricao="BANCA", valor_centavos=-4_500),
+    ])
+    with engine.connect() as conn:
+        critica = reconcile.criticar(conn)
+    somas = [d for d in critica["divergencias"] if len(d["extratos"]) > 1]
+    assert [d["planilha"]["descricao"] for d in somas] == ["PENSAO ALIMENTICIA"]
+    # 145,00 = 100,00 + 45,00 e coincidencia: linha pequena nao soma partes
+    assert [i["descricao"] for i in critica["so_planilha"]] == ["PADARIA"]
+
+    assert reconcile.aposentar_pares_exatos(engine, "andre", "2026-08") == 1
+    assert _linha(engine, "PENSAO ALIMENTICIA").ativo is False
+    assert _resumo(engine, "2026-08")["despesas"] == 1_580_000 + 14_500 + 14_500
+    with engine.connect() as conn:
+        critica = reconcile.criticar(conn)
+    assert critica["conferidos"] == 2
+
+
+def test_auditoria_nao_propoe_transferencia_entre_terceiros(engine):
+    itau = _conta(engine, "Itaú teste", "corrente", titular="Rô")
+    bradesco = _conta(engine, "Bradesco teste", "corrente", titular="André")
+    _importar(engine, itau, [
+        dict(data=date(2026, 8, 5), descricao="PIX TRANSF CLINICA X", valor_centavos=-60_000),
+        dict(data=date(2026, 8, 5), descricao="TED 102 0001 SEM NOME", valor_centavos=-25_000),
+    ])
+    _importar(engine, bradesco, [
+        dict(data=date(2026, 8, 5), descricao="PIX RECEBIDO REM: PACIENTE Y", valor_centavos=60_000),
+        dict(data=date(2026, 8, 6), descricao="TRANSFERENCIA RECEBIDA", valor_centavos=25_000),
+    ])
+    with engine.connect() as conn:
+        pares = auditoria.transferencias_nao_marcadas(conn, "2026-08")
+    assert [p["valor"] for p in pares] == [25_000], "600 de terceiro para terceiro não é da casa"
