@@ -65,9 +65,9 @@ def _de_onde_veio(composicao: list[dict], rotulo: str) -> None:
             f"{fmt_brl(previsto)} de receita **prevista** (lançada à mão ou vinda da "
             f"planilha) e {fmt_brl(realizado)} vinda de **extrato**, as duas valendo. O "
             "upload casa sozinho o que cai no mesmo mês com valor parecido; o que sobrou "
-            "aqui não casou. Se for o mesmo dinheiro, apague a previsão: a lançada à mão "
-            "está logo abaixo, com o botão **Apagar**; a da planilha, em **Classificação → "
-            "Reclassificar qualquer lançamento**, com o botão **Excluir**.",
+            "aqui não casou. Se for o mesmo dinheiro, desative a previsão: a lançada à mão "
+            "em **Upload → Lançar à mão**, com o botão **Apagar**; a da planilha, em "
+            "**Classificação → Reclassificar qualquer lançamento**, com **Desativar**.",
             icon="🚨",
         )
 
@@ -130,7 +130,9 @@ def render(engine, usuario: dict) -> None:
 
     _cartoes_por_pessoa(por_pessoa, total)
     _de_onde_veio(painel["composicao"], rotulo)
-    manual.formulario(engine, usuario, ano, "receita")
+    # o formulario de lancar a mao mora numa tela so (Upload → Lançar à mão);
+    # aqui ele era uma copia, com a lista e o Apagar duas vezes
+    st.caption("Para lançar uma receita à mão, use **Upload → ✍️ Lançar à mão**.")
 
     if not matriz["linhas"]:
         st.caption(

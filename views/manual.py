@@ -122,12 +122,9 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                     if veio else texto,
                     unsafe_allow_html=True,
                 )
-                if veio:
-                    if botao.button("Voltar a valer", key=f"volta_manual_{item['id']}",
-                                    help="Só se ele foi riscado por engano: voltando com o "
-                                         "lançamento do extrato no lugar, o mês conta duas vezes."):
-                        repo.reativar_transacao(engine, item["id"])
-                        st.rerun()
-                elif botao.button("Apagar", key=f"del_manual_{item['id']}"):
+                # o riscado nao tem botao: o extrato ja trouxe esse dinheiro, e
+                # "voltar a valer" so podia contar o mes duas vezes. Desfazer o
+                # upload do extrato e o que o devolve, com a checagem certa
+                if not veio and botao.button("Apagar", key=f"del_manual_{item['id']}"):
                     repo.excluir_transacao(engine, item["id"])
                     st.rerun()

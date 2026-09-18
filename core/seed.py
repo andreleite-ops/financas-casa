@@ -82,13 +82,18 @@ def _semear_contas(conn) -> None:
     conta, so o nome muda), cria o que falta, preenche a agencia de quem ainda
     nao tem. Rodar de novo nao mexe em nada.
     """
-    existentes = {linha.nome for linha in conn.execute(sa.select(db.contas.c.nome))}
+    cadastro = {
+        linha.nome: linha.identificador
+        for linha in conn.execute(sa.select(db.contas.c.nome, db.contas.c.identificador))
+    }
+    existentes = set(cadastro)
     for antigo, novo in RENOMEAR_CONTAS.items():
         if antigo in existentes and novo not in existentes:
             conn.execute(
                 sa.update(db.contas).where(db.contas.c.nome == antigo).values(nome=novo)
             )
             existentes = (existentes - {antigo}) | {novo}
+            cadastro[novo] = cadastro.pop(antigo)
     _inserir_em_lote(
         conn, db.contas,
         [
@@ -100,11 +105,14 @@ def _semear_contas(conn) -> None:
         ],
     )
     for nome, agencia in AGENCIA_DA_CONTA.items():
-        conn.execute(
-            sa.update(db.contas)
-            .where(db.contas.c.nome == nome, db.contas.c.identificador.is_(None))
-            .values(identificador=agencia)
-        )
+        # so quem ja existia sem agencia: o UPDATE vazio custava uma ida ao
+        # banco por conta em todo start
+        if nome in cadastro and cadastro[nome] is None:
+            conn.execute(
+                sa.update(db.contas)
+                .where(db.contas.c.nome == nome, db.contas.c.identificador.is_(None))
+                .values(identificador=agencia)
+            )
 
 
 def _semear_regras(conn) -> int:
@@ -211,18 +219,20 @@ def semear(engine=None, ano_metas: int | None = None) -> dict:
 
     engine = engine or db.get_engine()
     db.criar_schema(engine)
-    # fatura de cartao gravada com a compra positiva e corrigida aqui, na
-    # subida, sem depender de clique: a que entrou antes da trava existir, ou
-    # a que voltou ao erro por um clique a mais no reparo antigo
     from . import repo
-    repo.endireitar_faturas_gravadas(engine)
-    repo.desclassificar_receita_em_cartao(engine)
-    repo.marcar_pagamentos_de_cartao(engine)
-    repo.marcar_transferencias_proprias(engine)
-    repo.devolver_descartes_da_conferencia(engine)
-    repo.contar_cartao_pela_compra(engine)
-    repo.aplicar_meses_da_planilha(engine)
-    repo.aposentar_previsoes_de_meses_fechados(engine)
+    if repo.varreduras_pendentes(engine):
+        # fatura de cartao gravada com a compra positiva e corrigida aqui, na
+        # subida, sem depender de clique: a que entrou antes da trava existir,
+        # ou a que voltou ao erro por um clique a mais no reparo antigo
+        repo.endireitar_faturas_gravadas(engine)
+        repo.desclassificar_receita_em_cartao(engine)
+        repo.marcar_pagamentos_de_cartao(engine)
+        repo.marcar_transferencias_proprias(engine)
+        repo.devolver_descartes_da_conferencia(engine)
+        repo.contar_cartao_pela_compra(engine)
+        repo.aplicar_meses_da_planilha(engine)
+        repo.aposentar_previsoes_de_meses_fechados(engine)
+        repo.registrar_varreduras(engine)
     ano = ano_metas or date.today().year
     with engine.begin() as conn:
         _semear_categorias(conn)

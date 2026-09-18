@@ -236,17 +236,23 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
     dados_auditoria = dados.auditoria_do_mes(engine, dados.versao(), competencia)
     previsto, realizado = dados_auditoria["previsto"], dados_auditoria["realizado"]
     transferencias = dados_auditoria["transferencias"]
-    pagamentos = dados_auditoria["pagamentos_de_fatura"]
     duplicatas = dados_auditoria["duplicatas"]
     maiores = dados_auditoria.get("maiores") or []
     encerrada = dados_auditoria.get("critica_encerrada", False)
-    tem_problema = bool((previsto and realizado) or transferencias or pagamentos or duplicatas)
+    em_curso = competencia >= date.today().strftime("%Y-%m")
+    tem_problema = bool(
+        (previsto and realizado and not encerrada and not em_curso) or transferencias or duplicatas
+    )
     raio_x = dados_auditoria.get("raio_x") or {}
     if not tem_problema and not maiores and not raio_x.get("valendo"):
         return
 
     mes = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
-    with st.expander(f"🔎 Por que a despesa de {mes} está assim — auditoria", expanded=True):
+    # alarme so quando ha o que resolver; sem problema, o quadro e o raio-x do
+    # mes, fechado, para quem quiser abrir
+    titulo = (f"🔎 Por que a despesa de {mes} está assim — auditoria" if tem_problema
+              else f"🩻 Raio-X de {mes}: de onde vem cada real")
+    with st.expander(titulo, expanded=tem_problema):
         if maiores:
             st.markdown("**Os maiores gastos do mês — de onde vieram, e com o que casam**")
             st.caption(
@@ -267,7 +273,6 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
 
         # no mes em curso a planilha e previsao, e previsao vale ate o extrato
         # chegar: nao ha "valendo juntos" para alarmar
-        em_curso = competencia >= date.today().strftime("%Y-%m")
         if previsto and realizado and em_curso:
             pass
         elif previsto and realizado and encerrada:
@@ -300,36 +305,18 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 width="stretch", hide_index=True,
             )
 
-        if pagamentos:
-            total = -sum(l["valor_centavos"] for l in pagamentos)
-            st.warning(
-                f"**{len(pagamentos)} pagamento(s) de fatura contados como despesa** "
-                f"({_reais(total)}). As compras já são despesa na fatura; o pagamento é só "
-                "o dinheiro saindo para cobri-las.",
-                icon="💳",
-            )
-            st.dataframe(
-                pd.DataFrame([
-                    {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
-                     "Descrição": l["descricao"], "Valor": fmt_brl(-l["valor_centavos"])}
-                    for l in pagamentos
-                ]),
-                width="stretch", hide_index=True,
-            )
-            if st.button("Marcar como pagamento de fatura (transferência)",
-                         key=f"aud_fatura_{competencia}"):
-                repo.marcar_transferencia(
-                    engine, [l["id"] for l in pagamentos], usuario["nome"],
-                    subcategoria="Pagamento de Fatura",
-                )
-                st.rerun()
+        # o quadro "pagamento de fatura contado como despesa" saiu: o gravador
+        # e a subida ja reconhecem o pagamento, e o que sobrava na lista era
+        # justamente o que alguem classificou a mao — o botao so passava por
+        # cima disso
 
         if transferencias:
             total = sum(p["valor"] for p in transferencias)
-            st.warning(
-                f"**{len(transferencias)} transferência(s) entre contas da casa** "
-                f"({_reais(total)}): saída numa conta, entrada noutra, mesmo valor, até três "
-                "dias. Contadas como despesa de um lado e receita do outro.",
+            st.info(
+                f"**{len(transferencias)} par(es) com cara de transferência entre contas da "
+                f"casa** ({_reais(total)}): saída numa conta, entrada noutra, mesmo valor, "
+                "até três dias. É só uma pista: se for mesmo, classifique os dois lados "
+                "em **Classificação** como Transferências entre Contas.",
                 icon="🔁",
             )
             st.dataframe(
@@ -342,12 +329,6 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 ]),
                 width="stretch", hide_index=True,
             )
-            if st.button("Marcar os dois lados como transferência",
-                         key=f"aud_transf_{competencia}"):
-                ids = [p["saida"]["id"] for p in transferencias] + \
-                      [p["entrada"]["id"] for p in transferencias]
-                repo.marcar_transferencia(engine, ids, usuario["nome"])
-                st.rerun()
 
         if duplicatas:
             total = sum(abs(d["copia"]["valor_centavos"]) for d in duplicatas)
@@ -457,8 +438,13 @@ def render(engine, usuario: dict) -> None:
     # onde talvez só houvesse uma comparação torta.
     passado = analytics.mes_anterior(competencia)
     anterior = next((m for m in serie if m["competencia"] == passado), None)
+    # mes em curso: previsao da planilha mais cartao parcial. Comparar isso
+    # com um mes fechado e ler "-94% vs agosto" como se fosse economia
+    mes_em_curso = competencia >= date.today().strftime("%Y-%m")
 
     def variacao(chave: str) -> str | None:
+        if mes_em_curso:
+            return "mês em curso — parcial"
         if not anterior or not anterior[chave]:
             return None
         delta = (atual[chave] / anterior[chave] - 1) * 100
@@ -477,7 +463,7 @@ def render(engine, usuario: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    estouradas = [o for o in orcamento if o["estourou"]]
+    estouradas = [] if mes_em_curso else [o for o in orcamento if o["estourou"]]
     if estouradas:
         st.markdown(
             f"<p class='nota' style='color:{CRITICO};margin-top:-1rem'>"
@@ -498,11 +484,9 @@ def render(engine, usuario: dict) -> None:
             for item in suspeitas[:8]
         )
         st.error(
-            "**Dinheiro de cartão contado como receita.** Cartão não gera renda: o que "
-            "entra é compra, e o crédito que aparece é estorno ou pagamento da fatura. "
-            "Ou o arquivo foi lido ao contrário (Upload → Histórico → *Corrigir o sinal*), "
-            "ou um estorno foi classificado como receita (reclassifique em "
-            "**Classificação**).\n\n" + linhas,
+            "**Compra de cartão contada como receita.** Isso não deveria acontecer: a "
+            "subida corrige sozinha o arquivo lido ao contrário. Se este aviso aparecer, "
+            "me avise com o nome do cartão e do mês.\n\n" + linhas,
             icon="💳",
         )
 

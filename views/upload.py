@@ -214,10 +214,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
         sugestao = st.session_state.get(chave_estado) or tabular.sugerir_mapeamento(df.columns, df)
 
         st.markdown("#### Confira as colunas")
-        st.caption(
-            "O sistema tentou reconhecer sozinho. Ajuste o que estiver errado — "
-            "é o que permite ler qualquer banco novo sem mexer no código."
-        )
+        st.caption("O sistema tentou reconhecer sozinho. Ajuste o que estiver errado.")
         st.dataframe(df.head(5), width="stretch", hide_index=True)
 
         opcoes = ["— nenhuma —", *df.columns]
@@ -285,14 +282,10 @@ def _aba_enviar(engine, usuario: dict) -> None:
                     "vem negativo (estorno, pagamento da fatura) entra como crédito.",
                     icon="💳",
                 )
-            excecao = st.checkbox(
-                "Não é o caso deste arquivo: aqui a compra já vem negativa",
-                value=False,
-                key=f"{chave_estado}:excecao_sinal",
-                help="Só marque se a prévia abaixo mostrar as compras como ENTRADA mesmo "
-                     "depois do aviso acima. O normal numa fatura é não mexer aqui.",
-            )
-            inverter = positivo_e_gasto and not excecao
+            # sem caixa de excecao: o gravador vira qualquer lote de cartao
+            # quase todo positivo, com ou sem caixa, e a caixa so fazia a
+            # previa mostrar o que nao ia ser gravado
+            inverter = positivo_e_gasto
         elif tabular.positivo_e_gasto(df, mapa):
             # Conta corrente com um arquivo quase todo positivo. Prender a
             # proteção ao tipo da conta foi o erro que deixou a fatura passar
@@ -642,9 +635,9 @@ def _diagnostico_pdf(engine, conteudo: bytes, senha, competencia, conta) -> None
         st.markdown("**Texto cru do PDF, como o leitor recebe:**")
         st.code("\n".join(diag["amostra"]), language="text")
         st.caption(
-            "Para eu ensinar o leitor a ler este banco, copie daqui umas 10 linhas de "
-            "lançamento e o cabeçalho. **Troque os valores** antes de mandar — o "
-            "repositório é público."
+            "Se este banco ainda não é lido direito, é este texto que precisa ser "
+            "ensinado ao leitor. Ao pedir ajuda, troque os valores e os nomes antes de "
+            "mandar qualquer trecho."
         )
 
 
@@ -694,21 +687,9 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
             "entrou como crédito.",
             icon="💳",
         )
-    entradas = sum(1 for lan in lancamentos if lan.valor_centavos > 0)
-    if (not resumo.get("sinal_corrigido")
-            and entradas and entradas / len(lancamentos) >= tabular.PROPORCAO_DE_GASTO):
-        soma = sum(lan.valor_centavos for lan in lancamentos if lan.valor_centavos > 0)
-        st.error(
-            f"**{entradas} dos {len(lancamentos)} lançamentos entraram como ENTRADA**, "
-            f"somando {_reais(soma)} nas receitas de **{conta['nome']}**. Se este arquivo "
-            "era uma fatura de cartão ou uma lista de gastos, está invertido: desfaça agora "
-            "e envie de novo com o sinal certo.",
-            icon="🚨",
-        )
-        if st.button("Desfazer esta importação", type="primary", key="desfazer_recem"):
-            apagadas, devolvidas, retidas = repo.apagar_upload(engine, resumo["upload_id"])
-            st.success(f"{apagadas} lançamento(s) removido(s). Pode enviar de novo.")
-            st.stop()
+    # o alarme "entraram como ENTRADA" saiu: no cartao o gravador ja virou o
+    # lote, e na conta corrente a pergunta travante foi respondida antes de
+    # importar. Ele disparava justamente depois de "sao recebimentos"
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Importados", resumo["importados"])
@@ -794,6 +775,7 @@ def _aba_mapa(engine) -> None:
               if c['nome'] != repo.CONTA_PLANILHA]
     cobertura = dados.cobertura_de_uploads(engine, dados.versao(), tuple(competencias))
     mapa, mapa_planilha = cobertura["contas"], cobertura["planilha"]
+    meses_da_planilha = cobertura.get("meses_da_planilha") or set()
 
     if not contas:
         st.warning("Nenhuma conta cadastrada.")
@@ -827,7 +809,11 @@ def _aba_mapa(engine) -> None:
         celulas = []
         for competencia in competencias:
             celula = mapa.get((conta["id"], competencia))
-            if competencia == atual:
+            if competencia in meses_da_planilha:
+                # ate julho a planilha e a verdade inteira: nao falta arquivo,
+                # e a compra de cartao datada ali fica desligada de proposito
+                celulas.append("<td class='futuro'>planilha</td>")
+            elif competencia == atual:
                 # mês em curso: o extrato ainda nem fechou. O que já existe aqui
                 # é parcial por definição — um "✓ carregado" no mês de hoje
                 # dizia que setembro estava pronto com o mês pela metade
@@ -890,7 +876,7 @@ def _aba_mapa(engine) -> None:
         "<span class='nota'><b style='color:#14532D'>✓</b> carregado, com o número de "
         "lançamentos &nbsp;·&nbsp; <b>·</b> ainda não carregado &nbsp;·&nbsp; "
         "<b style='color:#9B1C1C'>!</b> importado, mas tudo caiu em duplicidade "
-        "&nbsp;·&nbsp; hachurado = mês em curso, ainda não fechou<br>"
+        "&nbsp;·&nbsp; hachurado = mês em curso, ou mês em que só a planilha vale<br>"
         "A planilha de carga inicial cobre todas as contas de uma vez, por isso fica "
         "numa linha só e não entra na conta do que falta.</span>",
         unsafe_allow_html=True,
@@ -934,11 +920,11 @@ def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:
             total = dedup.resolver_em_lote(conn, "exata", "excluir", usuario["nome"])
         st.success(f"{total} duplicata(s) excluída(s).")
         st.rerun()
-    if provaveis and b2.button(f"Manter as {len(provaveis)} prováveis (são gastos distintos)",
+    if provaveis and b2.button(f"Confirmar que as {len(provaveis)} prováveis são gastos distintos",
                                width="stretch"):
         with engine.begin() as conn:
             total = dedup.resolver_em_lote(conn, "provavel", "manter", usuario["nome"])
-        st.success(f"{total} lançamento(s) devolvido(s) aos relatórios.")
+        st.success(f"{total} lançamento(s) confirmados. Eles já contavam; agora saem da fila.")
         st.rerun()
 
     if provaveis:
@@ -1068,12 +1054,10 @@ def _aba_critica(engine, usuario: dict) -> None:
             "previstas ficam de fora de propósito: o extrato parcial não diz que o resto "
             "do mês não vai acontecer."
         )
-        if st.button(f"Descartar os {len(critica['so_planilha'])} que só estão na planilha"):
-            total = reconcile.descartar_da_planilha(
-                engine, [i["id"] for i in critica["so_planilha"]], usuario["nome"]
-            )
-            st.success(f"{total} lançamento(s) descartado(s).")
-            st.rerun()
+        # "Descartar os N" saiu: apagava em bloco o que so a planilha tem, que
+        # pela regra da casa e gasto em dinheiro ou de conta fora do sistema.
+        # Foi o botao que zerou um mes. Quem quiser tirar uma linha faz na
+        # Classificacao, uma a uma, desativando
 
     _encerrar_critica(engine, usuario, critica)
 
@@ -1256,21 +1240,9 @@ def _aba_historico(engine) -> None:
             format_func=lambda u: f"#{u['id']} · {u['arquivo']} ({u['importados']} lançamentos)",
         )
         st.caption("Apaga todos os lançamentos que entraram por esse arquivo. Não dá para desfazer.")
-        c_apaga, c_vira = st.columns(2)
-        # o reparo para a fatura que ja esta no banco com o sinal trocado: nao
-        # perde classificacao, nao pede reimportacao, e e idempotente — clicar
-        # de novo nao desfaz (a versao que desfazia foi acionada duas vezes e
-        # devolveu a fatura ao erro)
-        if c_vira.button("Corrigir o sinal desta importação", width="stretch",
-                         help="Só age se for fatura de cartão gravada com a compra positiva. "
-                              "Clicar de novo não desfaz nada."):
-            corrigidos = repo.endireitar_upload(engine, escolha["id"])
-            if corrigidos:
-                st.success(f"{corrigidos} lançamento(s) corrigidos: compra agora é despesa.")
-                st.rerun()
-            else:
-                st.info("Nada a corrigir: este arquivo já está com o sinal certo, ou não é "
-                        "fatura de cartão.")
+        c_apaga, _ = st.columns(2)
+        # "Corrigir o sinal" saiu daqui: a subida e o gravador ja endireitam a
+        # fatura invertida sozinhos
         if escolha.get("competencia") and escolha["origem"] == "extrato":
             # a fatura do XP paga em setembro e inteira de agosto: enviada como
             # setembro, as parcelas dela caem no mes errado. Aqui se corrige
@@ -1281,9 +1253,9 @@ def _aba_historico(engine) -> None:
                 index=(_competencias_sugeridas().index(escolha["competencia"])
                        if escolha["competencia"] in _competencias_sugeridas() else MESES_A_FRENTE),
                 key=f"mes_fatura_{escolha['id']}",
-                help="Para cartão: o mês em que a fatura fechou (XP: o mês das compras; "
-                     "Nubank: o mês do vencimento). Trocar aqui recoloca as parcelas no "
-                     "mês certo.",
+                help="O mês em que a fatura vence. Cada compra conta na data dela, e a "
+                     "parcela no ciclo da fatura; este mês só decide o ano das datas e o "
+                     "mapa de uploads. Raramente muda alguma linha de mês.",
             )
             if m2.button("Corrigir o mês da fatura", width="stretch",
                          key=f"btn_mes_fatura_{escolha['id']}"):
@@ -1303,8 +1275,7 @@ def _aba_historico(engine) -> None:
                 st.warning(
                     f"{retidas} previsão(ões) que este arquivo tinha aposentado **continuam "
                     "desligadas**: o dinheiro delas já entrou por um extrato depois. Religar "
-                    "aqui faria o mês contar duas vezes. Se você discordar, o botão **Voltar "
-                    "a valer** está em *Lançar à mão*.",
+                    "faria o mês contar duas vezes.",
                     icon="🔁",
                 )
             st.rerun()
@@ -1314,26 +1285,39 @@ def render(engine, usuario: dict) -> None:
     fila_dup = dados.duplicidades(engine, dados.versao())
     pendentes_dup = len(fila_dup)
 
-    abas = st.tabs([
-        "📤 Enviar arquivo",
-        "🗓️ O que falta carregar",
-        f"🔁 Duplicidades ({pendentes_dup})" if pendentes_dup else "🔁 Duplicidades",
-        "🔍 Crítica planilha × extratos",
-        "✍️ Lançar à mão",
-        "🏦 Contas e cartões",
-        "🗂️ Histórico",
-    ])
-    with abas[0]:
+    # Secoes em vez de abas, como na Classificacao: so a secao aberta le o
+    # banco e desenha. Com abas, as sete rodavam em todo rerun — a Critica
+    # montava suas tabelas enquanto alguem so escolhia um arquivo na primeira
+    SECOES = {
+        "📤 Enviar arquivo": "enviar",
+        "🗓️ O que falta carregar": "mapa",
+        (f"🔁 Duplicidades ({pendentes_dup})" if pendentes_dup else "🔁 Duplicidades"): "dup",
+        "🔍 Crítica planilha × extratos": "critica",
+        "✍️ Lançar à mão": "manual",
+        "🏦 Contas e cartões": "contas",
+        "🗂️ Histórico": "historico",
+    }
+    if st.session_state.get("secao_upload") not in SECOES.values():
+        st.session_state["secao_upload"] = "enviar"
+    rotulo_atual = next(r for r, k in SECOES.items() if k == st.session_state["secao_upload"])
+    escolhida = st.segmented_control(
+        "Seção", list(SECOES), default=rotulo_atual,
+        key="secao_upload_rotulo", label_visibility="collapsed",
+    )
+    if escolhida:
+        st.session_state["secao_upload"] = SECOES[escolhida]
+    secao = st.session_state["secao_upload"]
+    if secao == "enviar":
         _aba_enviar(engine, usuario)
-    with abas[1]:
+    elif secao == "mapa":
         _aba_mapa(engine)
-    with abas[2]:
+    elif secao == "dup":
         _aba_duplicidades(engine, usuario, fila_dup)
-    with abas[3]:
+    elif secao == "critica":
         _aba_critica(engine, usuario)
-    with abas[4]:
+    elif secao == "manual":
         _aba_manual(engine, usuario)
-    with abas[5]:
+    elif secao == "contas":
         _aba_contas(engine)
-    with abas[6]:
+    else:
         _aba_historico(engine)

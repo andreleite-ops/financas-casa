@@ -1228,6 +1228,32 @@ def _gravar_config(conn, chave: str, valor: str) -> None:
         conn.execute(sa.update(db.config).where(db.config.c.chave == chave).values(valor=valor))
 
 
+# Muda quando uma regra de varredura muda. A subida so roda a cadeia de
+# varreduras quando esta versao ou o conjunto de uploads mudou: a cadeia e
+# idempotente, mas custava uma centena de idas ao banco a cada start, e cada
+# publicacao e um start
+VERSAO_DAS_VARREDURAS = "2026-09-18.1"
+_CHAVE_VARREDURAS = "varreduras"
+
+
+def _assinatura_das_varreduras(conn) -> str:
+    maior, quantos = conn.execute(
+        sa.select(sa.func.coalesce(sa.func.max(db.uploads.c.id), 0), sa.func.count())
+        .select_from(db.uploads)
+    ).one()
+    return f"{VERSAO_DAS_VARREDURAS}|{maior}|{quantos}"
+
+
+def varreduras_pendentes(engine) -> bool:
+    with engine.connect() as conn:
+        return _config(conn, _CHAVE_VARREDURAS) != _assinatura_das_varreduras(conn)
+
+
+def registrar_varreduras(engine) -> None:
+    with engine.begin() as conn:
+        _gravar_config(conn, _CHAVE_VARREDURAS, _assinatura_das_varreduras(conn))
+
+
 DEVOLUCAO_DA_CONFERENCIA = "conferencia_devolvida_2026_09"
 
 
@@ -1400,16 +1426,21 @@ def marcar_transferencias_proprias(engine) -> int:
                 _nao_foi_a_mao(),
             )
         ).all()
-        marcados = 0
+        subcategorias: dict[str, int | None] = {}
+        por_destino: dict[tuple[str, str], list[int]] = {}
         for linha in candidatos:
             achado = _transferencia_propria(linha.descricao, linha.valor_centavos)
             if not achado:
                 continue
-            subcategoria, motivo = achado
+            por_destino.setdefault(achado, []).append(linha.id)
+        # um UPDATE por (subcategoria, motivo), nao um por linha
+        for (subcategoria, motivo), ids in por_destino.items():
+            if subcategoria not in subcategorias:
+                subcategorias[subcategoria] = _id_da_subcategoria(conn, transferencia_id, subcategoria)
             conn.execute(
-                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                sa.update(db.transacoes).where(db.transacoes.c.id.in_(ids))
                 .values(categoria_id=transferencia_id,
-                        subcategoria_id=_id_da_subcategoria(conn, transferencia_id, subcategoria),
+                        subcategoria_id=subcategorias[subcategoria],
                         status="auto_regra", confianca=0.95,
                         # a marca da conferencia com a planilha e o que a
                         # critica conta; o motivo nao pode apaga-la
@@ -1418,8 +1449,7 @@ def marcar_transferencias_proprias(engine) -> int:
                              db.transacoes.c.observacao),
                             else_=motivo))
             )
-            marcados += 1
-    return marcados
+    return sum(len(ids) for ids in por_destino.values())
 
 
 def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | None,
@@ -1582,7 +1612,7 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
     for chave, datas in datas_por_upload.items():
         ultimo = max(datas)
         inicio_por_upload[chave] = min(d for d in datas if d >= ultimo - DURACAO_MAXIMA_DO_CICLO)
-    movidas, meses = 0, set()
+    por_mes: dict[str, list[int]] = {}
     for linha in linhas:
         fatura = linha.mes_da_fatura or linha.competencia
         nova = competencia_da_compra(
@@ -1590,13 +1620,13 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
             inicio_do_ciclo=inicio_por_upload.get(linha.upload_id),
         )
         if nova != linha.competencia:
-            conn.execute(
-                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
-                .values(competencia=nova)
-            )
-            movidas += 1
-            meses.add(nova)
-    return movidas, meses
+            por_mes.setdefault(nova, []).append(linha.id)
+    # um UPDATE por mes de destino, nao um por linha
+    for nova, ids in por_mes.items():
+        conn.execute(
+            sa.update(db.transacoes).where(db.transacoes.c.id.in_(ids)).values(competencia=nova)
+        )
+    return sum(len(ids) for ids in por_mes.values()), set(por_mes)
 
 
 def mudar_mes_da_fatura(engine, upload_id: int, competencia: str) -> int:
@@ -1680,23 +1710,60 @@ def aposentar_previsoes_de_meses_fechados(engine) -> int:
     conserta o que entrou antes desta regra existir."""
     em_curso = date.today().strftime("%Y-%m")
     with engine.begin() as conn:
+        transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
+        # uma consulta: por (conta, mes fechado) o upload mais recente e o que
+        # entrou de credito fora transferencia. Era conta_por_id + tres
+        # consultas por par, em todo start
+        entrou = sa.func.sum(sa.case(
+            (sa.and_(db.transacoes.c.valor_centavos > 0,
+                     sa.or_(db.transacoes.c.categoria_id.is_(None),
+                            db.transacoes.c.categoria_id != transferencia_id)),
+             db.transacoes.c.valor_centavos), else_=0))
         cobertos = conn.execute(
-            sa.select(db.transacoes.c.conta_id, db.transacoes.c.competencia,
-                      sa.func.max(db.transacoes.c.upload_id).label("upload_id"))
+            sa.select(db.transacoes.c.conta_id, db.contas.c.nome, db.contas.c.titular,
+                      db.transacoes.c.competencia,
+                      sa.func.max(db.transacoes.c.upload_id).label("upload_id"),
+                      entrou.label("entrou"))
             .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
             .where(db.contas.c.tipo == "corrente",
+                   db.contas.c.titular.in_(("André", "Rô")),
                    db.transacoes.c.origem == "extrato",
+                   db.transacoes.c.ativo == sa.true(),
                    db.transacoes.c.competencia < em_curso)
-            .group_by(db.transacoes.c.conta_id, db.transacoes.c.competencia)
+            .group_by(db.transacoes.c.conta_id, db.contas.c.nome, db.contas.c.titular,
+                      db.transacoes.c.competencia)
         ).all()
+        cobertos = [c for c in cobertos if (c.entrou or 0) > 0]
+        if not cobertos:
+            return 0
+        meses = sorted({c.competencia for c in cobertos})
+        previstas = conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.valor_centavos,
+                      db.transacoes.c.pessoa, db.transacoes.c.competencia)
+            .where(db.transacoes.c.origem == "planilha",
+                   db.transacoes.c.ativo == sa.true(),
+                   db.transacoes.c.valor_centavos > 0,
+                   sa.or_(db.transacoes.c.natureza.is_(None),
+                          db.transacoes.c.natureza != "despesa"),
+                   db.transacoes.c.pessoa.in_(("André", "Rô")),
+                   db.transacoes.c.competencia.in_(meses))
+        ).all()
+        if not previstas:
+            return 0
         total = 0
-        for linha in cobertos:
-            conta = conta_por_id(conn, linha.conta_id)
-            if conta is None:
+        for c in cobertos:
+            ids = [p.id for p in previstas
+                   if p.pessoa == c.titular and p.competencia == c.competencia
+                   and c.entrou * 2 >= p.valor_centavos]
+            if not ids:
                 continue
-            total += _aposentar_previsoes_do_mes_fechado(
-                conn, conta=conta, upload_id=linha.upload_id, competencias={linha.competencia},
-            )
+            total += conn.execute(
+                sa.update(db.transacoes).where(db.transacoes.c.id.in_(ids))
+                .values(ativo=False, substituido_por=c.upload_id,
+                        observacao=f"previsão realizada: o extrato de {c.nome} do mês "
+                                   "está no sistema")
+            ).rowcount or 0
+            previstas = [p for p in previstas if p.id not in ids]
     return total
 
 
@@ -1733,22 +1800,26 @@ def marcar_pagamentos_de_cartao(engine) -> int:
                 _nao_foi_a_mao(),
             )
         ).all()
-        marcados = 0
+        por_motivo: dict[str, list[int]] = {}
         for linha in candidatos:
             motivo = cartoes.reconhecer(
                 linha.descricao, linha.valor_centavos, linha.competencia,
                 emissores_cadastrados=emissores, totais=totais,
                 data=linha.data, recebidos=recebidos,
             )
-            if not motivo:
-                continue
+            if motivo:
+                por_motivo.setdefault(motivo, []).append(linha.id)
+        for motivo, ids in por_motivo.items():
             conn.execute(
-                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                sa.update(db.transacoes).where(db.transacoes.c.id.in_(ids))
                 .values(categoria_id=transferencia_id, subcategoria_id=pagamento_id,
-                        status="auto_regra", confianca=0.95, observacao=motivo)
+                        status="auto_regra", confianca=0.95,
+                        observacao=sa.case(
+                            (db.transacoes.c.observacao == "conferido com a planilha",
+                             db.transacoes.c.observacao),
+                            else_=motivo))
             )
-            marcados += 1
-    return marcados
+    return sum(len(ids) for ids in por_motivo.values())
 
 
 def marcar_transferencia(engine, ids: list[int], usuario: str,
@@ -2459,15 +2530,30 @@ def endireitar_faturas_gravadas(engine) -> list[dict]:
     app. Como `endireitar_upload` so age no que esta invertido, rodar a cada
     inicializacao nao custa nada quando esta tudo certo.
     """
+    from parsers.base import MINIMO_PARA_DECIDIR, PROPORCAO_DE_GASTO
+
+    # uma consulta decide quais faturas estao invertidas; so essas sao
+    # reabertas. Antes era uma leitura por fatura em todo start
+    positivos = sa.func.sum(sa.case((db.transacoes.c.valor_centavos > 0, 1), else_=0))
     with engine.connect() as conn:
-        uploads = conn.execute(
-            sa.select(db.uploads.c.id, db.uploads.c.arquivo)
-            .select_from(db.uploads.join(db.contas, db.uploads.c.conta_id == db.contas.c.id))
+        candidatos = conn.execute(
+            sa.select(db.uploads.c.id, db.uploads.c.arquivo,
+                      positivos.label("positivos"), sa.func.count().label("total"))
+            .select_from(
+                db.uploads
+                .join(db.contas, db.uploads.c.conta_id == db.contas.c.id)
+                .join(db.transacoes, db.transacoes.c.upload_id == db.uploads.c.id)
+            )
             .where(db.contas.c.tipo == "cartao")
+            .group_by(db.uploads.c.id, db.uploads.c.arquivo)
             .order_by(db.uploads.c.id)
         ).all()
     corrigidos = []
-    for upload in uploads:
+    for upload in candidatos:
+        if upload.total < MINIMO_PARA_DECIDIR:
+            continue
+        if upload.positivos / upload.total < PROPORCAO_DE_GASTO:
+            continue
         linhas = endireitar_upload(engine, upload.id)
         if linhas:
             corrigidos.append({"upload_id": upload.id, "arquivo": upload.arquivo, "linhas": linhas})

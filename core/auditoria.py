@@ -62,14 +62,24 @@ def _linhas_do_mes(conn, competencia: str) -> list[dict]:
     ]
 
 
-def despesas_por_origem(conn, competencia: str) -> list[dict]:
+def _dados_de_cartao(conn) -> tuple[list, dict, list]:
+    """(emissores, totais de fatura, pagamentos recebidos), carregados uma vez."""
+    from . import cartoes
+
+    emissores = cartoes.emissores(conn)
+    if not emissores:
+        return [], {}, []
+    return emissores, cartoes.totais_de_fatura(conn), cartoes.pagamentos_recebidos(conn)
+
+
+def despesas_por_origem(conn, competencia: str, linhas=None) -> list[dict]:
     """Quanto da despesa do mes veio de cada origem, por conta.
 
     Planilha e extrato valendo juntas no mesmo mes e a assinatura de gasto
     contado duas vezes — a mesma da renda, do outro lado.
     """
     acumulado: dict[tuple[str, str], dict] = {}
-    for l in _linhas_do_mes(conn, competencia):
+    for l in (linhas if linhas is not None else _linhas_do_mes(conn, competencia)):
         if l["lado"] != "despesa" or l["categoria"] == CATEGORIA_TRANSFERENCIA:
             continue
         chave = (l["origem"], l["conta"])
@@ -89,7 +99,7 @@ def previsto_e_realizado_despesa(por_origem: list[dict]) -> tuple[int, int]:
 _MARCADOR_DE_NOME = re.compile(r"\b(REMET|REM|DEST|DES|PIX TRANSF)\b")
 
 
-def transferencias_nao_marcadas(conn, competencia: str) -> list[dict]:
+def transferencias_nao_marcadas(conn, competencia: str, linhas=None) -> list[dict]:
     """Saida numa conta da casa e entrada noutra, mesmo valor, ate tres dias.
 
     E dinheiro mudando de bolso: a Ro cobrindo a conta do Andre, a 8839
@@ -109,7 +119,10 @@ def transferencias_nao_marcadas(conn, competencia: str) -> list[dict]:
         nomeia = bool(_MARCADOR_DE_NOME.search(texto))
         return nomeia and contraparte_da_casa(l["descricao"]) is None
 
-    linhas = [l for l in _linhas_do_mes(conn, competencia) if l["origem"] == "extrato"]
+    todas = linhas if linhas is not None else _linhas_do_mes(conn, competencia)
+    # so conta corrente: estorno no cartao com o mesmo valor de um debito no
+    # banco nao e dinheiro mudando de bolso
+    linhas = [l for l in todas if l["origem"] == "extrato" and l["tipo_conta"] == "corrente"]
     saidas = [l for l in linhas if l["valor_centavos"] < 0 and not para_terceiro(l)]
     entradas = [l for l in linhas if l["valor_centavos"] > 0 and not para_terceiro(l)]
     usadas: set[int] = set()
@@ -132,7 +145,7 @@ def transferencias_nao_marcadas(conn, competencia: str) -> list[dict]:
     return pares
 
 
-def pagamentos_de_fatura_soltos(conn, competencia: str) -> list[dict]:
+def pagamentos_de_fatura_soltos(conn, competencia: str, linhas=None, cartao=None) -> list[dict]:
     """Debito de conta corrente que e pagamento de cartao e nao esta marcado.
 
     As compras ja sao despesa na fatura; o pagamento e so o dinheiro saindo
@@ -140,11 +153,9 @@ def pagamentos_de_fatura_soltos(conn, competencia: str) -> list[dict]:
     """
     from . import cartoes
 
-    emissores = cartoes.emissores(conn)
-    totais = cartoes.totais_de_fatura(conn) if emissores else {}
-    recebidos = cartoes.pagamentos_recebidos(conn) if emissores else []
+    emissores, totais, recebidos = cartao or _dados_de_cartao(conn)
     achados = []
-    for l in _linhas_do_mes(conn, competencia):
+    for l in (linhas if linhas is not None else _linhas_do_mes(conn, competencia)):
         if (l["origem"] != "extrato" or l["tipo_conta"] != "corrente"
                 or l["valor_centavos"] >= 0 or l["categoria"] == CATEGORIA_TRANSFERENCIA):
             continue
@@ -158,7 +169,7 @@ def pagamentos_de_fatura_soltos(conn, competencia: str) -> list[dict]:
     return achados
 
 
-def duplicatas_internas(conn, competencia: str) -> list[dict]:
+def duplicatas_internas(conn, competencia: str, linhas=None) -> list[dict]:
     """A mesma linha duas vezes na mesma conta: mesmo dia, valor e texto.
 
     E o rastro de um arquivo enviado duas vezes que escapou da fila de
@@ -166,7 +177,7 @@ def duplicatas_internas(conn, competencia: str) -> list[dict]:
     """
     vistos: dict[tuple, dict] = {}
     copias = []
-    for l in _linhas_do_mes(conn, competencia):
+    for l in (linhas if linhas is not None else _linhas_do_mes(conn, competencia)):
         chave = (l["conta_id"], l["data"], l["valor_centavos"], l["descricao_norm"])
         if chave in vistos:
             # a mesma linha duas vezes NO MESMO arquivo e compra repetida
@@ -179,7 +190,7 @@ def duplicatas_internas(conn, competencia: str) -> list[dict]:
     return copias
 
 
-def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
+def maiores_debitos(conn, competencia: str, quantos: int = 20, linhas=None, cartao=None) -> list[dict]:
     """Os maiores gastos do mes, de onde vieram, e com o que cada um casa.
 
     Duplicata grande salta aos olhos numa lista ordenada por valor — e mais
@@ -190,7 +201,7 @@ def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
     """
     from . import cartoes
 
-    todas = _linhas_do_mes(conn, competencia)
+    todas = linhas if linhas is not None else _linhas_do_mes(conn, competencia)
     debitos = [
         l for l in todas
         if l["lado"] == "despesa" and l["categoria"] != CATEGORIA_TRANSFERENCIA
@@ -200,16 +211,9 @@ def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
     debitos = debitos[:quantos]
 
     arquivos = {u.id: u.arquivo for u in conn.execute(sa.select(db.uploads.c.id, db.uploads.c.arquivo))}
-    ids_upload = {
-        t.id: t.upload_id for t in conn.execute(
-            sa.select(db.transacoes.c.id, db.transacoes.c.upload_id)
-            .where(db.transacoes.c.competencia == competencia)
-        )
-    }
     planilha = [l for l in todas if l["origem"] == "planilha" and l["valor_centavos"] < 0]
     creditos = [l for l in todas if l["valor_centavos"] > 0 and l["origem"] == "extrato"]
-    recebidos = cartoes.pagamentos_recebidos(conn)
-    totais = cartoes.totais_de_fatura(conn)
+    _, totais, recebidos = cartao or _dados_de_cartao(conn)
     nomes = {c.id: c.nome for c in conn.execute(sa.select(db.contas.c.id, db.contas.c.nome))}
 
     def pistas(l) -> str:
@@ -236,12 +240,12 @@ def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
         return " · ".join(achados) if achados else "—"
 
     return [
-        {**l, "arquivo": arquivos.get(ids_upload.get(l["id"])) or l["origem"], "casa_com": pistas(l)}
+        {**l, "arquivo": arquivos.get(l["upload_id"]) or l["origem"], "casa_com": pistas(l)}
         for l in debitos
     ]
 
 
-def raio_x(conn, competencia: str) -> dict:
+def raio_x(conn, competencia: str, linhas=None) -> dict:
     """O mes aberto ao meio: de onde vem cada real, e o que a planilha ainda diz.
 
     E a pergunta que todo conserto as cegas fazia ao banco de dados de
@@ -250,7 +254,7 @@ def raio_x(conn, competencia: str) -> dict:
     planilha do mes, valendo ou aposentada, com o motivo escrito nela.
     """
     grupos: dict[tuple, dict] = {}
-    for l in _linhas_do_mes(conn, competencia):
+    for l in (linhas if linhas is not None else _linhas_do_mes(conn, competencia)):
         lado = "entrada" if l["valor_centavos"] > 0 else "saída"
         if l["categoria"] == CATEGORIA_TRANSFERENCIA:
             lado = "transferência"
@@ -284,16 +288,20 @@ def raio_x(conn, competencia: str) -> dict:
 def auditar(conn, competencia: str) -> dict:
     from .reconcile import criticas_encerradas
 
-    por_origem = despesas_por_origem(conn, competencia)
+    # o mes e lido uma vez e passado adiante: eram seis leituras iguais e
+    # duas cargas do cadastro de cartoes por render da Visao Geral
+    linhas = _linhas_do_mes(conn, competencia)
+    cartao = _dados_de_cartao(conn)
+    por_origem = despesas_por_origem(conn, competencia, linhas)
     previsto, realizado = previsto_e_realizado_despesa(por_origem)
     return {
         "por_origem": por_origem,
         "previsto": previsto,
         "realizado": realizado,
         "critica_encerrada": competencia in criticas_encerradas(conn),
-        "transferencias": transferencias_nao_marcadas(conn, competencia),
-        "pagamentos_de_fatura": pagamentos_de_fatura_soltos(conn, competencia),
-        "duplicatas": duplicatas_internas(conn, competencia),
-        "maiores": maiores_debitos(conn, competencia),
-        "raio_x": raio_x(conn, competencia),
+        "transferencias": transferencias_nao_marcadas(conn, competencia, linhas),
+        "pagamentos_de_fatura": pagamentos_de_fatura_soltos(conn, competencia, linhas, cartao),
+        "duplicatas": duplicatas_internas(conn, competencia, linhas),
+        "maiores": maiores_debitos(conn, competencia, linhas=linhas, cartao=cartao),
+        "raio_x": raio_x(conn, competencia, linhas),
     }

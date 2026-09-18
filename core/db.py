@@ -361,7 +361,48 @@ def _migrar_colunas(engine) -> list[str]:
     return aplicadas
 
 
+# Muda quando o desenho do banco muda (coluna ou indice novo). Com a versao
+# gravada em config igual a esta, a subida pula a inspecao tabela a tabela —
+# eram ~30 idas ao banco em todo start, para nao mudar nada.
+SCHEMA_VERSAO = "2026-09-18.1"
+
+# indices que as consultas de todo dia usam: `create_all` nao cria indice novo
+# em tabela que ja existe, entao eles entram por aqui, idempotentes
+INDICES = (
+    ("ix_transacoes_competencia_ativo", "transacoes", "competencia, ativo"),
+    ("ix_transacoes_conta_competencia", "transacoes", "conta_id, competencia"),
+    ("ix_transacoes_upload", "transacoes", "upload_id"),
+    ("ix_transacoes_substituido", "transacoes", "substituido_por"),
+    ("ix_transacoes_status_ativo", "transacoes", "status, ativo"),
+    ("ix_duplicidades_resolvida", "duplicidades", "resolvida"),
+)
+
+
+def _versao_gravada(engine) -> str | None:
+    try:
+        with engine.connect() as conn:
+            return conn.execute(
+                sa.select(config.c.valor).where(config.c.chave == "schema_versao")
+            ).scalar()
+    except Exception:
+        # sem a tabela config ainda: banco novo
+        return None
+
+
 def criar_schema(engine=None) -> None:
     engine = engine or get_engine()
+    if _versao_gravada(engine) == SCHEMA_VERSAO:
+        return
     metadata.create_all(engine)
     _migrar_colunas(engine)
+    with engine.begin() as conn:
+        for nome, tabela, colunas in INDICES:
+            conn.execute(sa.text(f"CREATE INDEX IF NOT EXISTS {nome} ON {tabela} ({colunas})"))
+        existe = conn.execute(
+            sa.select(config.c.chave).where(config.c.chave == "schema_versao")
+        ).first()
+        if existe:
+            conn.execute(sa.update(config).where(config.c.chave == "schema_versao")
+                         .values(valor=SCHEMA_VERSAO))
+        else:
+            conn.execute(sa.insert(config).values(chave="schema_versao", valor=SCHEMA_VERSAO))

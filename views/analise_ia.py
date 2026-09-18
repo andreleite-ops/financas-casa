@@ -315,13 +315,15 @@ def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> Non
     )
     # sem chave a tela continua servindo: a lista de subcategorias vem do plano
     # de contas, não da IA. Muda só o que aparece preenchido.
-    rotulo = (
-        "Sugerir subcategorias (até 60 por vez)" if ligada
-        else "Listar 60 para preencher à mão"
-    )
-    if st.button(rotulo, type="primary", key="ia_subs"):
+    if not ligada:
+        # sem chave, esta aba nao tem o que oferecer: a lista para preencher a
+        # mao ja existe em Classificacao → Sem subcategoria, e era uma copia
+        st.caption("Sem chave da IA configurada. Para preencher à mão, use "
+                   "**Classificação → 🧩 Sem subcategoria**.")
+        return
+    if st.button("Sugerir subcategorias (até 60 por vez)", type="primary", key="ia_subs"):
         with engine.connect() as conn:
-            with st.spinner("Perguntando à IA…" if ligada else "Montando a lista…"):
+            with st.spinner("Perguntando à IA…"):
                 st.session_state["sugestoes_sub"] = repo.sugerir_subcategorias(
                     conn, competencia=competencia, limite=60
                 )

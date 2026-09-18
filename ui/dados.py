@@ -28,7 +28,10 @@ import streamlit as st
 
 from core import analytics, auditoria, db, dedup, reconcile, repo
 
-TTL = 300
+# Uma hora. A chave inclui a versão dos dados, que sobe a cada gravação, então
+# o TTL é só rede de segurança — com cinco minutos, toda tela voltava fria a
+# cada cinco minutos de uso, sem nada ter mudado.
+TTL = 3600
 # Quantas respostas guardar por função. A chave inclui a versão dos dados, e a
 # versão sobe a cada gravação: sem teto, classificar cinquenta lançamentos
 # deixaria cinquenta cópias de cada leitura na memória até o TTL expirar — e o
@@ -194,6 +197,8 @@ def cobertura_de_uploads(_engine, versao: int, competencias: tuple[str, ...]) ->
         return {
             "contas": repo.cobertura(conn, list(competencias)),
             "planilha": repo.cobertura_planilha(conn, list(competencias)),
+            # os meses em que a planilha e a verdade inteira: nada falta neles
+            "meses_da_planilha": repo.meses_so_da_planilha(conn),
         }
 
 

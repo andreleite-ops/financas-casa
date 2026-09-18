@@ -20,7 +20,13 @@ def render(engine, usuario: dict) -> None:
     c1, c2, c3 = st.columns([1, 1.2, 1.6])
     ano = c1.selectbox("Ano", anos)
     do_ano = [c for c in competencias if c.startswith(str(ano))] or [f"{ano}-01"]
-    competencia = c2.selectbox("Comparar com o mês", do_ano)
+    # abre no mes em curso (ou no ultimo que ja aconteceu), nao no mes mais
+    # recente da base — a planilha traz previsao ate dezembro, e "realizado
+    # em dezembro" era previsao apresentada como gasto
+    hoje = date.today().strftime("%Y-%m")
+    ja_aconteceram = [c for c in do_ano if c <= hoje]
+    inicial = ja_aconteceram[-1] if ja_aconteceram else do_ano[-1]
+    competencia = c2.selectbox("Comparar com o mês", do_ano, index=do_ano.index(inicial))
 
     # metas e média do ano, guardadas até alguém gravar: eram sete idas ao
     # banco por toque de campo nesta tela

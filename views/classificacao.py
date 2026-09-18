@@ -98,16 +98,21 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                 # da escolha atual — e voltaria a fazer a tela recarregar a cada
                 # toque de campo, que é justamente o que se veio consertar
                 excluir = b3.form_submit_button(
-                    "Excluir", width="stretch",
-                    help="Apaga este lançamento. Use quando duas fontes descreverem "
-                         "o mesmo dinheiro e você quiser ficar com uma só.",
+                    "Desativar", width="stretch",
+                    help="Tira este lançamento dos totais sem apagá-lo: fica no Raio-X "
+                         "com o motivo. Use quando duas fontes descreverem o mesmo dinheiro.",
                 )
 
             if excluir:
-                repo.excluir_transacao(engine, item["id"])
+                # desativa, nunca apaga: apagar quebrava a deteccao de
+                # duplicidade (reenviar o arquivo recriava a linha) e sumia
+                # com a prova do que foi decidido
+                repo.desativar_transacoes(
+                    engine, [item["id"]], f"desativado na classificação por {usuario['nome']}",
+                )
                 st.session_state["msg_classificacao"] = (
                     f"Lançamento de {item['data']:%d/%m/%Y} — "
-                    f"{sem_marcacao(item['descricao'][:40])} — excluído."
+                    f"{sem_marcacao(item['descricao'][:40])} — desativado."
                 )
                 st.rerun()
             if salvar:
@@ -273,42 +278,13 @@ def render(engine, usuario: dict) -> None:
     plano = dados.plano_de_contas(engine, dados.versao())
     painel = dados.painel_de_classificacao(engine, dados.versao())
     por_mes = painel["por_mes"]
-    donos_errados, orfaos = painel["donos_errados"], painel["orfaos"]
     rotulos, traduzidos = painel["rotulos"], painel["traduzidos"]
 
 
-    # a carga inicial atribuiu tudo ao dono do arquivo, mas a Rô escreve de quem
-    # é o gasto no fim da descrição. Corrigir isso é uma decisão dele, não minha
-    if donos_errados:
-        total = sum(donos_errados.values())
-        detalhe = ", ".join(f"{n} para {p}" for p, n in sorted(donos_errados.items()))
-        c1, c2 = st.columns([3, 1])
-        c1.info(
-            f"**{total} lançamentos dizem na descrição de quem são** e estão atribuídos a "
-            f"outra pessoa ({detalhe}). É a Rô escrevendo o dono no fim — "
-            "“ALMOÇO ANDRÉ”, “CONSULTA RO”.",
-            icon="👤",
-        )
-        if c2.button("Corrigir o dono", type="primary", width="stretch"):
-            mudados = repo.corrigir_dono_pela_descricao(engine)
-            st.success(f"{mudados} lançamento(s) com o dono corrigido.")
-            st.rerun()
-
-    # o gasto da casa que ficou com uma pessoa só porque o upload perguntou
-    # "de quem é este arquivo": é o que faz o relatório por pessoa mentir feio
-    if orfaos["quantidade"]:
-        c1, c2 = st.columns([3, 1])
-        c1.warning(
-            f"**{orfaos['quantidade']} lançamentos da planilha não dizem de quem são** e estão "
-            f"atribuídos a uma pessoa — {fmt_brl(orfaos['despesas'])} de despesa. Isso vem da "
-            "resposta a “de quem é este arquivo”, que valeu para todas as linhas. Gasto da "
-            "casa deveria ficar como **Casal**.",
-            icon="👥",
-        )
-        if c2.button("Passar para o Casal", width="stretch"):
-            mudados = repo.atribuir_ao_casal(engine)
-            st.success(f"{mudados} lançamento(s) agora são do casal.")
-            st.rerun()
+    # os botoes em lote "Corrigir o dono" e "Passar para o Casal" sairam: a
+    # importacao ja aplica as duas regras na entrada, e em lote eles passavam
+    # por cima da pessoa escolhida a mao no editor. O dono se ajusta linha a
+    # linha, no proprio editor
 
     total_pendente = sum(por_mes.values())
     # Seções em vez de abas, por um motivo prático: `st.tabs` não guarda qual
