@@ -35,7 +35,10 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
     # que aparece (estorno) vai para a categoria do gasto que ele devolve. Pelo
     # sinal, um estorno abria a lista de receitas — e foi por aí que 24 linhas
     # do cartão foram parar em "Outras Receitas"
-    if item.get("tipo_conta") == "cartao":
+    # A compra (negativa) so vai para despesa. O credito no cartao ("Ajuste a
+    # credito", cashback, estorno) e dinheiro que entrou, e o dono decide
+    # como renda: abre a lista de receitas, como pediu.
+    if item.get("tipo_conta") == "cartao" and item["valor_centavos"] < 0:
         natureza = "despesa"
     else:
         natureza = "receita" if item["valor_centavos"] > 0 else "despesa"

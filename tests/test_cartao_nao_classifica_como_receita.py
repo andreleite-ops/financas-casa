@@ -110,10 +110,22 @@ def test_salvar_a_mao_recusa_receita_em_cartao(engine):
             sa.select(db.transacoes.c.id).where(db.transacoes.c.descricao == "ESTORNO POSTO")
         ).scalar_one()
 
+        compra_id = conn.execute(
+            sa.select(db.transacoes.c.id).where(db.transacoes.c.descricao == "POSTO")
+        ).scalar_one()
+
+    # a COMPRA nunca vira receita
     with pytest.raises(ValueError, match="não gera receita"):
-        repo.reclassificar(engine, estorno_id, categoria_id=outras, subcategoria_id=None,
+        repo.reclassificar(engine, compra_id, categoria_id=outras, subcategoria_id=None,
                            pessoa=None, usuario="André")
-    # e para a categoria do gasto que ele devolve, vai
+    # o credito no cartao e dinheiro entrando: o dono pode chama-lo de renda,
+    # e a sentinela respeita a escolha feita a mao
+    repo.reclassificar(engine, estorno_id, categoria_id=outras, subcategoria_id=None,
+                       pessoa=None, usuario="André")
+    assert _linha(engine, "ESTORNO POSTO").categoria_id == outras
+    with engine.connect() as conn:
+        assert analytics.ids_receita_em_cartao(conn) == []
+    # e para a categoria do gasto que ele devolve, tambem vai
     repo.reclassificar(engine, estorno_id, categoria_id=transporte, subcategoria_id=None,
                        pessoa=None, usuario="André")
     assert _linha(engine, "ESTORNO POSTO").categoria_id == transporte

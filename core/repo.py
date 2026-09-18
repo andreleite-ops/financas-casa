@@ -756,14 +756,17 @@ def reclassificar(
     """
     with engine.begin() as conn:
         linha = conn.execute(
-            sa.select(db.transacoes.c.descricao, db.contas.c.tipo.label("tipo_conta"))
+            sa.select(db.transacoes.c.descricao, db.transacoes.c.valor_centavos,
+                      db.contas.c.tipo.label("tipo_conta"))
             .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
             .where(db.transacoes.c.id == transacao_id)
         ).fetchone()
-        # cartao nao gera receita, e isso vale tambem para a mao: a tela ja nao
-        # oferece categoria de receita para linha de cartao, e aqui e a
-        # garantia de que nenhum outro caminho grava o que a tela nao oferece
-        if linha and linha.tipo_conta == "cartao":
+        # a compra no cartao nao gera receita, e isso vale tambem para a mao: a
+        # tela ja nao oferece categoria de receita para compra, e aqui e a
+        # garantia de que nenhum outro caminho grava o que a tela nao oferece.
+        # O credito no cartao (ajuste, cashback) e dinheiro entrando: o dono
+        # pode chama-lo de renda
+        if linha and linha.tipo_conta == "cartao" and linha.valor_centavos < 0:
             natureza = classify._natureza_por_categoria(conn).get(categoria_id)
             if natureza == "receita" and categoria_id not in classify.categorias_bidirecionais(conn):
                 raise ValueError(

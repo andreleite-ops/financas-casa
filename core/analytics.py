@@ -704,6 +704,14 @@ def _condicoes_de_cartao():
     return [
         db.transacoes.c.ativo == sa.true(),
         db.contas.c.tipo == "cartao",
+        # a COMPRA do lado da renda e sempre alarme (o arquivo lido ao
+        # contrario, ou um engano a mao). O CREDITO no cartao (ajuste,
+        # cashback) que o dono classificou a mao como renda e decisao dele
+        sa.or_(
+            db.transacoes.c.valor_centavos < 0,
+            db.transacoes.c.status.is_(None),
+            db.transacoes.c.status != "manual",
+        ),
         sa.or_(
             db.categorias.c.nome.is_(None),
             db.categorias.c.nome != CATEGORIA_TRANSFERENCIA,
