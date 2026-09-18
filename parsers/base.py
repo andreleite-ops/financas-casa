@@ -153,8 +153,32 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[
             lan.data = _trocar_ano(lan.data, lan.data.year - 1)
         elif distancia < -10:
             lan.data = _trocar_ano(lan.data, lan.data.year + 1)
-        lan.competencia = competencia
+        lan.competencia = competencia_da_compra(lan.data, competencia)
     return lancamentos
+
+
+# quantos meses antes do mes da fatura uma compra ainda conta pela propria
+# data: a fatura de agosto fecha com compras de meados de julho (um mes
+# antes), e a de janeiro pode trazer uma de novembro (dois)
+MESES_ATRAS_NA_FATURA = 2
+
+
+def competencia_da_compra(dia: date, competencia_da_fatura: str) -> str:
+    """A compra conta no mes em que foi feita, nao no mes da fatura.
+
+    E como a casa sempre anotou: o gasto de julho e de julho, mesmo que a
+    fatura que o cobra feche em agosto. Contar pela fatura punha as compras
+    de 17 a 31 de julho em agosto — e julho ja as tinha, item a item, na
+    planilha — e as de 14 a 31 de agosto em setembro.
+
+    Data muito longe do mes da fatura nao e compra recente: e uma parcela ou
+    um lancamento fora do ciclo, e ai vale o mes da fatura.
+    """
+    ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
+    distancia = (dia.year - ano) * 12 + dia.month - mes
+    if -MESES_ATRAS_NA_FATURA <= distancia <= 1:
+        return f"{dia.year:04d}-{dia.month:02d}"
+    return competencia_da_fatura
 
 
 # Numa fatura de cartao a compra e a regra e o credito e a excecao: dezenas de

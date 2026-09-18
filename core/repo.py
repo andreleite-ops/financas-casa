@@ -1485,6 +1485,54 @@ def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | N
     return total
 
 
+CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09"
+
+
+def contar_cartao_pela_compra(engine) -> dict:
+    """Muda, uma vez so, as compras de cartao ja gravadas para o mes da compra.
+
+    Ate aqui toda linha da fatura levava o mes do menu — o da fatura. A casa
+    conta pela data da compra, e a planilha de julho ja tinha, item a item,
+    as compras de 17 a 31 de julho que a fatura de agosto trouxe. Cada linha
+    vai para o mes da propria data (com a folga de `competencia_da_compra`),
+    e em cada mes fechado que recebeu compras a planilha e conferida pelo
+    valor, como o botao da critica faria. Roda uma vez; a marca fica em config.
+    """
+    from parsers.base import competencia_da_compra
+    from . import reconcile
+
+    with engine.begin() as conn:
+        if _config(conn, CARTAO_PELA_COMPRA):
+            return {"movidas": 0, "conferidas": 0}
+        linhas = conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.competencia,
+                      db.uploads.c.competencia.label("mes_da_fatura"))
+            .select_from(
+                db.transacoes
+                .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+                .outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id)
+            )
+            .where(db.contas.c.tipo == "cartao", db.transacoes.c.origem == "extrato")
+        ).all()
+        movidas, meses = 0, set()
+        for linha in linhas:
+            fatura = linha.mes_da_fatura or linha.competencia
+            nova = competencia_da_compra(linha.data, fatura)
+            if nova != linha.competencia:
+                conn.execute(
+                    sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                    .values(competencia=nova)
+                )
+                movidas += 1
+                meses.add(nova)
+        _gravar_config(conn, CARTAO_PELA_COMPRA, "1")
+    em_curso = date.today().strftime("%Y-%m")
+    conferidas = 0
+    for mes in sorted(m for m in meses if m < em_curso):
+        conferidas += reconcile.aposentar_pares_exatos(engine, "sistema", mes)
+    return {"movidas": movidas, "conferidas": conferidas}
+
+
 def aposentar_previsoes_de_meses_fechados(engine) -> int:
     """Passa pelos meses fechados que ja tem extrato e aposenta a receita
     prevista da pessoa titular. Idempotente; roda na subida — e o que

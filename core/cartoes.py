@@ -69,15 +69,19 @@ def totais_de_fatura(conn) -> dict[tuple[int, str], int]:
     os estornos. O proprio pagamento da fatura anterior, quando aparece nela,
     e transferencia e fica de fora.
     """
+    # a fatura e o arquivo: as compras dela contam cada uma no proprio mes,
+    # entao o total sai do upload, e o mes da fatura e o que o upload guardou
+    mes_da_fatura = sa.func.coalesce(db.uploads.c.competencia, db.transacoes.c.competencia)
     consulta = (
         sa.select(
-            db.transacoes.c.conta_id, db.transacoes.c.competencia,
+            db.transacoes.c.conta_id, mes_da_fatura.label("competencia"),
             sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
         )
         .select_from(
             db.transacoes
             .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
             .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+            .outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id)
         )
         .where(
             db.contas.c.tipo == "cartao",
@@ -85,9 +89,13 @@ def totais_de_fatura(conn) -> dict[tuple[int, str], int]:
             sa.or_(db.categorias.c.nome.is_(None),
                    db.categorias.c.nome != CATEGORIA_TRANSFERENCIA),
         )
-        .group_by(db.transacoes.c.conta_id, db.transacoes.c.competencia)
+        .group_by(db.transacoes.c.conta_id, mes_da_fatura)
     )
-    return {(l.conta_id, l.competencia): -int(l.total or 0) for l in conn.execute(consulta)}
+    totais: dict[tuple[int, str], int] = {}
+    for l in conn.execute(consulta):
+        chave = (l.conta_id, l.competencia)
+        totais[chave] = totais.get(chave, 0) - int(l.total or 0)
+    return totais
 
 
 # quantos dias entre o debito na conta corrente e o "pagamento recebido" que

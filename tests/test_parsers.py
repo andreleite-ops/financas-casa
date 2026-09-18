@@ -152,7 +152,8 @@ def test_ajustar_ano_fatura_compra_dezembro_fatura_janeiro():
     lan = Lancamento(data=compra_28_dez, descricao="COMPRA FIM DE ANO", valor_centavos=-10000)
     ajustar_ano_fatura([lan], "2026-01")
     assert lan.data == date(2025, 12, 28)
-    assert lan.competencia == "2026-01"
+    # a compra conta no mes da compra: dezembro, mesmo na fatura de janeiro
+    assert lan.competencia == "2025-12"
 
 
 def test_ajustar_ano_fatura_nao_mexe_em_compra_normal():

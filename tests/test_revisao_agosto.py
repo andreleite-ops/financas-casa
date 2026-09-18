@@ -449,3 +449,65 @@ def test_auditoria_nao_propoe_transferencia_entre_terceiros(engine):
     with engine.connect() as conn:
         pares = auditoria.transferencias_nao_marcadas(conn, "2026-08")
     assert [p["valor"] for p in pares] == [25_000], "600 de terceiro para terceiro não é da casa"
+
+
+def test_compra_do_cartao_conta_no_mes_da_compra():
+    from parsers.base import ajustar_ano_fatura, competencia_da_compra
+
+    assert competencia_da_compra(date(2026, 7, 17), "2026-08") == "2026-07"
+    assert competencia_da_compra(date(2026, 8, 2), "2026-08") == "2026-08"
+    assert competencia_da_compra(date(2026, 8, 23), "2026-09") == "2026-08"
+    # parcela com data de meses atras nao volta para o passado: vale a fatura
+    assert competencia_da_compra(date(2026, 2, 10), "2026-08") == "2026-08"
+    lancamentos = ajustar_ano_fatura(
+        [Lancamento(date(2026, 7, 17), "PCART TAB", -335_165),
+         Lancamento(date(2026, 8, 5), "POSTO", -20_000)], "2026-08")
+    assert [l.competencia for l in lancamentos] == ["2026-07", "2026-08"]
+
+
+def test_migracao_move_compras_para_o_mes_da_compra_e_confere_com_a_planilha(engine):
+    """Compras de julho gravadas em agosto vao para julho — e casam, uma a
+    uma, com a planilha de julho, que ja as tinha item a item."""
+    cartao = _conta(engine, "Nubank teste", "cartao", instituicao="Nubank")
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 7, 5), descricao="DROGARIA", valor_centavos=-90_883,
+             competencia="2026-07"),
+        dict(data=date(2026, 7, 5), descricao="PADARIA JULHO", valor_centavos=-7_071,
+             competencia="2026-07"),
+    ], origem="planilha", competencia="2026-07")
+    resultado = _importar(engine, cartao, [
+        dict(data=date(2026, 7, 14), descricao="Drogaria Sao Paulo - Parcela 5/6",
+             valor_centavos=-90_883, competencia="2026-08"),
+        dict(data=date(2026, 8, 5), descricao="POSTO", valor_centavos=-20_000,
+             competencia="2026-08"),
+    ], competencia="2026-08")
+    assert _resumo(engine, "2026-08")["despesas"] == 110_883, "gravado na convenção antiga"
+
+    # o banco de teste ja nasceu com a marca da migracao; em producao ela nao existe
+    with engine.begin() as conn:
+        conn.execute(sa.delete(db.config).where(db.config.c.chave == repo.CARTAO_PELA_COMPRA))
+    feito = repo.contar_cartao_pela_compra(engine)
+    assert feito == {"movidas": 1, "conferidas": 1}
+    assert _resumo(engine, "2026-08")["despesas"] == 20_000
+    assert _resumo(engine, "2026-07")["despesas"] == 90_883 + 7_071, "a compra uma vez só"
+    assert _linha(engine, "DROGARIA").ativo is False
+    assert _linha(engine, "DROGARIA").substituido_por == resultado["upload_id"]
+    assert repo.contar_cartao_pela_compra(engine) == {"movidas": 0, "conferidas": 0}
+
+
+def test_total_da_fatura_continua_sendo_o_da_fatura(engine):
+    """Com as compras contando no mes da compra, o total da fatura de agosto
+    (o que o banco cobra) sai do upload, nao do mes das compras."""
+    from core import cartoes
+
+    cartao = _conta(engine, "Nubank teste", "cartao", instituicao="Nubank")
+    _importar(engine, cartao, [
+        dict(data=date(2026, 7, 20), descricao="SUPERMERCADO", valor_centavos=-2_000_000,
+             competencia="2026-07"),
+        dict(data=date(2026, 8, 2), descricao="POSTO", valor_centavos=-1_221_232,
+             competencia="2026-08"),
+    ], competencia="2026-08")
+    with engine.connect() as conn:
+        totais = cartoes.totais_de_fatura(conn)
+    assert totais[(cartao, "2026-08")] == 3_221_232

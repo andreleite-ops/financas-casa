@@ -123,13 +123,14 @@ def _aba_enviar(engine, usuario: dict) -> None:
         )
     else:
         competencia = c2.selectbox(
-            "Competência", _competencias_sugeridas(),
+            "Mês da fatura", _competencias_sugeridas(),
             # abre no mês de hoje, não no primeiro da lista: os meses à frente
             # existem para a fatura de cartão, e não são o caso comum
             index=MESES_A_FRENTE,
-            help="O mês em que a fatura vence — é nele que as compras contam. A lista "
-                 "vai de cinco anos atrás a dois à frente; dá para digitar o mês "
-                 "(“2027-03”) em vez de rolar.",
+            help="O mês em que a fatura vence. Cada compra conta no mês da própria data "
+                 "(a compra de julho é de julho, mesmo na fatura de agosto); o mês da "
+                 "fatura completa o ano das datas e diz ao mapa qual fatura entrou. "
+                 "Dá para digitar o mês (“2027-03”) em vez de rolar.",
         )
     # só serve para completar data sem ano, o caso da fatura de cartão
     ano_referencia = int(competencia[:4]) if competencia else date.today().year
