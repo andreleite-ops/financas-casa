@@ -495,7 +495,13 @@ def importar(
                     subcategoria_id = _id_da_subcategoria(conn, transferencia_id, propria[0])
                     status, confianca = "auto_regra", 0.95
                     achado.explicacao = propria[1]
-            if emissores and lan.valor_centavos < 0 and categoria_id != transferencia_id:
+            # So no extrato: a linha "CARTAO NUBANK 32.238,29" da planilha de
+            # julho e o proprio gasto do mes (a fatura de julho nunca vai ser
+            # importada), nao o pagamento dele. A conta da planilha e do tipo
+            # corrente, e sem esta porta o detector a tratava como banco e
+            # julho perdia a fatura inteira.
+            if (emissores and lan.valor_centavos < 0 and categoria_id != transferencia_id
+                    and (lan.origem or origem) == "extrato"):
                 motivo = cartoes.reconhecer(
                     lan.descricao, lan.valor_centavos, competencia_da_linha,
                     emissores_cadastrados=emissores, totais=totais_fatura,
@@ -621,6 +627,11 @@ def importar(
                     # upload devolve estas linhas ao mês
                     substituido_por=upload_id,
                 )
+            )
+        if origem == "extrato" and conta["tipo"] == "corrente":
+            resumo["previsoes_do_mes_fechado"] = _aposentar_previsoes_do_mes_fechado(
+                conn, conta=conta, upload_id=upload_id,
+                competencias={l.get("competencia") for l in linhas},
             )
         if duplicatas:
             conn.execute(
@@ -1314,6 +1325,41 @@ def resgate_de_investimento(descricao: str, valor_centavos: int) -> bool:
     return bool(palavras) and bool(_INSTITUICAO.search(" ".join(palavras)))
 
 
+_RESGATE_NO_TEXTO = re.compile(r"\b(RESGATE|RES APLIC|RESG APLIC)\b")
+# resgate DE QUE: so de aplicacao. Resgate de pontos, de seguro, do FGTS e
+# dinheiro novo, e o texto tem de dizer que era aplicacao
+_CONTEXTO_DE_APLICACAO = re.compile(
+    r"\b(CDB|LCI|LCA|LC|RDB|CRI|CRA|FUNDO|FUNDOS|FIC|FI|APLIC|APLICACAO|INVEST|INVESTIMENTO|"
+    r"INVESTIMENTOS|TESOURO|POUP|POUPANCA|CDI|DEBENTURE|RENDA FIXA|RF|AUTOMATICO|AUT)\b"
+)
+_NAO_E_APLICACAO = re.compile(r"\b(PONTOS|SEGURO|FGTS|PREMIO|CASHBACK|MILHAS|CONSORCIO)\b")
+
+
+def aplicacao_resgatada(descricao: str, valor_centavos: int) -> bool:
+    """O banco diz "RESGATE" de uma aplicacao num credito: e o principal
+    voltando, nao renda.
+
+    A regra de texto mandava "RESGATE CDB" para Rendimentos, e o relatorio
+    somava como receita os 15.000 que so tinham saido da aplicacao. O
+    rendimento de verdade vem em linha propria ("REND PAGO", "RENDIMENTO").
+    "RESGATE DE PONTOS" e "RESGATE SEGURO" nao sao aplicacao — ficam como estao.
+    """
+    from core.texto import sem_acento
+
+    if valor_centavos <= 0:
+        return False
+    texto = sem_acento(descricao).upper()
+    return (bool(_RESGATE_NO_TEXTO.search(texto))
+            and bool(_CONTEXTO_DE_APLICACAO.search(texto))
+            and not _NAO_E_APLICACAO.search(texto))
+
+
+def _nao_foi_a_mao():
+    """Filtro SQL: fora o que alguem classificou na tela ou ensinou por regra."""
+    return sa.or_(db.transacoes.c.status.is_(None),
+                  db.transacoes.c.status.not_in(("manual", "auto_memoria")))
+
+
 def _transferencia_propria(descricao: str, valor_centavos: int) -> tuple[str, str] | None:
     """(subcategoria, motivo) quando o lancamento e dinheiro da propria casa."""
     pessoa = contraparte_da_casa(descricao)
@@ -1321,6 +1367,8 @@ def _transferencia_propria(descricao: str, valor_centavos: int) -> tuple[str, st
         return "Entre Contas Próprias", f"transferência entre contas da casa ({pessoa})"
     if resgate_de_investimento(descricao, valor_centavos):
         return "Aplicação / Resgate", "resgate de aplicação: a outra ponta é uma instituição financeira"
+    if aplicacao_resgatada(descricao, valor_centavos):
+        return "Aplicação / Resgate", "resgate de aplicação: é o principal voltando, não renda"
     return None
 
 
@@ -1340,6 +1388,10 @@ def marcar_transferencias_proprias(engine) -> int:
                 db.transacoes.c.ativo == sa.true(),
                 sa.or_(db.transacoes.c.categoria_id.is_(None),
                        db.transacoes.c.categoria_id != transferencia_id),
+                # o que foi classificado a mao e decisao de gente; a varredura
+                # da subida nao passa por cima — passava, e toda correcao
+                # feita na tela voltava atras no reboot seguinte
+                _nao_foi_a_mao(),
             )
         ).all()
         marcados = 0
@@ -1352,10 +1404,111 @@ def marcar_transferencias_proprias(engine) -> int:
                 sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
                 .values(categoria_id=transferencia_id,
                         subcategoria_id=_id_da_subcategoria(conn, transferencia_id, subcategoria),
-                        status="auto_regra", confianca=0.95, observacao=motivo)
+                        status="auto_regra", confianca=0.95,
+                        # a marca da conferencia com a planilha e o que a
+                        # critica conta; o motivo nao pode apaga-la
+                        observacao=sa.case(
+                            (db.transacoes.c.observacao == "conferido com a planilha",
+                             db.transacoes.c.observacao),
+                            else_=motivo))
             )
             marcados += 1
     return marcados
+
+
+def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | None,
+                                        competencias) -> int:
+    """Mes fechado + extrato da pessoa no sistema = a receita prevista dela ja
+    aconteceu, e esta no extrato.
+
+    A previsao ("ATENDIMENTOS 15.000", "PRO LABORE 20.000") e a resposta de
+    quem ainda nao tinha o extrato. Quando o mes fecha e o extrato da conta
+    daquela pessoa entra, o dinheiro de verdade esta ali — em dezenas de PIX
+    de pacientes, ou num salario pago em duas partes que nenhum pareamento
+    por valor casa. Manter a previsao e somar a renda duas vezes. Vale so
+    para mes fechado (o extrato parcial de um mes em curso nao diz que o
+    resto nao vai acontecer) e so para a pessoa titular da conta. Aponta
+    para o upload: desfaze-lo devolve a previsao.
+    """
+    em_curso = date.today().strftime("%Y-%m")
+    fechadas = sorted(c for c in competencias if c and c < em_curso)
+    # so a pessoa titular, nunca "Casal": a renda do casal (aluguel) pode cair
+    # numa conta que nao esta no sistema, e um debito qualquer na conjunta
+    # nao prova que ela chegou
+    if not fechadas or conta.get("titular") not in ("André", "Rô"):
+        return 0
+    transferencia_id = _id_da_categoria(conn, analytics.CATEGORIA_TRANSFERENCIA)
+    total = 0
+    for mes in fechadas:
+        # o que de fato entrou nesta conta no mes, fora transferencia
+        entrou = conn.execute(
+            sa.select(sa.func.coalesce(sa.func.sum(db.transacoes.c.valor_centavos), 0))
+            .where(db.transacoes.c.conta_id == conta["id"],
+                   db.transacoes.c.origem == "extrato",
+                   db.transacoes.c.ativo == sa.true(),
+                   db.transacoes.c.competencia == mes,
+                   db.transacoes.c.valor_centavos > 0,
+                   sa.or_(db.transacoes.c.categoria_id.is_(None),
+                          db.transacoes.c.categoria_id != transferencia_id))
+        ).scalar() or 0
+        if entrou <= 0:
+            continue
+        previstas = conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.valor_centavos)
+            .where(
+                # so a planilha: o que foi lancado a mao e decisao de gente
+                db.transacoes.c.origem == "planilha",
+                db.transacoes.c.ativo == sa.true(),
+                db.transacoes.c.valor_centavos > 0,
+                # estorno de despesa e positivo e nao e previsao de renda
+                sa.or_(db.transacoes.c.natureza.is_(None),
+                       db.transacoes.c.natureza != "despesa"),
+                db.transacoes.c.pessoa == conta["titular"],
+                db.transacoes.c.competencia == mes,
+            )
+        ).all()
+        # a previsao so morre se o extrato trouxe ao menos metade dela: um
+        # extrato com um PIX de R$ 840 nao prova R$ 15.000 de atendimentos
+        ids = [p.id for p in previstas if entrou * 2 >= p.valor_centavos]
+        if not ids:
+            continue
+        resultado = conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_(ids))
+            .values(
+                ativo=False, substituido_por=upload_id,
+                observacao=f"previsão realizada: o extrato de {conta['nome']} do mês "
+                           "está no sistema",
+            )
+        )
+        total += resultado.rowcount or 0
+    return total
+
+
+def aposentar_previsoes_de_meses_fechados(engine) -> int:
+    """Passa pelos meses fechados que ja tem extrato e aposenta a receita
+    prevista da pessoa titular. Idempotente; roda na subida — e o que
+    conserta o que entrou antes desta regra existir."""
+    em_curso = date.today().strftime("%Y-%m")
+    with engine.begin() as conn:
+        cobertos = conn.execute(
+            sa.select(db.transacoes.c.conta_id, db.transacoes.c.competencia,
+                      sa.func.max(db.transacoes.c.upload_id).label("upload_id"))
+            .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+            .where(db.contas.c.tipo == "corrente",
+                   db.transacoes.c.origem == "extrato",
+                   db.transacoes.c.competencia < em_curso)
+            .group_by(db.transacoes.c.conta_id, db.transacoes.c.competencia)
+        ).all()
+        total = 0
+        for linha in cobertos:
+            conta = conta_por_id(conn, linha.conta_id)
+            if conta is None:
+                continue
+            total += _aposentar_previsoes_do_mes_fechado(
+                conn, conta=conta, upload_id=linha.upload_id, competencias={linha.competencia},
+            )
+    return total
 
 
 def marcar_pagamentos_de_cartao(engine) -> int:
@@ -1388,6 +1541,7 @@ def marcar_pagamentos_de_cartao(engine) -> int:
                 db.transacoes.c.valor_centavos < 0,
                 sa.or_(db.transacoes.c.categoria_id.is_(None),
                        db.transacoes.c.categoria_id != transferencia_id),
+                _nao_foi_a_mao(),
             )
         ).all()
         marcados = 0

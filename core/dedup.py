@@ -54,6 +54,20 @@ def competencia_de(registro, dia: date | None = None) -> str:
     return f"{referencia.year:04d}-{referencia.month:02d}"
 
 
+def _mesma_pessoa(prevista: str | None, chegou: str | None) -> bool:
+    """A previsao e do mesmo dono do dinheiro que chegou?
+
+    A pessoa era so desempate, e o desempate nao basta: o bonus do Andre
+    (14.561) casava por mes e por ordem de grandeza com os atendimentos
+    previstos da Ro (15.000) e os aposentava — o credito dele virava renda
+    dela, e os PIX dos pacientes, chegando depois, entravam por cima. Sem dono
+    declarado de um dos lados, ou com "Casal", ninguem e barrado.
+    """
+    if not prevista or not chegou:
+        return True
+    return prevista == chegou or "Casal" in (prevista, chegou)
+
+
 def previsao_equivalente(
     candidatos, *, dia: date, valor_centavos: int, pessoa: str | None,
     competencia: str | None = None,
@@ -87,6 +101,7 @@ def previsao_equivalente(
         and c.get("ativo")
         and c.get("valor_centavos", 0) > 0
         and competencia_de(c) == mes
+        and _mesma_pessoa(c.get("pessoa"), pessoa)
         and abs(c["valor_centavos"] - valor_centavos)
         <= FOLGA_DA_PREVISAO * max(c["valor_centavos"], valor_centavos)
     ]
@@ -284,6 +299,12 @@ class Indice:
         # vezes, e nada avisava, porque a regra dos tres dias logo acima exige a
         # mesma conta e a planilha mora numa conta so dela. A janela aqui e a
         # mesma dos tres dias, e o mais proximo ganha.
+        #
+        # O mes, tampouco: a compra de 23/08 na fatura de setembro e a linha
+        # de 22/08 da planilha de agosto sao o mesmo gasto — a planilha conta
+        # pela compra, a fatura pelo vencimento. O gasto muda de mes, mas
+        # continua contado uma vez so; exigir a mesma competencia o deixava
+        # nos dois meses.
         vizinhos = [
             viz for viz in self._por_valor.get(valor_centavos, [])
             if viz["id"] not in self._usados and viz["ativo"]

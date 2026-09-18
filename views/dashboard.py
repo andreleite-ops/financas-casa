@@ -239,8 +239,10 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
     pagamentos = dados_auditoria["pagamentos_de_fatura"]
     duplicatas = dados_auditoria["duplicatas"]
     maiores = dados_auditoria.get("maiores") or []
+    encerrada = dados_auditoria.get("critica_encerrada", False)
     tem_problema = bool((previsto and realizado) or transferencias or pagamentos or duplicatas)
-    if not tem_problema and not maiores:
+    raio_x = dados_auditoria.get("raio_x") or {}
+    if not tem_problema and not maiores and not raio_x.get("valendo"):
         return
 
     mes = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
@@ -263,7 +265,16 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 width="stretch", hide_index=True,
             )
 
-        if previsto and realizado:
+        if previsto and realizado and encerrada:
+            # o dono ja olhou e disse "fica como esta": informacao, nao alarme
+            st.info(
+                f"Em {mes} valem {_reais(previsto)} da **planilha** ao lado de "
+                f"{_reais(realizado)} dos **extratos** — conferido por você na Crítica "
+                "(gasto em dinheiro ou de conta fora do sistema). Para rever, reabra em "
+                "**Upload → 🔍 Crítica planilha × extratos**.",
+                icon="✅",
+            )
+        elif previsto and realizado:
             st.error(
                 f"**Planilha e extratos valendo juntos.** Em {mes} há "
                 f"{_reais(previsto)} de despesa vinda da **planilha** e {_reais(realizado)} "
@@ -365,6 +376,46 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
                 )
                 st.rerun()
 
+        _raio_x(dados_auditoria.get("raio_x") or {}, mes)
+
+
+def _raio_x(raio_x: dict, mes: str) -> None:
+    """De onde vem cada real do mês — a resposta que antes só o SQL dava."""
+    valendo, planilha = raio_x.get("valendo") or [], raio_x.get("planilha") or []
+    if not valendo and not planilha:
+        return
+    st.markdown(f"**Raio-X de {mes} — o que está valendo, por origem, conta e lado**")
+    st.caption(
+        "Um print desta tabela diz o que compõe cada total do mês. *Entrada* soma na "
+        "receita, *saída* na despesa, *transferência* fica fora dos dois."
+    )
+    if valendo:
+        st.dataframe(
+            pd.DataFrame([
+                {"Origem": i["origem"], "Conta": i["conta"], "Lado": i["lado"],
+                 "Categoria": i["categoria"], "Lançamentos": i["quantos"],
+                 "Total": fmt_brl(i["total"])}
+                for i in valendo
+            ]),
+            width="stretch", hide_index=True,
+        )
+    if planilha:
+        ativas = sum(1 for l in planilha if l["ativo"])
+        st.markdown(
+            f"**A planilha de {mes}, linha a linha** — {ativas} valendo, "
+            f"{len(planilha) - ativas} aposentada(s), cada uma com o motivo"
+        )
+        st.dataframe(
+            pd.DataFrame([
+                {"Vale": "sim" if l["ativo"] else "não",
+                 "Data": f"{l['data']:%d/%m}", "Descrição": l["descricao"][:40],
+                 "Valor": fmt_brl(l["valor_centavos"]), "Pessoa": l["pessoa"] or "—",
+                 "Categoria": l["categoria"] or "—", "Motivo": l["observacao"] or "—"}
+                for l in planilha
+            ]),
+            width="stretch", hide_index=True,
+        )
+
 
 def render(engine, usuario: dict) -> None:
     competencias = dados.competencias(engine, dados.versao())
@@ -459,9 +510,18 @@ def render(engine, usuario: dict) -> None:
             icon="💳",
         )
 
-    if atual["nao_classificado"]:
+    entrada = atual.get("sem_categoria_entrada", 0)
+    saida = atual.get("sem_categoria_saida", 0)
+    if entrada or saida:
+        # os dois lados, nunca o liquido: "19 mil sem categoria" escondia 39 mil
+        # entrando e 58 mil saindo, cada um somado no seu total
+        partes = []
+        if saida:
+            partes.append(f"{_reais(saida)} de saída (já somados na despesa)")
+        if entrada:
+            partes.append(f"{_reais(entrada)} de entrada (já somados na receita)")
         st.warning(
-            f"{fmt_brl(abs(atual['nao_classificado']))} ainda sem categoria neste mês. "
+            "Ainda sem categoria neste mês: " + " e ".join(partes) + ". "
             "Resolva na tela **Classificação** para os números fecharem.",
             icon="🏷️",
         )

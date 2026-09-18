@@ -19,7 +19,7 @@ from datetime import timedelta
 import sqlalchemy as sa
 
 from . import db
-from .analytics import CATEGORIA_TRANSFERENCIA, _lado_da_linha
+from .analytics import CATEGORIA_TRANSFERENCIA, SEM_CATEGORIA, _lado_da_linha
 
 JANELA = timedelta(days=3)
 
@@ -222,15 +222,59 @@ def maiores_debitos(conn, competencia: str, quantos: int = 20) -> list[dict]:
     ]
 
 
+def raio_x(conn, competencia: str) -> dict:
+    """O mes aberto ao meio: de onde vem cada real, e o que a planilha ainda diz.
+
+    E a pergunta que todo conserto as cegas fazia ao banco de dados de
+    producao — e que ninguem podia responder sem rodar SQL. Duas tabelas:
+    o que esta valendo, por origem, conta, lado e categoria; e cada linha da
+    planilha do mes, valendo ou aposentada, com o motivo escrito nela.
+    """
+    grupos: dict[tuple, dict] = {}
+    for l in _linhas_do_mes(conn, competencia):
+        lado = "entrada" if l["valor_centavos"] > 0 else "saída"
+        if l["categoria"] == CATEGORIA_TRANSFERENCIA:
+            lado = "transferência"
+        chave = (l["origem"], l["conta"], lado, l["categoria"] or SEM_CATEGORIA)
+        item = grupos.setdefault(chave, {
+            "origem": l["origem"], "conta": l["conta"], "lado": lado,
+            "categoria": l["categoria"] or SEM_CATEGORIA, "quantos": 0, "total": 0,
+        })
+        item["quantos"] += 1
+        item["total"] += abs(l["valor_centavos"])
+    valendo = sorted(grupos.values(), key=lambda i: (i["lado"], -i["total"]))
+
+    planilha = [
+        dict(l._mapping) for l in conn.execute(
+            sa.select(
+                db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.descricao,
+                db.transacoes.c.valor_centavos, db.transacoes.c.pessoa,
+                db.transacoes.c.ativo, db.transacoes.c.observacao,
+                db.categorias.c.nome.label("categoria"),
+            )
+            .select_from(db.transacoes.outerjoin(
+                db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id))
+            .where(db.transacoes.c.origem == "planilha",
+                   db.transacoes.c.competencia == competencia)
+            .order_by(db.transacoes.c.ativo.desc(), db.transacoes.c.valor_centavos)
+        )
+    ]
+    return {"valendo": valendo, "planilha": planilha}
+
+
 def auditar(conn, competencia: str) -> dict:
+    from .reconcile import criticas_encerradas
+
     por_origem = despesas_por_origem(conn, competencia)
     previsto, realizado = previsto_e_realizado_despesa(por_origem)
     return {
         "por_origem": por_origem,
         "previsto": previsto,
         "realizado": realizado,
+        "critica_encerrada": competencia in criticas_encerradas(conn),
         "transferencias": transferencias_nao_marcadas(conn, competencia),
         "pagamentos_de_fatura": pagamentos_de_fatura_soltos(conn, competencia),
         "duplicatas": duplicatas_internas(conn, competencia),
         "maiores": maiores_debitos(conn, competencia),
+        "raio_x": raio_x(conn, competencia),
     }

@@ -46,12 +46,77 @@ def _filtro_periodos(periodos: set[str]):
     return db.transacoes.c.competencia.in_(sorted(periodos))
 
 
+# A marca de "mantido": a linha da planilha fica valendo E sai da critica.
+# Sem olhar a marca, "Manter as duas" gravava a decisao e a tela a esquecia na
+# visita seguinte — a mesma linha voltava para sempre.
+MARCA_MANTIDO = "mantido na conferência"
+_CHAVE_ENCERRADA = "critica_encerrada_{}"
+
+
+def criticas_encerradas(conn) -> set[str]:
+    """Os meses em que o dono disse "entendi, fica como esta"."""
+    prefixo = _CHAVE_ENCERRADA.format("")
+    return {
+        linha.chave[len(prefixo):]
+        for linha in conn.execute(
+            sa.select(db.config.c.chave).where(db.config.c.chave.like(prefixo + "%"))
+        )
+    }
+
+
+def encerrar_critica(engine, competencia: str, usuario: str) -> int:
+    """"Ok, entendi, nao vou mudar nada": o mes sai da critica, tudo como esta.
+
+    O que so esta na planilha continua valendo (gasto em dinheiro, ou de uma
+    conta que nao esta no sistema), com a marca de mantido; e o mes inteiro
+    deixa de ser listado ate alguem reabrir. Devolve quantas linhas marcou.
+    """
+    with engine.begin() as conn:
+        critica = criticar(conn)
+        ids = [i["id"] for i in critica["so_planilha"] if i["competencia"] == competencia]
+        # divergencia de valor diferente: as duas valem, como o dono pediu.
+        # De valor igual, nao: e o mesmo gasto escrito de outro jeito, e
+        # "fica como esta" nao pode ser o botao que o conta duas vezes
+        exatos = []
+        for item in critica["divergencias"]:
+            if item["planilha"]["competencia"] != competencia:
+                continue
+            if item["diferenca"] == 0:
+                exatos.append((item["planilha"]["id"], item["extrato"]["id"]))
+            else:
+                ids.append(item["planilha"]["id"])
+        if ids:
+            conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.id.in_(ids))
+                .values(observacao=f"{MARCA_MANTIDO} por {usuario}: fica como está")
+            )
+        if exatos:
+            _aposentar_pares(conn, exatos, usuario)
+        chave = _CHAVE_ENCERRADA.format(competencia)
+        if conn.execute(sa.select(db.config.c.chave).where(db.config.c.chave == chave)).first():
+            conn.execute(sa.update(db.config).where(db.config.c.chave == chave).values(valor=usuario))
+        else:
+            conn.execute(sa.insert(db.config).values(chave=chave, valor=usuario))
+    return len(ids)
+
+
+def reabrir_critica(engine, competencia: str) -> None:
+    """Volta a listar o mes. As linhas ja marcadas como mantidas seguem
+    mantidas — reabrir e para ver o que apareceu depois, nao para rediscutir."""
+    with engine.begin() as conn:
+        conn.execute(
+            sa.delete(db.config).where(db.config.c.chave == _CHAVE_ENCERRADA.format(competencia))
+        )
+
+
 def criticar(conn) -> dict:
     """Devolve os quatro grupos da critica, com as listas para revisao."""
-    periodos = _periodos_com_as_duas_origens(conn)
+    encerradas = criticas_encerradas(conn)
+    periodos = _periodos_com_as_duas_origens(conn) - encerradas
     vazio = {
         "periodos": 0, "conferidos": 0, "faltantes": [], "so_planilha": [],
-        "divergencias": [], "sem_conferencia": True,
+        "divergencias": [], "sem_conferencia": True, "encerradas": sorted(encerradas),
     }
     if not periodos:
         return vazio
@@ -109,6 +174,10 @@ def criticar(conn) -> dict:
                 db.transacoes.c.origem == "planilha",
                 db.transacoes.c.ativo == sa.true(),
                 db.transacoes.c.valor_centavos < 0,
+                sa.or_(
+                    db.transacoes.c.observacao.is_(None),
+                    sa.not_(db.transacoes.c.observacao.like(MARCA_MANTIDO + "%")),
+                ),
             )
             .order_by(db.transacoes.c.data)
         )
@@ -167,6 +236,7 @@ def criticar(conn) -> dict:
         "so_planilha": so_planilha,
         "divergencias": divergencias,
         "sem_conferencia": False,
+        "encerradas": sorted(encerradas),
     }
 
 
@@ -183,7 +253,7 @@ def resolver_divergencia(engine, *, planilha_id: int, manter: str, usuario: str)
             conn.execute(
                 sa.update(db.transacoes)
                 .where(db.transacoes.c.id == planilha_id)
-                .values(observacao=f"mantido na conferência por {usuario}")
+                .values(observacao=f"{MARCA_MANTIDO} por {usuario}")
             )
 
 
@@ -218,17 +288,39 @@ def aposentar_pares_exatos(engine, usuario: str, competencia: str | None = None)
     if not pares:
         return 0
     with engine.begin() as conn:
-        conn.execute(
-            sa.update(db.transacoes)
-            .where(db.transacoes.c.id.in_([p for p, _ in pares]))
-            .values(ativo=False, observacao=f"conferido em massa com o extrato por {usuario}")
-        )
-        # o lado do extrato ganha a mesma marca que a conferencia do upload
-        # deixa: e por ela que a critica conta o par como conferido, em vez de
-        # listar a linha do banco como "faltava na planilha"
-        conn.execute(
-            sa.update(db.transacoes)
-            .where(db.transacoes.c.id.in_([e for _, e in pares]))
-            .values(observacao="conferido com a planilha")
-        )
+        _aposentar_pares(conn, pares, usuario)
     return len(pares)
+
+
+def _aposentar_pares(conn, pares: list[tuple[int, int]], usuario: str) -> None:
+    """Aposenta a linha da planilha de cada par (planilha_id, extrato_id)."""
+    extratos = [e for _, e in pares]
+    # a linha da planilha aponta para o upload do extrato que a substituiu: e
+    # por esse ponteiro que desfazer o upload a devolve ao mes. Uma consulta
+    # para os uploads e um update por upload — cem pares no Supabase nao
+    # podem custar duzentas idas ao banco
+    upload_por_extrato = {
+        linha.id: linha.upload_id
+        for linha in conn.execute(
+            sa.select(db.transacoes.c.id, db.transacoes.c.upload_id)
+            .where(db.transacoes.c.id.in_(extratos))
+        )
+    }
+    por_upload: dict[int | None, list[int]] = {}
+    for planilha_id, extrato_id in pares:
+        por_upload.setdefault(upload_por_extrato.get(extrato_id), []).append(planilha_id)
+    for upload_id, ids in por_upload.items():
+        conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.id.in_(ids))
+            .values(ativo=False, substituido_por=upload_id,
+                    observacao=f"conferido em massa com o extrato por {usuario}")
+        )
+    # o lado do extrato ganha a mesma marca que a conferencia do upload
+    # deixa: e por ela que a critica conta o par como conferido, em vez de
+    # listar a linha do banco como "faltava na planilha"
+    conn.execute(
+        sa.update(db.transacoes)
+        .where(db.transacoes.c.id.in_(extratos))
+        .values(observacao="conferido com a planilha")
+    )

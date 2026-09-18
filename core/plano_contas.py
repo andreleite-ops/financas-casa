@@ -314,7 +314,9 @@ REGRAS_INICIAIS: list[tuple[str, str, str]] = [
     ("NF SERVICO", "Trabalho", "Prestação de Serviços"),
     ("CONSULTORIA", "Trabalho", "Prestação de Serviços"),
     ("RENDIMENTO", "Rendimentos", "Aplicações Financeiras"),
-    ("RESGATE", "Rendimentos", "Aplicações Financeiras"),
+    # resgate e o principal voltando, nao renda; o rendimento vem em linha
+    # propria ("REND PAGO", "RENDIMENTO")
+    ("RESGATE", "Transferências entre Contas", "Aplicação / Resgate"),
     ("DIVIDENDO", "Rendimentos", "Dividendos / JCP"),
     ("JCP", "Rendimentos", "Dividendos / JCP"),
     ("JUROS S/ CAPITAL", "Rendimentos", "Dividendos / JCP"),

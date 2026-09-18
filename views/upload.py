@@ -14,7 +14,7 @@ from parsers import extrato_bradesco, extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
 from parsers.base import ErroDeLeitura, competencia_predominante
-from ui import dados
+from ui import dados, graficos
 from ui.graficos import MESES_PT as MESES_CURTOS
 from ui.tema import selo_pessoa
 
@@ -973,12 +973,14 @@ def _aba_critica(engine, usuario: dict) -> None:
         "A planilha da Rô é a carga inicial do histórico. Quando o extrato do mesmo período "
         "entra, o sistema confronta os dois — só compara meses em que as duas origens existem."
     )
+    _criticas_encerradas(engine, critica.get("encerradas") or [])
     if critica["sem_conferencia"]:
-        st.info(
-            "Ainda não há um mesmo período com planilha **e** extrato importados. "
-            "Importe a planilha e depois o extrato do mesmo mês para a crítica rodar.",
-            icon="🔍",
-        )
+        if not critica.get("encerradas"):
+            st.info(
+                "Ainda não há um mesmo período com planilha **e** extrato importados. "
+                "Importe a planilha e depois o extrato do mesmo mês para a crítica rodar.",
+                icon="🔍",
+            )
         return
 
     c1, c2, c3, c4 = st.columns(4)
@@ -1054,7 +1056,10 @@ def _aba_critica(engine, usuario: dict) -> None:
             st.success(f"{total} lançamento(s) descartado(s).")
             st.rerun()
 
+    _encerrar_critica(engine, usuario, critica)
+
     if critica["faltantes"]:
+
         st.markdown("#### Faltavam na planilha — já entraram pelo extrato")
         st.dataframe(
             pd.DataFrame(
@@ -1066,6 +1071,52 @@ def _aba_critica(engine, usuario: dict) -> None:
             ),
             width="stretch", hide_index=True,
         )
+
+
+def _encerrar_critica(engine, usuario: dict, critica: dict) -> None:
+    """"Ok, entendi, não vou mudar nada": o mês sai da frente, tudo como está.
+
+    Sem isto a crítica era uma lista que nunca acabava: o que só está na
+    planilha (gasto em dinheiro, ou de conta fora do sistema) voltava a cada
+    visita, e "Manter as duas" era esquecido na consulta seguinte.
+    """
+    meses = sorted({i["competencia"] for i in critica["so_planilha"]}
+                   | {i["planilha"]["competencia"] for i in critica["divergencias"]}
+                   | {i["competencia"] for i in critica["faltantes"]})
+    if not meses:
+        return
+    st.markdown("#### Ok, entendi — não vou mudar nada")
+    st.caption(
+        "Deixa tudo como está: o que só está na planilha continua valendo, e o mês "
+        "sai desta tela. Dá para reabrir depois, no alto da aba."
+    )
+    colunas = st.columns(min(len(meses), 3))
+    for pos, competencia in enumerate(meses):
+        rotulo = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
+        if colunas[pos % 3].button(f"Fica como está em {rotulo}", key=f"crit_ok_{competencia}",
+                                   width="stretch"):
+            total = reconcile.encerrar_critica(engine, competencia, usuario["nome"])
+            st.session_state["msg_critica"] = (
+                f"{rotulo}: crítica encerrada, {total} linha(s) da planilha mantidas."
+            )
+            st.rerun()
+
+
+def _criticas_encerradas(engine, encerradas: list[str]) -> None:
+    if recado := st.session_state.pop("msg_critica", None):
+        st.success(recado)
+    if not encerradas:
+        return
+    rotulos = ", ".join(
+        f"{graficos.rotulo_mes(c).lower()}/{c[2:4]}" for c in encerradas
+    )
+    c1, c2 = st.columns([3, 1.2])
+    c1.caption(f"Crítica encerrada por você em: **{rotulos}** — tudo como está.")
+    escolha = c2.selectbox("Reabrir", ["—", *encerradas], label_visibility="collapsed",
+                           key="crit_reabrir")
+    if escolha != "—":
+        reconcile.reabrir_critica(engine, escolha)
+        st.rerun()
 
 
 def _aba_manual(engine, usuario: dict) -> None:
