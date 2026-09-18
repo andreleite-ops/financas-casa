@@ -1485,7 +1485,9 @@ def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | N
     return total
 
 
-CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09"
+# v2: a parcela conta no mes da fatura; a marca nova faz a passagem rodar de
+# novo e devolver a parcela que a v1 tinha mandado para o mes da compra
+CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v2"
 
 
 def contar_cartao_pela_compra(engine) -> dict:
@@ -1506,6 +1508,7 @@ def contar_cartao_pela_compra(engine) -> dict:
             return {"movidas": 0, "conferidas": 0}
         linhas = conn.execute(
             sa.select(db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.competencia,
+                      db.transacoes.c.descricao,
                       db.uploads.c.competencia.label("mes_da_fatura"))
             .select_from(
                 db.transacoes
@@ -1517,7 +1520,7 @@ def contar_cartao_pela_compra(engine) -> dict:
         movidas, meses = 0, set()
         for linha in linhas:
             fatura = linha.mes_da_fatura or linha.competencia
-            nova = competencia_da_compra(linha.data, fatura)
+            nova = competencia_da_compra(linha.data, fatura, linha.descricao or "")
             if nova != linha.competencia:
                 conn.execute(
                     sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)

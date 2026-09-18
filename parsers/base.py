@@ -153,7 +153,7 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[
             lan.data = _trocar_ano(lan.data, lan.data.year - 1)
         elif distancia < -10:
             lan.data = _trocar_ano(lan.data, lan.data.year + 1)
-        lan.competencia = competencia_da_compra(lan.data, competencia)
+        lan.competencia = competencia_da_compra(lan.data, competencia, lan.descricao)
     return lancamentos
 
 
@@ -161,9 +161,12 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[
 # data: a fatura de agosto fecha com compras de meados de julho (um mes
 # antes), e a de janeiro pode trazer uma de novembro (dois)
 MESES_ATRAS_NA_FATURA = 2
+# "Parcela 3/6", "PARC 03/06", "3/6": a linha e uma parcela, e a data que a
+# fatura imprime e a da compra original — meses atras
+_PARCELA = re.compile(r"(?i)\bparc(?:ela|\.)?\s*\d{1,2}\s*/\s*\d{1,2}\b|\b\d{1,2}/\d{1,2}\b(?!/)")
 
 
-def competencia_da_compra(dia: date, competencia_da_fatura: str) -> str:
+def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str = "") -> str:
     """A compra conta no mes em que foi feita, nao no mes da fatura.
 
     E como a casa sempre anotou: o gasto de julho e de julho, mesmo que a
@@ -171,9 +174,13 @@ def competencia_da_compra(dia: date, competencia_da_fatura: str) -> str:
     de 17 a 31 de julho em agosto — e julho ja as tinha, item a item, na
     planilha — e as de 14 a 31 de agosto em setembro.
 
-    Data muito longe do mes da fatura nao e compra recente: e uma parcela ou
-    um lancamento fora do ciclo, e ai vale o mes da fatura.
+    Parcela e cobranca da fatura, nao compra do mes: a fatura de setembro do
+    XP imprime "PAGUE MENOS 10/06" para a parcela de uma compra de junho. Ela
+    conta em setembro. O mesmo vale para data muito longe do mes da fatura —
+    e lancamento fora do ciclo, e ai vale o mes da fatura.
     """
+    if descricao and _PARCELA.search(descricao):
+        return competencia_da_fatura
     ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
     distancia = (dia.year - ano) * 12 + dia.month - mes
     if -MESES_ATRAS_NA_FATURA <= distancia <= 1:

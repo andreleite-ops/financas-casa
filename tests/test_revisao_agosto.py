@@ -477,7 +477,7 @@ def test_migracao_move_compras_para_o_mes_da_compra_e_confere_com_a_planilha(eng
              competencia="2026-07"),
     ], origem="planilha", competencia="2026-07")
     resultado = _importar(engine, cartao, [
-        dict(data=date(2026, 7, 14), descricao="Drogaria Sao Paulo - Parcela 5/6",
+        dict(data=date(2026, 7, 14), descricao="Drogaria Sao Paulo",
              valor_centavos=-90_883, competencia="2026-08"),
         dict(data=date(2026, 8, 5), descricao="POSTO", valor_centavos=-20_000,
              competencia="2026-08"),
@@ -511,3 +511,15 @@ def test_total_da_fatura_continua_sendo_o_da_fatura(engine):
     with engine.connect() as conn:
         totais = cartoes.totais_de_fatura(conn)
     assert totais[(cartao, "2026-08")] == 3_221_232
+
+
+def test_parcela_conta_no_mes_da_fatura():
+    from parsers.base import competencia_da_compra
+
+    assert competencia_da_compra(date(2026, 7, 14), "2026-08", "Drogaria Sao Paulo - Parcela 5/6") == "2026-08"
+    assert competencia_da_compra(date(2026, 6, 10), "2026-09", "PAGUE MENOS 0225 PARC 03/06") == "2026-09"
+    assert competencia_da_compra(date(2026, 8, 20), "2026-09", "LOJA X 2/4") == "2026-09"
+    # compra a vista com data recente: mes da compra
+    assert competencia_da_compra(date(2026, 8, 20), "2026-09", "LOJA X") == "2026-08"
+    # numero de documento nao e parcela
+    assert competencia_da_compra(date(2026, 8, 20), "2026-09", "PAGUE MENOS 0225") == "2026-08"
