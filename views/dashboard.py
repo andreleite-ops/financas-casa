@@ -512,7 +512,8 @@ def render(engine, usuario: dict) -> None:
 
     entrada = atual.get("sem_categoria_entrada", 0)
     saida = atual.get("sem_categoria_saida", 0)
-    if entrada or saida:
+    estorno = atual.get("sem_categoria_estorno", 0)
+    if entrada or saida or estorno:
         # os dois lados, nunca o liquido: "19 mil sem categoria" escondia 39 mil
         # entrando e 58 mil saindo, cada um somado no seu total
         partes = []
@@ -520,6 +521,8 @@ def render(engine, usuario: dict) -> None:
             partes.append(f"{_reais(saida)} de saída (já somados na despesa)")
         if entrada:
             partes.append(f"{_reais(entrada)} de entrada (já somados na receita)")
+        if estorno:
+            partes.append(f"{_reais(estorno)} de crédito em cartão (já abatidos da despesa)")
         st.warning(
             "Ainda sem categoria neste mês: " + " e ".join(partes) + ". "
             "Resolva na tela **Classificação** para os números fecharem.",

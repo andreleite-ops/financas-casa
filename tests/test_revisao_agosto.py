@@ -513,17 +513,35 @@ def test_total_da_fatura_continua_sendo_o_da_fatura(engine):
     assert totais[(cartao, "2026-08")] == 3_221_232
 
 
-def test_parcela_conta_no_mes_da_fatura():
-    from parsers.base import competencia_da_compra
+def test_parcela_conta_no_ciclo_da_fatura_em_qualquer_cartao():
+    """O principio: a parcela conta no ciclo da fatura que a cobra. O ciclo
+    sai do proprio arquivo (a primeira compra a vista). Parcela datada dentro
+    do ciclo (Nubank) conta pela data; datada de antes (XP imprime a compra
+    original) conta no mes em que o ciclo comeca."""
+    from parsers.base import ajustar_ano_fatura, competencia_da_compra, inicio_do_ciclo
 
-    assert competencia_da_compra(date(2026, 7, 14), "2026-08", "Drogaria Sao Paulo - Parcela 5/6") == "2026-08"
-    assert competencia_da_compra(date(2026, 6, 10), "2026-09", "PAGUE MENOS 0225 PARC 03/06") == "2026-09"
-    assert competencia_da_compra(date(2026, 8, 20), "2026-09", "LOJA X 2/4") == "2026-09"
-    # compra a vista com data recente: mes da compra
-    assert competencia_da_compra(date(2026, 8, 20), "2026-09", "LOJA X") == "2026-08"
-    # numero de documento nao e parcela
+    nubank = ajustar_ano_fatura([
+        Lancamento(date(2026, 8, 14), "Drogaria Sao Paulo - Parcela 6/6", -90_883),
+        Lancamento(date(2026, 8, 14), "Uber", -1_500),
+        Lancamento(date(2026, 9, 13), "Deco Skin - Parcela 1/2", -8_495),
+        Lancamento(date(2026, 9, 12), "Pagamento recebido", 83_148),
+    ], "2026-09")
+    assert inicio_do_ciclo(nubank) == date(2026, 8, 14)
+    assert [l.competencia for l in nubank] == ["2026-08", "2026-08", "2026-09", "2026-09"]
+
+    xp = ajustar_ano_fatura([
+        Lancamento(date(2026, 6, 10), "PAGUE MENOS 0225 PARC 03/06", -100_304),
+        Lancamento(date(2026, 4, 7), "EINSTEIN MORUMBI PARC 05/10", -57_640),
+        Lancamento(date(2026, 8, 2), "POSTO", -20_000),
+        Lancamento(date(2026, 8, 30), "MERCADO", -30_000),
+    ], "2026-09")
+    assert inicio_do_ciclo(xp) == date(2026, 8, 2)
+    assert [l.competencia for l in xp] == ["2026-08", "2026-08", "2026-08", "2026-08"]
+
+    # sem ciclo conhecido, parcela de fora do ciclo vale o mes da fatura
+    assert competencia_da_compra(date(2026, 6, 10), "2026-09", "LOJA PARC 03/06") == "2026-09"
+    # numero de documento nao e parcela: compra a vista, mes da compra
     assert competencia_da_compra(date(2026, 8, 20), "2026-09", "PAGUE MENOS 0225") == "2026-08"
-
 
 def test_busca_por_valor_acha_a_mesma_compra_em_qualquer_origem(engine):
     assert repo._termo_em_centavos("3.351,65") == 335_165
@@ -633,3 +651,22 @@ def test_mes_da_planilha_sai_da_critica(engine):
         critica = reconcile.criticar(conn)
     assert critica["periodos"] == 1
     assert [i["descricao"] for i in critica["so_planilha"]] == ["PADARIA"]
+
+
+def test_corrigir_o_mes_da_fatura_recoloca_as_parcelas(engine):
+    """A fatura do XP paga em setembro e inteira de agosto; enviada como
+    setembro, as parcelas cairam em setembro. Corrigir o mes conserta."""
+    with engine.begin() as conn:
+        xp = conn.execute(sa.insert(db.contas).values(
+            nome="XP teste", tipo="cartao", titular="André", instituicao="XP",
+            parser="xp", ativa=True)).inserted_primary_key[0]
+    resultado = _importar(engine, xp, [
+        dict(data=date(2026, 6, 10), descricao="PAGUE MENOS PARC 03/06", valor_centavos=-100_304,
+             competencia="2026-09"),
+        dict(data=date(2026, 8, 20), descricao="POSTO", valor_centavos=-20_000,
+             competencia="2026-08"),
+    ], competencia="2026-09")
+    assert _resumo(engine, "2026-09")["despesas"] == 100_304, "gravado com o mes do menu"
+    assert repo.mudar_mes_da_fatura(engine, resultado["upload_id"], "2026-08") == 1
+    assert _resumo(engine, "2026-09")["despesas"] == 0
+    assert _resumo(engine, "2026-08")["despesas"] == 100_304 + 20_000

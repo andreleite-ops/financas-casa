@@ -147,7 +147,7 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
         )
     )
     receitas = despesas = poupanca = sem_classe = nao_recorrentes = 0
-    transferencias = sem_classe_entrada = sem_classe_saida = 0
+    transferencias = sem_classe_entrada = sem_classe_saida = sem_classe_estorno = 0
     for linha in conn.execute(consulta):
         total = int(linha.total or 0)
         if linha.subcategoria in SUBCATEGORIAS_NAO_RECORRENTES:
@@ -158,18 +158,21 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
             continue
         if linha.categoria_id is None:
             sem_classe += total
-            # os dois lados, separados: o liquido esconde — 39 mil entrando e
-            # 58 mil saindo sem categoria viravam "19 mil sem categoria"
-            if total > 0:
-                sem_classe_entrada += total
-            else:
-                sem_classe_saida += -total
             # sem categoria o sinal decide, a menos que a origem tenha dito de
             # que lado o lançamento está (estorno de despesa entra positivo)
             lado = linha.natureza_origem or ("receita" if total > 0 else "despesa")
+            # os dois lados, separados: o liquido esconde — 39 mil entrando e
+            # 58 mil saindo sem categoria viravam "19 mil sem categoria". O
+            # credito num cartao ("Ajuste a credito") nao e entrada de renda:
+            # abate a despesa, e e assim que a tela tem de dizer
             if lado == "receita":
+                sem_classe_entrada += total
                 receitas += total
+            elif total > 0:
+                sem_classe_estorno += total
+                despesas += -total
             else:
+                sem_classe_saida += -total
                 despesas += -total
         elif linha.categoria == CATEGORIA_POUPANCA:
             poupanca += -total
@@ -186,6 +189,7 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
         "nao_classificado": sem_classe,
         "sem_categoria_entrada": sem_classe_entrada,
         "sem_categoria_saida": sem_classe_saida,
+        "sem_categoria_estorno": sem_classe_estorno,
         # venda de bem entra em "receitas" (o dinheiro entrou), mas fica de fora
         # daqui: e esta linha que o orçamento usa como renda
         "receitas_nao_recorrentes": nao_recorrentes,

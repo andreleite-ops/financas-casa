@@ -1260,6 +1260,25 @@ def _aba_historico(engine) -> None:
             else:
                 st.info("Nada a corrigir: este arquivo já está com o sinal certo, ou não é "
                         "fatura de cartão.")
+        if escolha.get("competencia") and escolha["origem"] == "extrato":
+            # a fatura do XP paga em setembro e inteira de agosto: enviada como
+            # setembro, as parcelas dela caem no mes errado. Aqui se corrige
+            # sem reimportar
+            m1, m2 = st.columns([2, 1])
+            novo_mes = m1.selectbox(
+                "Mês da fatura deste arquivo", _competencias_sugeridas(),
+                index=(_competencias_sugeridas().index(escolha["competencia"])
+                       if escolha["competencia"] in _competencias_sugeridas() else MESES_A_FRENTE),
+                key=f"mes_fatura_{escolha['id']}",
+                help="Para cartão: o mês em que a fatura fechou (XP: o mês das compras; "
+                     "Nubank: o mês do vencimento). Trocar aqui recoloca as parcelas no "
+                     "mês certo.",
+            )
+            if m2.button("Corrigir o mês da fatura", width="stretch",
+                         key=f"btn_mes_fatura_{escolha['id']}"):
+                movidas = repo.mudar_mes_da_fatura(engine, escolha["id"], novo_mes)
+                st.success(f"Mês da fatura: {novo_mes}. {movidas} lançamento(s) mudaram de mês.")
+                st.rerun()
         if c_apaga.button("Desfazer importação", type="secondary", width="stretch"):
             total, devolvidas, retidas = repo.apagar_upload(engine, escolha["id"])
             recado = f"{total} lançamento(s) removido(s)."

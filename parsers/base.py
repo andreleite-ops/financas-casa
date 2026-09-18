@@ -131,7 +131,8 @@ def _trocar_ano(dia: date, ano: int) -> date:
         return dia.replace(year=ano, day=28)
 
 
-def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[Lancamento]:
+def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str,
+                       parcela_pela_data: bool = True) -> list[Lancamento]:
     """Corrige a virada de ano em fatura que so traz dia/mes.
 
     Fatura traz dia e mês; o ano é o da competência. Uma compra de dezembro na
@@ -153,8 +154,28 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str) -> list[
             lan.data = _trocar_ano(lan.data, lan.data.year - 1)
         elif distancia < -10:
             lan.data = _trocar_ano(lan.data, lan.data.year + 1)
-        lan.competencia = competencia_da_compra(lan.data, competencia, lan.descricao)
+    inicio = inicio_do_ciclo(lancamentos)
+    for lan in lancamentos:
+        lan.competencia = competencia_da_compra(lan.data, competencia, lan.descricao,
+                                                inicio_do_ciclo=inicio)
     return lancamentos
+
+
+def inicio_do_ciclo(lancamentos: list[Lancamento]) -> date | None:
+    """O primeiro dia do ciclo da fatura: a data mais antiga de compra a vista.
+
+    Parcela nao entra na conta — no XP ela vem datada da compra original,
+    meses atras, e faria o ciclo comecar em abril.
+    """
+    datas = [
+        lan.data for lan in lancamentos
+        if lan.data and lan.valor_centavos < 0 and not e_parcela(lan.descricao)
+    ]
+    return min(datas) if datas else None
+
+
+def e_parcela(descricao: str | None) -> bool:
+    return bool(descricao) and bool(_PARCELA.search(descricao))
 
 
 # quantos meses antes do mes da fatura uma compra ainda conta pela propria
@@ -166,7 +187,8 @@ MESES_ATRAS_NA_FATURA = 2
 _PARCELA = re.compile(r"(?i)\bparc(?:ela|\.)?\s*\d{1,2}\s*/\s*\d{1,2}\b|\b\d{1,2}/\d{1,2}\b(?!/)")
 
 
-def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str = "") -> str:
+def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str = "",
+                          inicio_do_ciclo: date | None = None) -> str:
     """A compra conta no mes em que foi feita, nao no mes da fatura.
 
     E como a casa sempre anotou: o gasto de julho e de julho, mesmo que a
@@ -174,13 +196,18 @@ def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str 
     de 17 a 31 de julho em agosto — e julho ja as tinha, item a item, na
     planilha — e as de 14 a 31 de agosto em setembro.
 
-    Parcela e cobranca da fatura, nao compra do mes: a fatura de setembro do
-    XP imprime "PAGUE MENOS 10/06" para a parcela de uma compra de junho. Ela
-    conta em setembro. O mesmo vale para data muito longe do mes da fatura —
-    e lancamento fora do ciclo, e ai vale o mes da fatura.
+    Parcela conta no ciclo da fatura que a cobra, em qualquer cartao. O que
+    muda entre cartoes e so a data impressa: o Nubank imprime o dia em que a
+    parcela entrou no ciclo (14/08, dentro dele) e ai a data serve; o XP
+    imprime a compra original (10/06, antes do ciclo) e ai vale o mes em que
+    o ciclo comeca. O ciclo sai do proprio arquivo: a primeira compra a
+    vista dele.
+
+    Data muito longe do mes da fatura e lancamento fora do ciclo: vale o
+    mes da fatura.
     """
-    if descricao and _PARCELA.search(descricao):
-        return competencia_da_fatura
+    if e_parcela(descricao) and inicio_do_ciclo and dia < inicio_do_ciclo:
+        return f"{inicio_do_ciclo.year:04d}-{inicio_do_ciclo.month:02d}"
     ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
     distancia = (dia.year - ano) * 12 + dia.month - mes
     if -MESES_ATRAS_NA_FATURA <= distancia <= 1:

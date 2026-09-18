@@ -1485,9 +1485,9 @@ def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | N
     return total
 
 
-# v2: a parcela conta no mes da fatura; a marca nova faz a passagem rodar de
-# novo e devolver a parcela que a v1 tinha mandado para o mes da compra
-CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v2"
+# v4: a parcela conta no ciclo da fatura que a cobra, em qualquer cartao; a
+# marca nova faz a passagem rodar de novo sobre o que ja esta gravado
+CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v4"
 
 
 def contar_cartao_pela_compra(engine) -> dict:
@@ -1500,34 +1500,12 @@ def contar_cartao_pela_compra(engine) -> dict:
     e em cada mes fechado que recebeu compras a planilha e conferida pelo
     valor, como o botao da critica faria. Roda uma vez; a marca fica em config.
     """
-    from parsers.base import competencia_da_compra
     from . import reconcile
 
     with engine.begin() as conn:
         if _config(conn, CARTAO_PELA_COMPRA):
             return {"movidas": 0, "conferidas": 0}
-        linhas = conn.execute(
-            sa.select(db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.competencia,
-                      db.transacoes.c.descricao,
-                      db.uploads.c.competencia.label("mes_da_fatura"))
-            .select_from(
-                db.transacoes
-                .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
-                .outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id)
-            )
-            .where(db.contas.c.tipo == "cartao", db.transacoes.c.origem == "extrato")
-        ).all()
-        movidas, meses = 0, set()
-        for linha in linhas:
-            fatura = linha.mes_da_fatura or linha.competencia
-            nova = competencia_da_compra(linha.data, fatura, linha.descricao or "")
-            if nova != linha.competencia:
-                conn.execute(
-                    sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
-                    .values(competencia=nova)
-                )
-                movidas += 1
-                meses.add(nova)
+        movidas, meses = _recompetenciar_cartao(conn)
         _gravar_config(conn, CARTAO_PELA_COMPRA, "1")
     em_curso = date.today().strftime("%Y-%m")
     conferidas = 0
@@ -1563,6 +1541,66 @@ def meses_so_da_planilha(conn) -> set[str]:
         return set()
     primeiro_extrato = min(por_origem["banco"])
     return {c for c in por_origem["planilha"] if c < primeiro_extrato}
+
+
+def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set[str]]:
+    """Da a cada compra de cartao gravada o mes que a regra de hoje da.
+
+    Devolve (quantas mudaram, meses que receberam linha). Com `upload_id`,
+    so as linhas daquele arquivo.
+    """
+    from parsers.base import competencia_da_compra, e_parcela
+
+    consulta = (
+        sa.select(db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.competencia,
+                  db.transacoes.c.descricao, db.transacoes.c.valor_centavos,
+                  db.transacoes.c.upload_id,
+                  db.uploads.c.competencia.label("mes_da_fatura"))
+        .select_from(
+            db.transacoes
+            .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
+            .outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id)
+        )
+        .where(db.contas.c.tipo == "cartao", db.transacoes.c.origem == "extrato")
+    )
+    if upload_id is not None:
+        consulta = consulta.where(db.transacoes.c.upload_id == upload_id)
+    linhas = conn.execute(consulta).all()
+    # o ciclo de cada fatura sai das linhas dela: a primeira compra a vista
+    inicio_por_upload: dict[int | None, date] = {}
+    for linha in linhas:
+        if linha.valor_centavos < 0 and not e_parcela(linha.descricao):
+            atual = inicio_por_upload.get(linha.upload_id)
+            if atual is None or linha.data < atual:
+                inicio_por_upload[linha.upload_id] = linha.data
+    movidas, meses = 0, set()
+    for linha in linhas:
+        fatura = linha.mes_da_fatura or linha.competencia
+        nova = competencia_da_compra(
+            linha.data, fatura, linha.descricao or "",
+            inicio_do_ciclo=inicio_por_upload.get(linha.upload_id),
+        )
+        if nova != linha.competencia:
+            conn.execute(
+                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                .values(competencia=nova)
+            )
+            movidas += 1
+            meses.add(nova)
+    return movidas, meses
+
+
+def mudar_mes_da_fatura(engine, upload_id: int, competencia: str) -> int:
+    """Corrige o "mes da fatura" de um upload de cartao ja gravado e da as
+    linhas dele o mes que a regra manda. E o conserto para a fatura do XP
+    paga em setembro que e inteira de agosto e foi enviada como setembro."""
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(db.uploads).where(db.uploads.c.id == upload_id)
+            .values(competencia=competencia)
+        )
+        movidas, _ = _recompetenciar_cartao(conn, upload_id)
+    return movidas
 
 
 def aplicar_meses_da_planilha(engine) -> dict:
