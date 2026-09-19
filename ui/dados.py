@@ -277,6 +277,7 @@ def painel_de_receitas(_engine, versao: int, ano: int, competencia: str | None) 
                 conn, **filtro, natureza="receita", limite=400
             ),
             "composicao": analytics.composicao_de_receitas(conn, **filtro),
+            "dobradas": analytics.renda_possivelmente_dobrada(conn, **filtro),
         }
 
 

@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from core import analytics, db
-from core.money import fmt_brl, fmt_mil
+from core.money import fmt_brl, fmt_brl_md, fmt_mil
 from ui import dados, graficos
 from ui.tema import CORES_PESSOA, selo_pessoa
 from views import manual
@@ -32,16 +32,15 @@ ROTULO_ORIGEM = {
 }
 
 
-def _de_onde_veio(composicao: list[dict], rotulo: str) -> None:
+def _de_onde_veio(composicao: list[dict], rotulo: str, dobradas: list[dict]) -> None:
     """A quebra da receita por origem, e o alerta de renda contada duas vezes.
 
     O cartão do topo diz quanto entrou; ele nunca disse de onde, e é essa a
     pergunta quando o número parece grande demais. Renda dobrada tem uma
-    assinatura só: no mesmo mês, a previsão digitada à mão e o extrato do banco
-    ativos ao mesmo tempo. O pareamento automático cobre o caso comum — mesmo
-    mês, valor na mesma ordem de grandeza — e erra por omissão justamente onde
-    o recebimento chega picado, em dezenas de créditos pequenos que nenhum
-    sozinho se parece com o total previsto.
+    assinatura estreita: a mesma pessoa, no mesmo mês já fechado, com a
+    previsão e o extrato valendo ao mesmo tempo. Somar o ano inteiro não
+    serve — a planilha é a verdade até julho, o extrato é a de agosto, e o
+    alarme acusava 1,8 milhão de dobra num ano sem dobra nenhuma.
     """
     if not composicao:
         return
@@ -54,24 +53,24 @@ def _de_onde_veio(composicao: list[dict], rotulo: str) -> None:
         acumulado["total"] += linha["total"]
         acumulado["quantos"] += linha["quantos"]
 
-    # previsao e o que foi digitado a mao OU veio na planilha da carga inicial:
-    # a planilha tem o ano inteiro, e dos meses futuros ela e a previsao. Olhar
-    # so o manual deixava salario da planilha + salario do extrato passarem
-    # calados a partir do primeiro extrato real depois da carga
-    previsto, realizado = analytics.previsto_e_realizado(composicao)
-    if previsto and realizado:
+    if dobradas:
+        casos = " · ".join(
+            f"**{graficos.rotulo_mes(d['competencia'])}/{d['competencia'][2:4]}**, "
+            f"{d['pessoa']}: {fmt_brl_md(d['previsto'])} previstos e "
+            f"{fmt_brl_md(d['realizado'])} do extrato"
+            for d in dobradas[:6]
+        )
         st.error(
-            f"**Esta renda pode estar contada duas vezes.** Em {rotulo} há "
-            f"{fmt_brl(previsto)} de receita **prevista** (lançada à mão ou vinda da "
-            f"planilha) e {fmt_brl(realizado)} vinda de **extrato**, as duas valendo. O "
-            "upload casa sozinho o que cai no mesmo mês com valor parecido; o que sobrou "
-            "aqui não casou. Se for o mesmo dinheiro, desative a previsão: a lançada à mão "
-            "em **Upload → Lançar à mão**, com o botão **Apagar**; a da planilha, em "
-            "**Classificação → Reclassificar qualquer lançamento**, com **Desativar**.",
+            "**Esta renda pode estar contada duas vezes.** Num mês que já fechou, a "
+            "previsão da pessoa e o extrato dela estão valendo ao mesmo tempo: "
+            f"{casos}. O upload casa sozinho o que cai no mesmo mês com valor "
+            "parecido; o que sobrou aqui não casou. Se for o mesmo dinheiro, desative "
+            "a previsão: a lançada à mão em **Upload → Lançar à mão**, com **Apagar**; "
+            "a da planilha, aqui embaixo em **Lançamentos de receita**, com **Desativar**.",
             icon="🚨",
         )
 
-    with st.expander(f"De onde veio a receita de {rotulo}", expanded=bool(previsto and realizado)):
+    with st.expander(f"De onde veio a receita de {rotulo}", expanded=bool(dobradas)):
         st.caption(
             "A mesma conta do cartão lá em cima, aberta por origem. **Quantos** importa tanto "
             "quanto o valor: trinta créditos pequenos são pacientes; um crédito só é salário."
@@ -129,7 +128,7 @@ def render(engine, usuario: dict) -> None:
     matriz, itens = painel["matriz"], painel["itens"]
 
     _cartoes_por_pessoa(por_pessoa, total)
-    _de_onde_veio(painel["composicao"], rotulo)
+    _de_onde_veio(painel["composicao"], rotulo, painel["dobradas"])
     # o formulario de lancar a mao mora numa tela so (Upload → Lançar à mão);
     # aqui ele era uma copia, com a lista e o Apagar duas vezes
     st.caption("Para lançar uma receita à mão, use **Upload → ✍️ Lançar à mão**.")
@@ -219,26 +218,73 @@ def render(engine, usuario: dict) -> None:
         st.caption("Nenhum lançamento de receita no período.")
         return
 
+    st.caption(
+        "Escolha o tipo para ver só o que está dentro dele. Cada lançamento traz o "
+        "editor: corrija a categoria, a pessoa, ou **Desative** o que for a mesma "
+        "receita vinda de duas fontes."
+    )
+    if recado := st.session_state.pop("msg_classificacao", None):
+        st.success(recado)
+    plano = dados.plano_de_contas(engine, dados.versao())
     pessoas = sorted({item["pessoa"] for item in itens})
     abas = st.tabs([f"{p} ({sum(1 for i in itens if i['pessoa'] == p)})" for p in pessoas])
     for aba, pessoa in zip(abas, pessoas):
         with aba:
-            do_pessoa = [item for item in itens if item["pessoa"] == pessoa]
-            st.markdown(
-                f"{selo_pessoa(pessoa)} &nbsp; **{fmt_brl(sum(i['valor_centavos'] for i in do_pessoa))}** "
-                f"em {len(do_pessoa)} lançamento(s)",
-                unsafe_allow_html=True,
+            _lancamentos_da_pessoa(
+                engine, usuario, pessoa,
+                [item for item in itens if item["pessoa"] == pessoa], plano,
             )
-            st.dataframe(
-                pd.DataFrame([
-                    {
-                        "Data": f"{i['data']:%d/%m/%Y}",
-                        "Descrição": i["descricao"],
-                        "Tipo": i["subcategoria"] or i["categoria"] or "—",
-                        "Conta": i["conta"],
-                        "Valor": fmt_brl(i["valor_centavos"]),
-                    }
-                    for i in do_pessoa
-                ]),
-                width="stretch", hide_index=True,
-            )
+
+
+SEM_TIPO = "— sem tipo —"
+# quantos editores cabem numa aba sem a tela ficar pesada; o resto sai pelo
+# filtro de tipo, que e como se chega ao lancamento especifico
+POR_VEZ = 40
+
+
+def _lancamentos_da_pessoa(engine, usuario: dict, pessoa: str, itens: list[dict],
+                           plano: list[dict]) -> None:
+    """Os lançamentos de receita de uma pessoa, com o editor em cada um.
+
+    O mesmo que a Visão Geral faz com a despesa: ver o que está dentro do
+    número, linha a linha, e corrigir ali mesmo. Na receita isso vale ainda
+    mais, porque é aqui que se desativa a previsão que ficou valendo ao lado
+    do extrato — o dinheiro que o alerta lá em cima acusa.
+    """
+    from views.classificacao import _editor
+
+    tipos = sorted({i["subcategoria"] or i["categoria"] or SEM_TIPO for i in itens})
+    escolha = st.selectbox(
+        "Tipo", ["Todos", *tipos], key=f"rec_tipo_{pessoa}",
+        help="Filtra esta lista. O total ao lado acompanha o filtro.",
+    )
+    filtrados = (itens if escolha == "Todos"
+                 else [i for i in itens
+                       if (i["subcategoria"] or i["categoria"] or SEM_TIPO) == escolha])
+    filtrados = sorted(filtrados, key=lambda i: -i["valor_centavos"])
+    st.markdown(
+        f"{selo_pessoa(pessoa)} &nbsp; "
+        f"**{fmt_brl(sum(i['valor_centavos'] for i in filtrados))}** "
+        f"em {len(filtrados)} lançamento(s)",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Tabela", expanded=False):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Data": f"{i['data']:%d/%m/%Y}",
+                    "Descrição": i["descricao"],
+                    "Tipo": i["subcategoria"] or i["categoria"] or "—",
+                    "Conta": i["conta"],
+                    "Valor": fmt_brl(i["valor_centavos"]),
+                    "Arquivo": i["arquivo"] or i["origem"],
+                }
+                for i in filtrados
+            ]),
+            width="stretch", hide_index=True,
+        )
+    for item in filtrados[:POR_VEZ]:
+        _editor(engine, usuario, item, plano, prefixo="rec")
+    if len(filtrados) > POR_VEZ:
+        st.caption(f"Mostrando os {POR_VEZ} maiores de {len(filtrados)}. Filtre pelo tipo "
+                   "para chegar aos demais.")

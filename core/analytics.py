@@ -803,8 +803,7 @@ def previsto_e_realizado(composicao: list[dict]) -> tuple[int, int]:
 
     Previsao e o que foi digitado a mao ou veio na planilha da carga inicial —
     a planilha traz o ano inteiro, e dos meses futuros ela e a previsao.
-    Realizado e o que veio de extrato. Os dois juntos no mesmo mes, valendo, e
-    a assinatura de renda contada duas vezes; e a tela de Receitas que le isto.
+    Realizado e o que veio de extrato.
     """
     from .dedup import ORIGENS_DE_PREVISAO
 
@@ -817,6 +816,56 @@ def previsto_e_realizado(composicao: list[dict]) -> tuple[int, int]:
         else:
             realizado += linha["total"]
     return previsto, realizado
+
+
+def renda_possivelmente_dobrada(conn, competencia=None, ano=None, pessoa=None) -> list[dict]:
+    """Os meses fechados em que a previsao de alguem convive com o extrato dele.
+
+    Renda dobrada tem uma assinatura estreita: a MESMA pessoa, no MESMO mes,
+    com a receita que ela previu (planilha ou lancada a mao) e a que o banco
+    mostra, as duas valendo, num mes que ja acabou. Somar o ano inteiro nao
+    serve: a planilha e a verdade de janeiro a julho, o extrato e a de agosto,
+    e o alarme tocava sempre que houvesse um extrato no ano — dizendo "1,8
+    milhao pode estar dobrado" sobre um ano que nao tem dobra nenhuma.
+
+    Mes em curso tampouco: o extrato ainda nao chegou, e conviver com a
+    previsao e o normal dele. Mes futuro so tem previsao.
+    """
+    from .dedup import ORIGENS_DE_PREVISAO
+
+    lado = _lado_da_linha().label("lado")
+    consulta = (
+        sa.select(
+            db.transacoes.c.competencia,
+            db.transacoes.c.pessoa,
+            db.transacoes.c.origem,
+            lado,
+            sa.func.sum(db.transacoes.c.valor_centavos).label("total"),
+        )
+        .select_from(
+            db.transacoes
+            .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(*_base(competencia, ano, pessoa),
+               db.transacoes.c.competencia < date.today().strftime("%Y-%m"),
+               sa.or_(db.categorias.c.nome.is_(None),
+                      db.categorias.c.nome.not_in((CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA))))
+        .group_by(db.transacoes.c.competencia, db.transacoes.c.pessoa,
+                  db.transacoes.c.origem, lado)
+        .having(lado == "receita")
+    )
+    por_mes: dict[tuple[str, str], dict[str, int]] = {}
+    for linha in conn.execute(consulta):
+        alvo = por_mes.setdefault((linha.competencia, linha.pessoa),
+                                  {"previsto": 0, "realizado": 0})
+        chave = "previsto" if linha.origem in ORIGENS_DE_PREVISAO else "realizado"
+        alvo[chave] += int(linha.total or 0)
+    return sorted(
+        ({"competencia": mes, "pessoa": quem, **valores}
+         for (mes, quem), valores in por_mes.items()
+         if valores["previsto"] > 0 and valores["realizado"] > 0),
+        key=lambda linha: (linha["competencia"], linha["pessoa"]),
+    )
 
 
 def receitas_por_pessoa(conn, competencia=None, ano=None) -> list[dict]:

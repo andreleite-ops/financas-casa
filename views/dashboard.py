@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from core import analytics, db, reconcile, repo
-from core.money import fmt_brl, fmt_mil
+from core.money import fmt_brl, fmt_brl_md, fmt_mil
 from ui import dados, graficos
 from ui.tema import BOM, CRITICO, SERIE_DESPESA, SERIE_POUPANCA
 
@@ -222,7 +222,7 @@ def _competencia_de_abertura(engine, competencias: list[str]) -> str:
 
 
 def _reais(centavos: int) -> str:
-    return fmt_brl(centavos).replace("$", chr(92) + "$")
+    return fmt_brl_md(centavos)
 
 
 def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:

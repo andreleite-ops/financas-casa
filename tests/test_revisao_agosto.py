@@ -898,3 +898,71 @@ def test_transferencia_entra_na_lista_de_destinos_dos_dois_lados(engine):
     assert resgate in entrada and resgate in saida
     assert not any("Moradia" in rotulo for rotulo in entrada)
     assert not any("Trabalho" in rotulo for rotulo in saida)
+
+
+def test_alarme_de_renda_dobrada_olha_o_mes_e_a_pessoa(engine):
+    """O ano inteiro somado nao diz nada: a planilha e a verdade ate julho, o
+    extrato e a de agosto. So dobra o mes ja fechado em que a previsao de uma
+    pessoa e o extrato dela valem ao mesmo tempo."""
+    planilha = repo.conta_da_planilha(engine)
+    corrente = _conta(engine, "Banco teste", "corrente", titular="André")
+    _importar(engine, planilha, [
+        dict(data=date(2026, 7, 5), descricao="PRO LABORE JULHO", valor_centavos=5_000_000,
+             competencia="2026-07", pessoa_hint="André", categoria_hint="Trabalho"),
+    ], origem="planilha", competencia="2026-07")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 7), descricao="PIX RECEBIDO REM: EMPRESA LTDA",
+             valor_centavos=5_069_175),
+    ], pessoa_padrao="André")
+    with engine.connect() as conn:
+        assert analytics.renda_possivelmente_dobrada(conn, ano=2026) == []
+
+    # agora sim: a previsao de agosto sobreviveu ao extrato de agosto
+    with engine.begin() as conn:
+        trabalho = conn.execute(sa.select(db.categorias.c.id).where(
+            db.categorias.c.nome == "Trabalho")).scalar_one()
+        conn.execute(sa.insert(db.transacoes).values(
+            data=date(2026, 8, 28), competencia="2026-08", descricao="ATENDIMENTOS PREVISTOS",
+            descricao_norm="ATENDIMENTOS PREVISTOS", valor_centavos=4_000_000,
+            conta_id=planilha, categoria_id=trabalho, pessoa="André", status="manual",
+            origem="planilha", hash_dedup="previsao", ativo=True,
+        ))
+    with engine.connect() as conn:
+        dobradas = analytics.renda_possivelmente_dobrada(conn, ano=2026)
+    assert [(d["competencia"], d["pessoa"]) for d in dobradas] == [("2026-08", "André")]
+    assert dobradas[0] == {"competencia": "2026-08", "pessoa": "André",
+                           "previsto": 4_000_000, "realizado": 5_069_175}
+
+
+def test_alarme_de_renda_dobrada_cala_no_mes_em_curso(engine):
+    """No mes em curso o extrato ainda nao chegou inteiro: previsao e extrato
+    convivendo ali e o normal, nao dobra."""
+    em_curso = date.today()
+    mes = em_curso.strftime("%Y-%m")
+    planilha = repo.conta_da_planilha(engine)
+    corrente = _conta(engine, "Banco teste", "corrente", titular="André")
+    _importar(engine, planilha, [
+        dict(data=em_curso, descricao="PRO LABORE PREVISTO", valor_centavos=5_000_000,
+             competencia=mes, pessoa_hint="André", categoria_hint="Trabalho"),
+    ], origem="planilha", competencia=mes)
+    _importar(engine, corrente, [
+        dict(data=em_curso, descricao="CREDITO PEQUENO DO MES", valor_centavos=121_113),
+    ], pessoa_padrao="André")
+    with engine.connect() as conn:
+        assert analytics.renda_possivelmente_dobrada(conn, ano=em_curso.year) == []
+
+
+def test_transferencia_nao_conta_como_renda_no_alarme(engine):
+    """O resgate classificado em Transferencias nao e renda: ele nao pode
+    fazer o alarme tocar sozinho."""
+    planilha = repo.conta_da_planilha(engine)
+    corrente = _conta(engine, "Banco teste", "corrente", titular="Rô")
+    _importar(engine, planilha, [
+        dict(data=date(2026, 8, 28), descricao="ATENDIMENTOS", valor_centavos=1_500_000,
+             competencia="2026-08", pessoa_hint="Rô", categoria_hint="Trabalho"),
+    ], origem="planilha", competencia="2026-08")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 14), descricao="TED 102.0001.RO C", valor_centavos=314_327),
+    ], pessoa_padrao="Rô")
+    with engine.connect() as conn:
+        assert analytics.renda_possivelmente_dobrada(conn, ano=2026) == []

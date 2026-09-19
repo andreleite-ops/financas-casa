@@ -70,6 +70,17 @@ def fmt_brl(centavos: int, sinal: bool = False) -> str:
     return f"+R$ {corpo}" if sinal else f"R$ {corpo}"
 
 
+def fmt_brl_md(centavos: int, sinal: bool = False) -> str:
+    """O mesmo R$ 1.234,56, seguro dentro de um texto em markdown.
+
+    O Streamlit le "$...$" como formula: dois valores na mesma frase viravam
+    um bloco de LaTeX, o texto do meio saia em fonte de codigo e o negrito
+    sumia. Escapar o cifrao resolve, e a tela que escreve numero em prosa tem
+    de usar esta versao.
+    """
+    return fmt_brl(centavos, sinal).replace("$", "\\$")
+
+
 def fmt_mil(centavos: int) -> str:
     """Formata centavos como milhares com 1 casa: 33,4."""
     if centavos is None:
