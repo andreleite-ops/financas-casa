@@ -357,6 +357,55 @@ def _auditoria_das_despesas(engine, usuario: dict, competencia: str) -> None:
         _raio_x(dados_auditoria.get("raio_x") or {}, mes)
 
 
+def _lancamentos_da_categoria(engine, usuario, categoria: str, competencia: str,
+                              linhas: list[dict], fatias: list[dict]) -> None:
+    """Os lancamentos de uma categoria no mes, filtrados pela subcategoria, com o
+    editor de classificacao em cada um — para analisar e reclassificar ali mesmo.
+
+    E o pedido do dono: clicar na subcategoria e ver o que esta dentro dela,
+    linha a linha, e corrigir o que estiver no lugar errado sem sair da tela.
+    """
+    from views.classificacao import _editor
+
+    mes = f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
+    SEM_SUB = "— sem subcategoria —"
+    opcoes = ["Todas", *[f["subcategoria"] for f in fatias]]
+    escolha = st.selectbox(
+        f"Ver os lançamentos de {categoria} em {mes}", opcoes, key="vg_sub",
+        help="Escolha a subcategoria para ver só o que está dentro dela. Cada lançamento "
+             "tem o editor: mude a categoria e salve, e a correção vira memória.",
+    )
+    if escolha == "Todas":
+        filtradas = linhas
+    else:
+        filtradas = [l for l in linhas if (l["subcategoria"] or SEM_SUB) == escolha]
+    filtradas = sorted(filtradas, key=lambda l: l["valor_centavos"])
+    total = -sum(l["valor_centavos"] for l in filtradas)
+    st.caption(f"{len(filtradas)} lançamento(s) · {fmt_brl(total)}")
+    with st.expander("Tabela", expanded=False):
+        st.dataframe(
+            pd.DataFrame([
+                {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
+                 "Descrição": l["descricao"][:48],
+                 "Subcategoria": l["subcategoria"] or "—",
+                 "Valor": fmt_brl(abs(l["valor_centavos"])),
+                 "Arquivo": l["arquivo"] or l["origem"]}
+                for l in filtradas
+            ]),
+            width="stretch", hide_index=True,
+        )
+    if recado := st.session_state.pop("msg_classificacao", None):
+        st.success(recado)
+    plano = dados.plano_de_contas(engine, dados.versao())
+    # o editor e o mesmo da tela de Classificacao: um formulario por linha,
+    # salvar recarrega, escolher nao. Ate 40 por vez para a tela nao pesar
+    for item in filtradas[:40]:
+        _editor(engine, usuario, item, plano, prefixo="vg")
+    if len(filtradas) > 40:
+        st.caption(f"Mostrando os 40 maiores de {len(filtradas)}. Refine pela subcategoria "
+                   "para ver os demais.")
+
+
 def _raio_x(raio_x: dict, mes: str) -> None:
     """De onde vem cada real do mês — a resposta que antes só o SQL dava."""
     valendo, planilha = raio_x.get("valendo") or [], raio_x.get("planilha") or []
@@ -631,21 +680,7 @@ def render(engine, usuario: dict) -> None:
                     )
                 linhas = explodida.get("linhas") or []
                 if not do_ano and linhas:
-                    with st.expander(
-                        f"Os {len(linhas)} lançamento(s) de {escolhida} em "
-                        f"{graficos.rotulo_mes(competencia).lower()}/{competencia[2:4]}"
-                    ):
-                        st.dataframe(
-                            pd.DataFrame([
-                                {"Data": f"{l['data']:%d/%m}", "Conta": l["conta"],
-                                 "Descrição": l["descricao"][:48],
-                                 "Subcategoria": l["subcategoria"] or "—",
-                                 "Valor": fmt_brl(abs(l["valor_centavos"])),
-                                 "Arquivo": l["arquivo"] or l["origem"]}
-                                for l in sorted(linhas, key=lambda l: l["valor_centavos"])
-                            ]),
-                            width="stretch", hide_index=True,
-                        )
+                    _lancamentos_da_categoria(engine, usuario, escolhida, competencia, linhas, fatias)
                 sem_detalhe = next((f for f in fatias if not f["detalhada"]), None)
                 if sem_detalhe:
                     aviso, botao = st.columns([3, 1.2])

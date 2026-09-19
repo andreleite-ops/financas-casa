@@ -852,6 +852,12 @@ def lancamentos(
             db.transacoes.c.origem,
             # de que arquivo a linha veio: e a resposta para "eu nao subi isso"
             db.uploads.c.arquivo,
+            # o que o editor de classificacao precisa para reclassificar a
+            # linha ali mesmo, na Visao Geral
+            db.transacoes.c.categoria_id,
+            db.transacoes.c.subcategoria_id,
+            db.transacoes.c.classificacao_origem,
+            db.contas.c.tipo.label("tipo_conta"),
         )
         .select_from(
             db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
