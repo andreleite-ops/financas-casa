@@ -239,6 +239,20 @@ def painel_do_ano(_engine, versao: int, competencia: str, escopo: str = "12m") -
 
 
 @st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
+def orcamento_do_periodo(_engine, versao: int, competencia: str, escopo: str,
+                         ano: int, renda_base: int) -> dict:
+    """Realizado x meta somando o período inteiro — o ano ou os doze meses."""
+    with _engine.connect() as conn:
+        competencias = analytics.competencias_do_periodo(conn, competencia, escopo)
+        return {
+            "competencias": competencias,
+            "linhas": analytics.orcamento_do_periodo(
+                conn, competencias, repo.listar_metas(conn, ano), renda_base
+            ),
+        }
+
+
+@st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
 def metas_do_ano(_engine, versao: int, ano: int) -> dict:
     """Metas gravadas e a média do ano — o que a tela precisa antes de saber
     qual renda a pessoa vai considerar."""
@@ -246,6 +260,8 @@ def metas_do_ano(_engine, versao: int, ano: int) -> dict:
         return {
             "metas": repo.listar_metas(conn, ano),
             "media": analytics.resumo(conn, ano=ano),
+            # a renda com que a casa decidiu planejar: gravada, não recalculada
+            "renda_base": repo.renda_base_gravada(conn, ano),
         }
 
 

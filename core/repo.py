@@ -2452,6 +2452,35 @@ def salvar_metas(engine, ano: int, percentuais: dict[int, float]) -> None:
             )
 
 
+def _chave_da_renda_base(ano: int) -> str:
+    return f"renda_base_{ano}"
+
+
+def salvar_renda_base(engine, ano: int, centavos: int) -> None:
+    """Guarda a renda mensal com que a casa decidiu planejar o ano.
+
+    A meta e percentual, e percentual de nada nao e meta nenhuma: e a renda
+    considerada que transforma "8% em Alimentacao" em reais. Ela nao era
+    gravada — a tela a recalculava como media do ano a cada visita. Quem
+    digitou 70 mil, salvou as metas e voltou no dia seguinte encontrava outra
+    base, todos os valores em reais diferentes, e concluia (com razao) que
+    nada tinha sido salvo.
+    """
+    with engine.begin() as conn:
+        _gravar_config(conn, _chave_da_renda_base(ano), str(int(centavos)))
+
+
+def renda_base_gravada(conn, ano: int) -> int | None:
+    """A renda considerada que foi salva para este ano, se houver."""
+    valor = _config(conn, _chave_da_renda_base(ano))
+    if not valor:
+        return None
+    try:
+        return int(valor)
+    except ValueError:
+        return None
+
+
 def listar_metas(conn, ano: int) -> dict[int, float]:
     return {
         linha.categoria_id: linha.percentual

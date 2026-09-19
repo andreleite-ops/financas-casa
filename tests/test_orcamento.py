@@ -6,7 +6,7 @@ from datetime import date
 
 import sqlalchemy as sa
 
-from core import analytics, db
+from core import analytics, db, repo
 from core.dedup import hash_lancamento
 from core.texto import normalizar
 
@@ -164,3 +164,70 @@ def test_despesa_acima_da_meta_estoura(engine, conn):
     assert linha["meta_e_piso"] is False
     assert linha["realizado"] > linha["meta"]
     assert linha["estourou"] is True
+
+
+# ---------------------------------------------------------------------------
+# o orçamento do período: há gasto que não cabe num mês
+# ---------------------------------------------------------------------------
+def test_gasto_concentrado_num_mes_estoura_o_mes_e_cabe_no_ano(engine, conn):
+    """A viagem do ano inteiro acontece em julho. No mês ela aparece com
+    2.700% da meta; no ano, dentro dela. Nenhum dos doze meses descreve a
+    casa — o do ano descreve."""
+    conta = _conta_id(conn)
+    lazer = _categoria_id(conn, "Lazer & Viagens")
+    for mes in range(1, 9):
+        _inserir(conn, conta, date(2026, mes, 10), "PADARIA", -10_000,
+                 _categoria_id(conn, "Alimentação"))
+    _inserir(conn, conta, date(2026, 7, 10), "PACOTE DE VIAGEM", -3_000_000, lazer)
+
+    renda_base = 7_000_000          # R$ 70.000 por mês
+    metas = {lazer: 5.0}            # 5% da renda = R$ 3.500 por mês
+    competencias = [f"2026-{m:02d}" for m in range(1, 9)]
+
+    no_mes = analytics.orcamento(conn, "2026-07", metas, renda_base=renda_base)
+    linha_mes = next(l for l in no_mes if l["categoria_id"] == lazer)
+    assert linha_mes["meta"] == 350_000
+    assert round(linha_mes["uso"]) == 857, "no mês da viagem, estourou muito"
+
+    no_periodo = analytics.orcamento_do_periodo(conn, competencias, metas, renda_base)
+    linha_ano = next(l for l in no_periodo if l["categoria_id"] == lazer)
+    assert linha_ano["meta"] == 350_000 * 8, "a meta do período é a mensal repetida"
+    assert linha_ano["realizado"] == 3_000_000
+    assert round(linha_ano["uso"]) == 107, "no período, passou de pouco"
+    assert linha_ano["meses_com_gasto"] == 1
+    assert linha_ano["pico_mes"] == "2026-07"
+    assert linha_ano["concentracao"] == 100, "tudo num mês só"
+    assert linha_ano["ritmo"] == 375_000
+
+
+def test_o_que_passa_de_pouco_todo_mes_estoura_o_periodo(engine, conn):
+    """O contrário também: nenhum mês acende alarme e o ano estoura."""
+    conta = _conta_id(conn)
+    alimentacao = _categoria_id(conn, "Alimentação")
+    for mes in range(1, 7):
+        _inserir(conn, conta, date(2026, mes, 10), "MERCADO", -620_000, alimentacao)
+
+    competencias = [f"2026-{m:02d}" for m in range(1, 7)]
+    linhas = analytics.orcamento_do_periodo(
+        conn, competencias, {alimentacao: 8.0}, 7_000_000
+    )
+    linha = next(l for l in linhas if l["categoria_id"] == alimentacao)
+    assert linha["meta"] == 560_000 * 6
+    assert linha["realizado"] == 620_000 * 6
+    assert linha["estourou"] is True
+    assert linha["concentracao"] < 50, "espalhado, não concentrado"
+    assert linha["saldo"] == 560_000 * 6 - 620_000 * 6
+
+
+def test_a_renda_considerada_fica_salva(engine):
+    """A meta é percentual, e percentual de nada não é meta: a renda com que a
+    casa planeja é decisão, e decisão se guarda."""
+    with engine.connect() as conn:
+        assert repo.renda_base_gravada(conn, 2026) is None
+    repo.salvar_renda_base(engine, 2026, 7_000_000)
+    with engine.connect() as conn:
+        assert repo.renda_base_gravada(conn, 2026) == 7_000_000
+    repo.salvar_renda_base(engine, 2026, 8_000_000)
+    with engine.connect() as conn:
+        assert repo.renda_base_gravada(conn, 2026) == 8_000_000
+        assert repo.renda_base_gravada(conn, 2025) is None

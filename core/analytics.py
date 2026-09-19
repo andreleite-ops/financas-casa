@@ -1000,6 +1000,65 @@ def orcamento(
     return sorted(saida, key=lambda linha: (-linha["percentual"], -linha["realizado"]))
 
 
+def orcamento_do_periodo(conn, competencias: list[str], metas: dict[int, float],
+                         renda_base: int) -> list[dict]:
+    """Realizado x meta somando um periodo inteiro, nao um mes.
+
+    Ha gasto que nao cabe num mes. A viagem do ano inteiro acontece em julho:
+    naquele mes Lazer & Viagens aparece com 2.777% da meta, e nos outros onze
+    com nada. Nenhum dos doze numeros descreve a casa — o do ano descreve.
+
+    A meta do periodo e a meta mensal repetida pelos meses do periodo: e
+    assim que uma meta de 5% da renda vira um teto anual, e e contra ele que a
+    viagem tem de ser medida. Alem do total, cada linha diz em quantos meses
+    houve gasto e quanto do total caiu no maior deles — concentracao que a
+    media esconde.
+    """
+    matriz = matriz_de_competencias(conn, competencias)
+    por_nome = {linha["categoria"]: linha for linha in matriz["linhas"]}
+    meses = len(competencias) or 1
+    poupanca_id = _id_poupanca(conn)
+    categorias = {
+        linha.id: linha.nome
+        for linha in conn.execute(
+            sa.select(db.categorias.c.id, db.categorias.c.nome).where(
+                db.categorias.c.natureza == "despesa", db.categorias.c.ativa == sa.true()
+            )
+        )
+    }
+    saida = []
+    for categoria_id, nome in categorias.items():
+        pct = metas.get(categoria_id, 0.0)
+        meta_mensal = int(round(renda_base * pct / 100))
+        meta = meta_mensal * meses
+        linha = por_nome.get(nome)
+        realizado = linha["total"] if linha else 0
+        pico = linha["pico"] if linha else 0
+        e_piso = categoria_id == poupanca_id
+        saida.append({
+            "categoria_id": categoria_id,
+            "categoria": nome,
+            "percentual": pct,
+            "meta_mensal": meta_mensal,
+            "meta": meta,
+            "realizado": realizado,
+            "ritmo": realizado // meses,
+            "saldo": meta - realizado,
+            "uso": (realizado / meta * 100) if meta else None,
+            "meses_com_gasto": linha["meses_com_gasto"] if linha else 0,
+            "meses": meses,
+            "pico_mes": linha["pico_mes"] if linha else None,
+            "pico": pico,
+            # metade do gasto do periodo num mes so: a media mensal desta
+            # categoria nao descreve mes nenhum
+            "concentracao": round(100 * pico / realizado) if realizado > 0 else 0,
+            "meta_e_piso": e_piso,
+            "estourou": bool(meta and realizado > meta and not e_piso),
+            "abaixo_do_piso": bool(meta and e_piso and realizado < meta),
+        })
+    return sorted(saida, key=lambda linha: (-linha["percentual"], -linha["realizado"]))
+
+
 def cobertura_da_classificacao(conn, competencia: str) -> dict:
     """Quanto do mês já está classificado — e em que profundidade.
 
