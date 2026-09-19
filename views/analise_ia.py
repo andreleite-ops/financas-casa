@@ -17,6 +17,14 @@ from core import ai, repo
 from core.money import fmt_brl
 from ui import dados, destinos
 
+# o pedido feito num rerun e atendido no seguinte: a tela se desenha inteira
+# antes de a IA ser chamada
+PEDIDO = "ia_pedido"
+# de quantos em quantos caracteres a tela é repintada enquanto o texto chega:
+# a cada pedaço seriam centenas de repinturas, e a cada mil o texto pareceria
+# saltar de bloco em bloco
+PASSO_DO_FLUXO = 120
+
 # "R$ 1.234,56", "-R$ 80,00", "12%", "3,5%": o que numa análise é número e
 # precisa saltar do texto. O cifrão é escapado no mesmo passo — o Streamlit lê
 # um par deles como fórmula LaTeX e come a frase do meio.
@@ -35,6 +43,30 @@ def _destacar(texto: str) -> str:
         lambda achado: f"<span class='num'>{achado.group().replace('$', chr(92) + '$')}</span>",
         texto,
     )
+
+
+def _em_fluxo_na_tela(pedacos, chave: str) -> str:
+    """Escreve a análise na tela conforme ela chega, e devolve o texto inteiro.
+
+    Esperar calado era ruim de duas maneiras. Parecia travado — a leitura longa
+    leva mais de um minuto — e, enquanto o script ficava parado, o Streamlit
+    mantinha na tela o esqueleto apagado da página anterior: o "Gasto por
+    categoria" da Visão Geral aparecia embaixo da Análise IA, como resíduo.
+    Escrevendo pedaço a pedaço, a tela se refaz no primeiro deles.
+    """
+    with st.container(key=f"analise_{chave}"):
+        lugar = st.empty()
+    partes: list[str] = []
+    desde_a_ultima = 0
+    for pedaco in pedacos:
+        partes.append(pedaco)
+        desde_a_ultima += len(pedaco)
+        if desde_a_ultima >= PASSO_DO_FLUXO:
+            desde_a_ultima = 0
+            lugar.markdown(_destacar("".join(partes)), unsafe_allow_html=True)
+    texto = "".join(partes)
+    lugar.markdown(_destacar(texto), unsafe_allow_html=True)
+    return texto
 
 
 def _mostrar_analise(texto: str, chave: str) -> None:
@@ -148,10 +180,15 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
             st.code(contexto, language="text")
         return
 
-    gerar = st.button(
-        "Gerar leitura deste mês" if anterior is None else "Gerar de novo",
-        type="primary", key="ia_gerar",
-    )
+    # o pedido fica guardado e a tela recarrega antes da chamada: assim a
+    # página inteira se desenha (rápido) e só depois a IA é chamada. Chamando
+    # dentro do mesmo rerun, o resto da tela nunca chegava a ser redesenhado e
+    # o que sobrava da tela anterior ficava à vista o tempo todo
+    if st.button("Gerar leitura deste mês" if anterior is None else "Gerar de novo",
+                 type="primary", key="ia_gerar"):
+        st.session_state[PEDIDO] = ("mes", competencia)
+        st.rerun()
+    gerar = st.session_state.get(PEDIDO) == ("mes", competencia)
 
     if anterior and not gerar:
         if anterior["desatualizada"]:
@@ -177,8 +214,9 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
         )
         return
 
+    st.session_state.pop(PEDIDO, None)
     with st.spinner("Lendo o mês…"):
-        texto = ai.analisar_mes(contexto)
+        texto = _em_fluxo_na_tela(ai.analisar_mes_em_fluxo(contexto), "mes")
     if _falhou(texto):
         _mostrar_falha(texto)
         return
@@ -186,7 +224,6 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
         engine, competencia=competencia, texto=texto, modelo=ai.MODELO_ANALISE,
         contexto=contexto, usuario=usuario.get("nome", "—"),
     )
-    _mostrar_analise(texto, "mes")
     with st.expander("Números usados"):
         st.code(contexto, language="text")
 
@@ -267,10 +304,11 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
             st.code(contexto, language="text")
         return
 
-    gerar = st.button(
-        f"Ler {rotulo_escopo.lower()}" if anterior is None else "Ler de novo",
-        type="primary", key="ia_gerar_ano",
-    )
+    if st.button(f"Ler {rotulo_escopo.lower()}" if anterior is None else "Ler de novo",
+                 type="primary", key="ia_gerar_ano"):
+        st.session_state[PEDIDO] = ("longa", competencia, escopo)
+        st.rerun()
+    gerar = st.session_state.get(PEDIDO) == ("longa", competencia, escopo)
 
     if anterior and not gerar:
         if anterior["desatualizada"]:
@@ -292,8 +330,11 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
         )
         return
 
+    st.session_state.pop(PEDIDO, None)
     with st.spinner("Lendo a série…"):
-        texto = ai.analisar_ano(contexto, rotulo=rotulo_escopo.lower())
+        texto = _em_fluxo_na_tela(
+            ai.analisar_ano_em_fluxo(contexto, rotulo=rotulo_escopo.lower()), "longa"
+        )
     if _falhou(texto):
         _mostrar_falha(texto)
         return
@@ -301,7 +342,6 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
         engine, competencia=competencia, texto=texto, modelo=ai.MODELO_ANALISE,
         contexto=contexto, usuario=usuario.get("nome", "—"), tipo=tipo,
     )
-    _mostrar_analise(texto, "longa")
     with st.expander("Números usados"):
         st.code(contexto, language="text")
 
@@ -332,7 +372,9 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
             sobre = ("o ano civil até " + competencia if escopo == "ano"
                      else f"os últimos doze meses até {competencia}")
         with st.spinner("Consultando os números…"):
-            resposta = ai.responder_pergunta(contexto, pergunta, rotulo=sobre)
+            resposta = _em_fluxo_na_tela(
+                ai.responder_pergunta_em_fluxo(contexto, pergunta, rotulo=sobre), "pergunta"
+            )
         if _falhou(resposta):
             _mostrar_falha(resposta)
         else:
@@ -344,7 +386,6 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
                 # respostas diferentes e nada explica a diferença
                 pergunta=f"[{sobre}] {pergunta.strip()}",
             )
-            _mostrar_analise(resposta, "pergunta")
 
     anteriores = dados.perguntas_anteriores(engine, dados.versao(), competencia)
     if anteriores:

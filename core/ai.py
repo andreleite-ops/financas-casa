@@ -278,22 +278,26 @@ def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000,
     try:
         resposta = _chamar(parametros)
     except Exception as exc:
-        # o nome da exceção sozinho não permite diagnóstico nenhum: "chave
-        # inválida", "modelo inexistente" e "sem crédito" chegavam todos como
-        # uma linha igual. A mensagem do erro é o que diz qual dos três é.
-        detalhe = " ".join(str(exc).split())[:400] or type(exc).__name__
-        return (
-            "**Não consegui falar com a IA agora.**\n\n"
-            f"`{type(exc).__name__}: {detalhe}`\n\n"
-            "Se falar em *authentication*, a chave está errada ou não chegou ao app. "
-            "Se falar em *credit* ou *billing*, falta saldo na organização. "
-            "Se falar em *model*, o nome do modelo mudou e eu ajusto no código."
-        )
-    texto = texto_da_resposta(resposta)
-    if texto:
-        return texto
+        return _recado_de_erro(exc)
+    return texto_da_resposta(resposta) or _recado_sem_texto(resposta)
 
-    # sem texto: dizer o motivo, que é o que permite corrigir
+
+def _recado_de_erro(exc: Exception) -> str:
+    """O nome da exceção sozinho não permite diagnóstico nenhum: "chave
+    inválida", "modelo inexistente" e "sem crédito" chegavam todos como uma
+    linha igual. A mensagem do erro é o que diz qual dos três é."""
+    detalhe = " ".join(str(exc).split())[:400] or type(exc).__name__
+    return (
+        "**Não consegui falar com a IA agora.**\n\n"
+        f"`{type(exc).__name__}: {detalhe}`\n\n"
+        "Se falar em *authentication*, a chave está errada ou não chegou ao app. "
+        "Se falar em *credit* ou *billing*, falta saldo na organização. "
+        "Se falar em *model*, o nome do modelo mudou e eu ajusto no código."
+    )
+
+
+def _recado_sem_texto(resposta) -> str:
+    """Voltou sem texto: dizer o motivo, que é o que permite corrigir."""
     motivo = getattr(resposta, "stop_reason", None)
     if motivo == "max_tokens":
         return (
@@ -307,6 +311,49 @@ def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000,
         f"{MARCA_DE_FALHA} uma resposta com texto.**\n\n"
         f"A IA devolveu blocos vazios (motivo: `{motivo}`). Tente de novo."
     )
+
+
+def em_fluxo(prompt: str, modelo: str, max_tokens: int, esforco: str = "medium"):
+    """A mesma resposta, em pedaços, conforme o modelo escreve.
+
+    Esperar calado por uma análise longa é ruim de duas maneiras: parece
+    travado, e enquanto o script fica parado o Streamlit mantém na tela o
+    esqueleto apagado da página anterior. Devolvendo pedaço a pedaço, o texto
+    aparece enquanto é escrito e a tela se refaz no primeiro deles.
+
+    Devolve sempre pelo menos um pedaço: em caso de erro, o recado do erro —
+    que `falhou()` reconhece do mesmo jeito.
+    """
+    if not disponivel():
+        yield SEM_CHAVE
+        return
+    parametros = dict(
+        model=modelo,
+        max_tokens=max_tokens,
+        output_config={"effort": esforco},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    cliente = _cliente()
+    abrir = getattr(cliente.messages, "stream", None)
+    if abrir is None:
+        # SDK antigo: uma resposta só, sem pedaços
+        yield _perguntar(prompt, modelo, max_tokens, esforco)
+        return
+    try:
+        try:
+            corrente = abrir(**parametros)
+        except Exception:
+            corrente = abrir(**{k: v for k, v in parametros.items() if k != "output_config"})
+        with corrente as fluxo:
+            vazio = True
+            for pedaco in fluxo.text_stream:
+                if pedaco:
+                    vazio = False
+                    yield pedaco
+            if vazio:
+                yield _recado_sem_texto(fluxo.get_final_message())
+    except Exception as exc:
+        yield _recado_de_erro(exc)
 
 
 def sugerir_subcategorias(
@@ -367,11 +414,9 @@ def sugerir_subcategorias(
     return sugestoes
 
 
-def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
+def _prompt_do_mes(contexto: str) -> str:
     """A leitura do mês, escrita a partir do resumo numérico já apurado."""
-    if not disponivel():
-        return SEM_CHAVE
-    prompt = (
+    return (
         "Você é o analista que acompanha as contas desta casa brasileira e escreve a "
         "leitura do mês para o casal que a mantém. Eles já viram os totais na tela: o "
         "que esperam de você é o que os totais não dizem.\n\n"
@@ -403,19 +448,11 @@ def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
         "não faltar nada, diga isso em uma linha.\n\n"
         f"{REGRAS}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo, max_tokens=24000, esforco="high")
 
 
-def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE, rotulo: str = "o período") -> str:
-    """A leitura longa: padrão, piso do orçamento e o que decide o próximo ano.
-
-    Pergunta diferente da do mês, e por isso vale uma chamada própria. O mês
-    responde "para onde foi o dinheiro"; só a série responde "isto se repete",
-    e é dela que sai meta — não do último mês.
-    """
-    if not disponivel():
-        return SEM_CHAVE
-    prompt = (
+def _prompt_longo(contexto: str, rotulo: str) -> str:
+    """A leitura da série: o que é piso, o que é escolha, o que decidir."""
+    return (
         f"Você é o analista que acompanha as contas desta casa brasileira. Leia a série "
         f"de meses abaixo e escreva a leitura de {rotulo} para o casal que a mantém. "
         "Eles já viram os totais: o que esperam de você é a leitura da série — o que se "
@@ -454,7 +491,55 @@ def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE, rotulo: str = "o p
         "Falta de dado classificado, de histórico ou de mês fechado.\n\n"
         f"{REGRAS}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo, max_tokens=32000, esforco="high")
+
+
+# espaço de resposta. É o raciocínio que consome a maior parte dele; o texto
+# final tem uns três mil. Com o esforço médio a leitura sai em pouco mais de um
+# minuto, e é o contexto — não o esforço — que trouxe a granularidade que
+# faltava: a versão anterior tinha metade dos números e esforço alto.
+ESPACO_DO_MES = 16000
+ESPACO_LONGO = 20000
+ESFORCO = "medium"
+
+
+def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
+    if not disponivel():
+        return SEM_CHAVE
+    return _perguntar(_prompt_do_mes(contexto), modelo, ESPACO_DO_MES, ESFORCO)
+
+
+def analisar_mes_em_fluxo(contexto: str, modelo: str = MODELO_ANALISE):
+    return em_fluxo(_prompt_do_mes(contexto), modelo, ESPACO_DO_MES, ESFORCO)
+
+
+def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE, rotulo: str = "o período") -> str:
+    """A leitura longa: padrão, piso do orçamento e o que decide o próximo ano.
+
+    Pergunta diferente da do mês, e por isso vale uma chamada própria. O mês
+    responde "para onde foi o dinheiro"; só a série responde "isto se repete",
+    e é dela que sai meta — não do último mês.
+    """
+    if not disponivel():
+        return SEM_CHAVE
+    return _perguntar(_prompt_longo(contexto, rotulo), modelo, ESPACO_LONGO, ESFORCO)
+
+
+def analisar_ano_em_fluxo(contexto: str, modelo: str = MODELO_ANALISE,
+                          rotulo: str = "o período"):
+    return em_fluxo(_prompt_longo(contexto, rotulo), modelo, ESPACO_LONGO, ESFORCO)
+
+
+def _prompt_da_pergunta(contexto: str, pergunta: str, rotulo: str) -> str:
+    return (
+        f"Responda à pergunta do casal sobre as contas da casa, olhando {rotulo}, "
+        "usando apenas os números abaixo. Vá direto ao ponto: comece pela resposta, "
+        "com o número que a sustenta, e só depois explique. Se a pergunta pedir uma "
+        "conta que dá para fazer com os números fornecidos, faça e mostre as parcelas. "
+        "Se a resposta não estiver neles, diga exatamente o que falta classificar ou "
+        "importar para que ela possa ser respondida — e não invente nada no lugar.\n\n"
+        f"{REGRAS}\n\n"
+        f"PERGUNTA: {pergunta.strip()}\n\n{contexto}"
+    )
 
 
 def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE,
@@ -471,14 +556,9 @@ def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALIS
     """
     if not disponivel():
         return SEM_CHAVE
-    prompt = (
-        f"Responda à pergunta do casal sobre as contas da casa, olhando {rotulo}, "
-        "usando apenas os números abaixo. Vá direto ao ponto: comece pela resposta, "
-        "com o número que a sustenta, e só depois explique. Se a pergunta pedir uma "
-        "conta que dá para fazer com os números fornecidos, faça e mostre as parcelas. "
-        "Se a resposta não estiver neles, diga exatamente o que falta classificar ou "
-        "importar para que ela possa ser respondida — e não invente nada no lugar.\n\n"
-        f"{REGRAS}\n\n"
-        f"PERGUNTA: {pergunta.strip()}\n\n{contexto}"
-    )
-    return _perguntar(prompt, modelo, max_tokens=12000)
+    return _perguntar(_prompt_da_pergunta(contexto, pergunta, rotulo), modelo, 12000, ESFORCO)
+
+
+def responder_pergunta_em_fluxo(contexto: str, pergunta: str,
+                                modelo: str = MODELO_ANALISE, rotulo: str = "este mês"):
+    return em_fluxo(_prompt_da_pergunta(contexto, pergunta, rotulo), modelo, 12000, ESFORCO)

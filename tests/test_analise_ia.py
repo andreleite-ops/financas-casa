@@ -915,7 +915,7 @@ def test_a_analise_longa_vai_em_streaming(monkeypatch):
 
     assert not ai.falhou(texto)
     assert cliente.chamadas, "foi pelo caminho do streaming"
-    assert cliente.chamadas[0]["max_tokens"] == 32000
+    assert cliente.chamadas[0]["max_tokens"] == ai.ESPACO_LONGO
 
 
 def test_sdk_sem_streaming_continua_funcionando(monkeypatch):
@@ -951,3 +951,51 @@ def test_gravar_a_analise_nunca_derruba_o_app(engine):
     assert len(linha["gerada_por"]) <= 20
     assert len(linha["modelo"]) <= 60
     assert linha["texto"] == "a leitura"
+
+
+def test_a_analise_chega_em_pedacos(monkeypatch):
+    """O texto aparece enquanto é escrito: é isso que tira a espera calada e o
+    resíduo da tela anterior."""
+    cliente = _ClienteComStream("### O retrato\nGastou R$ 10,00.")
+
+    def _pedacos(**kwargs):
+        cliente.chamadas.append(kwargs)
+        texto = cliente.texto
+
+        class _Fluxo:
+            text_stream = [texto[:8], texto[8:]]
+
+            def __enter__(self_interno):
+                return self_interno
+
+            def __exit__(self_interno, *erro):
+                return False
+
+        return _Fluxo()
+
+    cliente.stream = _pedacos
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    pedacos = list(ai.analisar_ano_em_fluxo("números", rotulo="ano civil"))
+
+    assert len(pedacos) == 2
+    assert "".join(pedacos) == "### O retrato\nGastou R$ 10,00."
+
+
+def test_o_fluxo_devolve_o_recado_quando_a_chamada_falha(monkeypatch):
+    """Falhar no meio não pode devolver silêncio: a tela precisa do motivo."""
+    class _Quebra:
+        def __init__(self):
+            self.messages = self
+
+        def stream(self, **kwargs):
+            raise RuntimeError("authentication_error: chave inválida")
+
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: _Quebra())
+
+    texto = "".join(ai.analisar_mes_em_fluxo("números"))
+
+    assert ai.falhou(texto) or "Não consegui falar com a IA" in texto
+    assert "authentication" in texto
