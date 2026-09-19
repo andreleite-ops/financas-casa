@@ -223,6 +223,10 @@ def maiores_debitos(conn, competencia: str, quantos: int = 20, linhas=None, cart
             if pl["id"] != l["id"] and pl["valor_centavos"] == v:
                 achados.append(f"planilha: {pl['descricao'][:22]} {pl['data']:%d/%m}")
                 break
+        # compra de cartao nunca e pagamento de fatura: as pistas de fatura
+        # so fazem sentido para o debito de conta corrente
+        if l["tipo_conta"] != "corrente":
+            return " · ".join(achados) if achados else "—"
         for rec in recebidos:
             if abs(rec["valor"] + v) <= max(100, int(rec["valor"] * 0.005)) \
                     and abs(rec["data"] - l["data"]) <= cartoes.JANELA_DO_PAGAMENTO:
