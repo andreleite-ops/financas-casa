@@ -1237,7 +1237,7 @@ def _gravar_config(conn, chave: str, valor: str) -> None:
 # varreduras quando esta versao ou o conjunto de uploads mudou: a cadeia e
 # idempotente, mas custava uma centena de idas ao banco a cada start, e cada
 # publicacao e um start
-VERSAO_DAS_VARREDURAS = "2026-09-19.1"
+VERSAO_DAS_VARREDURAS = "2026-09-19.2"
 _CHAVE_VARREDURAS = "varreduras"
 
 
@@ -1516,10 +1516,10 @@ def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | N
     return total
 
 
-# v6: o ciclo da fatura termina no mes dela ou no anterior e e a janela com
+# v7: o ciclo da fatura termina no mes dela ou no anterior e e a janela com
 # mais compras; data posterior ao mes da fatura e do ano passado. A marca nova
 # faz a passagem rodar de novo sobre o que ja esta gravado
-CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v6"
+CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v7"
 
 
 def contar_cartao_pela_compra(engine) -> dict:
@@ -1631,9 +1631,10 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
     por_mes: dict[str, list[int]] = {}
     for linha in linhas:
         fatura = fatura_por_upload[linha.upload_id]
+        # credito conta na propria data; so a compra segue o ciclo
         nova = competencia_da_compra(
             datas_certas.get(linha.id, linha.data), fatura,
-            ciclo=ciclo_por_upload.get(linha.upload_id),
+            ciclo=ciclo_por_upload.get(linha.upload_id) if linha.valor_centavos < 0 else None,
         )
         if nova != linha.competencia:
             por_mes.setdefault(nova, []).append(linha.id)

@@ -589,6 +589,39 @@ def test_fatura_do_xp_so_de_parcelas_antigas_conta_no_mes_das_compras():
     assert [l.competencia for l in nubank] == ["2026-08", "2026-09", "2026-09"]
 
 
+def test_parcela_fora_do_ciclo_conta_no_mes_em_que_o_ciclo_mais_cai():
+    """A fatura do XP de setembro: compras a vista de 31/07 a 26/08 e as
+    parcelas datadas da compra original. O ciclo e agosto, mesmo comecando no
+    ultimo dia de julho — a parcela vai para agosto, nao para julho (mes da
+    planilha, onde ficaria fora de conta). A compra de 31/07 e de julho."""
+    from parsers.base import ajustar_ano_fatura
+
+    xp = ajustar_ano_fatura(
+        [Lancamento(date(2026, 8, d), f"COMPRA {d}", -10_000) for d in range(1, 27)]
+        + [Lancamento(date(2026, 7, 31), "PADARIA", -2_189),
+           Lancamento(date(2026, 7, 11), "SAMSUNG 2 de 8", -73_237),
+           Lancamento(date(2026, 6, 10), "PAGUE MENOS 3 de 4", -100_304),
+           Lancamento(date(2026, 4, 7), "EINSTEIN 5 de 10", -57_640)],
+        "2026-09")
+    assert xp[26].competencia == "2026-07"
+    assert [l.competencia for l in xp[27:]] == ["2026-08"] * 3
+
+
+def test_ciclo_sai_das_compras_mesmo_com_a_fatura_de_sinal_trocado():
+    """O Nubank chega com a compra positiva e so e virado na importacao. O
+    ciclo tem de sair das compras, nao dos creditos (pagamento recebido)."""
+    from parsers.base import ajustar_ano_fatura
+
+    nubank = ajustar_ano_fatura([
+        Lancamento(date(2026, 8, 14), "Smartmed - Parcela 3/10", 174_965),
+        Lancamento(date(2026, 8, 15), "Mercado", 5_000),
+        Lancamento(date(2026, 8, 20), "Posto", 20_000),
+        Lancamento(date(2026, 9, 10), "Farmacia", 9_000),
+        Lancamento(date(2026, 9, 12), "Pagamento recebido", -83_148),
+    ], "2026-09")
+    assert [l.competencia for l in nubank] == ["2026-08", "2026-08", "2026-08", "2026-09", "2026-09"]
+
+
 def test_migracao_v6_traz_a_fatura_do_xp_de_volta_para_agosto(engine):
     """O que a regra antiga gravou errado — a parcela de outubro do ano
     passado em outubro deste, e o resto num mes da planilha, fora de conta —

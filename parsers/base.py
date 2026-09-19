@@ -149,10 +149,19 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str,
         return lancamentos
     for lan in lancamentos:
         lan.data = ano_da_compra(lan.data, competencia)
-    ciclo = ciclo_da_fatura([lan.data for lan in lancamentos if lan.data and lan.valor_centavos < 0],
+    # o ciclo sai das compras, e o sinal delas depende do arquivo: o Nubank
+    # chega com a compra positiva e so e virado na importacao. Olhar o sinal
+    # errado tirava o ciclo dos creditos (pagamento recebido, estorno)
+    sinal_da_compra = 1 if fatura_invertida(lancamentos) else -1
+    ciclo = ciclo_da_fatura([lan.data for lan in lancamentos
+                             if lan.data and lan.valor_centavos * sinal_da_compra > 0],
                             competencia)
     for lan in lancamentos:
-        lan.competencia = competencia_da_compra(lan.data, competencia, ciclo=ciclo)
+        # credito (pagamento recebido, estorno) nao e parcela: conta na
+        # propria data, sem o ciclo puxa-lo para o mes das compras
+        e_compra = lan.valor_centavos * sinal_da_compra > 0
+        lan.competencia = competencia_da_compra(lan.data, competencia,
+                                                ciclo=ciclo if e_compra else None)
     return lancamentos
 
 
@@ -244,9 +253,12 @@ def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str 
     palavra "parcela" (o XP nem a escreve). O que muda entre cartoes e so a
     data impressa: o Nubank imprime o dia em que a parcela entrou no ciclo
     (14/08, dentro dele) e ai a data serve; o XP imprime a compra original
-    (10/06, antes do ciclo) e ai vale o mes em que o ciclo comeca. O ciclo
-    sai do proprio arquivo (`ciclo_da_fatura`). Sem ele, a data do mes da
-    fatura ou do anterior vale por si; a de fora vai para o mes anterior.
+    (10/06, antes do ciclo) e ai vale o mes do ciclo — o mes em que cai a
+    maior parte dele. O ciclo de 31/07 a 26/08 e agosto: mandar a parcela
+    para julho so porque o ciclo comecou no ultimo dia de julho a jogava num
+    mes da planilha, onde ficava fora de conta. O ciclo sai do proprio
+    arquivo (`ciclo_da_fatura`). Sem ele, a data do mes da fatura ou do
+    anterior vale por si; a de fora vai para o mes anterior.
     """
     if ciclo is None:
         ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
@@ -254,7 +266,8 @@ def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str 
     inicio, fim = ciclo
     if inicio <= dia <= fim:
         return f"{dia.year:04d}-{dia.month:02d}"
-    return f"{inicio.year:04d}-{inicio.month:02d}"
+    meio = inicio + (fim - inicio) / 2
+    return f"{meio.year:04d}-{meio.month:02d}"
 
 
 # Numa fatura de cartao a compra e a regra e o credito e a excecao: dezenas de
