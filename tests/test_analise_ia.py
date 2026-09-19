@@ -935,3 +935,19 @@ def test_a_pergunta_livre_aceita_a_janela_que_o_dono_escolher(monkeypatch):
 
     assert "olhando o ano civil até 2026-09" in cliente.prompts[0]
     assert "quanto é fixo?" in cliente.prompts[0]
+
+
+def test_gravar_a_analise_nunca_derruba_o_app(engine):
+    """O texto já custou uma chamada paga. Um rótulo de controle maior que a
+    coluna derrubava o app inteiro com a análise pronta na tela."""
+    repo.salvar_analise(
+        engine, competencia="2026-08", texto="a leitura", modelo="claude-opus-5-turbo-teste-" * 5,
+        contexto="números", usuario="um nome muito comprido para esta coluna",
+        tipo="um_tipo_que_nao_cabe_na_coluna",
+    )
+    with engine.connect() as conn:
+        linha = conn.execute(sa.select(db.analises)).mappings().one()
+    assert len(linha["tipo"]) <= 10
+    assert len(linha["gerada_por"]) <= 20
+    assert len(linha["modelo"]) <= 60
+    assert linha["texto"] == "a leitura"

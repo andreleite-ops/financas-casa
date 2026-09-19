@@ -231,7 +231,7 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
     escopo = ESCOPOS[rotulo_escopo]
     # "ano" era o nome do tipo quando a única janela era a de doze meses: as
     # leituras já gravadas continuam aparecendo na aba que as gerou
-    tipo = "ano" if escopo == "12m" else "periodo_ano"
+    tipo = "ano" if escopo == "12m" else "anocivil"
     contexto = dados.contexto_longo(engine, dados.versao(), competencia, escopo)
     painel = dados.painel_do_ano(engine, dados.versao(), competencia, escopo)
     janela, do_periodo = painel["janela"], painel["do_periodo"]

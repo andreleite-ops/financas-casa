@@ -2728,6 +2728,11 @@ def _hash_do_contexto(contexto: str) -> str:
     return hashlib.sha256(contexto.encode("utf-8")).hexdigest()
 
 
+def _tamanho_da_coluna(coluna) -> int:
+    """Quantos caracteres cabem nesta coluna. Sem limite declarado, um teto alto."""
+    return getattr(coluna.type, "length", None) or 10_000
+
+
 def salvar_analise(
     engine, *, competencia: str, texto: str, modelo: str, contexto: str,
     usuario: str, pergunta: str | None = None, tipo: str = "mes",
@@ -2739,6 +2744,13 @@ def salvar_analise(
     vez, e reboot do Streamlit apaga a sessao inteira — sem gravar, o mesmo mes
     seria pago varias vezes por dia.
     """
+    # a análise custou uma chamada paga e já está escrita: nenhum campo de
+    # controle pode derrubar a gravação dela. O tipo tem dez caracteres no
+    # banco, e um rótulo mais longo derrubava o app inteiro com o texto pronto
+    # na tela — erro de Postgres, tela vermelha, texto perdido.
+    tipo = (tipo or "mes")[:_tamanho_da_coluna(db.analises.c.tipo)]
+    usuario = (usuario or "—")[:_tamanho_da_coluna(db.analises.c.gerada_por)]
+    modelo = (modelo or "")[:_tamanho_da_coluna(db.analises.c.modelo)]
     with engine.begin() as conn:
         return conn.execute(
             sa.insert(db.analises).values(
