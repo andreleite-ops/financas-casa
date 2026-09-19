@@ -1550,6 +1550,79 @@ def contar_cartao_pela_compra(engine) -> dict:
     return {"movidas": movidas, "conferidas": conferidas}
 
 
+# ---------------------------------------------------------------------------
+# o fim da carga inicial
+# ---------------------------------------------------------------------------
+# A planilha da casa foi escrita para o ano inteiro: ate agosto ela e o
+# registro do que aconteceu, e de setembro em diante e uma expectativa — o
+# salario e o bonus da TAG repetidos, R$ 49.990 por mes ate dezembro. Somar
+# isso ao que o banco mostra faz o app dizer que a casa ganhou o que ainda nao
+# ganhou, e mantem todo mes futuro ancorado nos mesmos 50 mil. A partir do mes
+# seguinte a este limite, so conta o que veio de extrato ou fatura.
+FIM_DA_CARGA_INICIAL = "fim_da_carga_inicial"
+MARCA_FIM_DA_CARGA = "a carga inicial acabou: deste mês em diante vale só o extrato"
+_FIM_DA_CARGA_DECIDIDO = "fim_da_carga_inicial_decidido"
+
+
+def fim_da_carga_inicial(conn) -> str:
+    """Ate que mes a planilha de carga inicial conta. "" = sem limite."""
+    valor = _config(conn, FIM_DA_CARGA_INICIAL)
+    return (valor or "").strip()
+
+
+def _ultimo_mes_com_extrato(conn) -> str | None:
+    """O mes mais recente que ja tem extrato de conta corrente no sistema."""
+    return conn.execute(
+        sa.select(sa.func.max(db.transacoes.c.competencia))
+        .select_from(db.transacoes.join(db.contas, db.transacoes.c.conta_id == db.contas.c.id))
+        .where(db.contas.c.tipo == "corrente", db.transacoes.c.origem == "extrato")
+    ).scalar()
+
+
+def definir_fim_da_carga_inicial(engine, competencia: str) -> dict:
+    """Muda o limite e aplica na hora. `competencia` vazia tira o limite."""
+    with engine.begin() as conn:
+        _gravar_config(conn, FIM_DA_CARGA_INICIAL, (competencia or "").strip())
+        _gravar_config(conn, _FIM_DA_CARGA_DECIDIDO, "1")
+    return aplicar_fim_da_carga_inicial(engine)
+
+
+def aplicar_fim_da_carga_inicial(engine) -> dict:
+    """Desliga o que a planilha traz depois do fim da carga inicial.
+
+    Na primeira vez o limite sai dos proprios dados: o ultimo mes que ja tem
+    extrato de conta corrente. E reversivel — mexer no limite devolve o que
+    voltou a caber nele, porque a linha nao e apagada, so marcada. Idempotente;
+    roda na subida.
+    """
+    with engine.begin() as conn:
+        if not _config(conn, _FIM_DA_CARGA_DECIDIDO):
+            derivado = _ultimo_mes_com_extrato(conn)
+            if derivado is None:
+                return {"retiradas": 0, "devolvidas": 0, "limite": ""}
+            _gravar_config(conn, FIM_DA_CARGA_INICIAL, derivado)
+            _gravar_config(conn, _FIM_DA_CARGA_DECIDIDO, "1")
+        limite = fim_da_carga_inicial(conn)
+        retiradas = 0
+        if limite:
+            retiradas = conn.execute(
+                sa.update(db.transacoes)
+                .where(db.transacoes.c.origem == "planilha",
+                       db.transacoes.c.ativo == sa.true(),
+                       db.transacoes.c.competencia > limite)
+                .values(ativo=False, observacao=MARCA_FIM_DA_CARGA)
+            ).rowcount or 0
+        # o caminho de volta: o limite andou para a frente e o mes voltou a caber
+        devolvidas = conn.execute(
+            sa.update(db.transacoes)
+            .where(db.transacoes.c.observacao == MARCA_FIM_DA_CARGA,
+                   db.transacoes.c.ativo == sa.false(),
+                   db.transacoes.c.competencia <= limite if limite else sa.true())
+            .values(ativo=True, observacao=None)
+        ).rowcount or 0
+    return {"retiradas": retiradas, "devolvidas": devolvidas, "limite": limite}
+
+
 MARCA_MES_DA_PLANILHA = analytics.MARCA_MES_DA_PLANILHA
 
 

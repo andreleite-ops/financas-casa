@@ -59,6 +59,13 @@ def _passo_de_mes(ano: int, mes: int, passo: int) -> tuple[int, int]:
     return total // 12, total % 12 + 1
 
 
+def _mes_curto(competencia: str) -> str:
+    """2026-08 -> ago/26."""
+    if not competencia:
+        return "—"
+    return f"{MESES_CURTOS.get(competencia[5:7], competencia[5:7])}/{competencia[2:4]}"
+
+
 def _competencias_sugeridas() -> list[str]:
     """Do mês mais adiantado para o mais antigo, com o mês de hoje no meio."""
     hoje = date.today()
@@ -671,6 +678,18 @@ def _importar(engine, conta, lancamentos, nome_arquivo, usuario, origem, compete
     if conta["tipo"] == "cartao":
         repo.aplicar_meses_da_planilha(engine)
         repo.marcar_pagamentos_de_cartao(engine)
+    # a planilha reenviada traz de novo o que ela prevê para os meses à frente
+    # do fim da carga inicial; isso não volta a contar por um reenvio
+    if origem == "planilha":
+        fora = repo.aplicar_fim_da_carga_inicial(engine)
+        if fora["retiradas"]:
+            st.info(
+                f"{fora['retiradas']} lançamento(s) da planilha depois de "
+                f"{_mes_curto(fora['limite'])} ficaram de fora: do mês seguinte em "
+                "diante conta só o que vem de extrato ou fatura. O limite fica em "
+                "**Upload → 🗓️ O que falta carregar**.",
+                icon="📅",
+            )
 
     st.success(f"Arquivo processado: {resumo['lidos']} lançamentos lidos.")
 
@@ -890,6 +909,49 @@ def _aba_mapa(engine) -> None:
         )
     else:
         st.success(f"Nada faltando nos últimos {meses} meses.", icon="✅")
+
+    _fim_da_carga_inicial(engine, competencias)
+
+
+SEM_LIMITE = "sem limite — a planilha vale sempre"
+
+
+def _fim_da_carga_inicial(engine, competencias: list[str]) -> None:
+    """Até que mês a planilha de carga inicial conta.
+
+    A planilha foi escrita para o ano inteiro: até certo mês ela registra o
+    que aconteceu e, dali em diante, o que se espera que aconteça — o mesmo
+    salário repetido até dezembro. Somar essa expectativa ao extrato faz o app
+    dizer que a casa ganhou o que ainda não ganhou, e ancora todo mês futuro
+    no mesmo valor. Daqui para a frente conta só o que veio de arquivo.
+    """
+    with engine.connect() as conn:
+        limite = repo.fim_da_carga_inicial(conn)
+    opcoes = sorted({*competencias, *(l for l in [limite] if l)}, reverse=True)
+    atual = limite if limite in opcoes else SEM_LIMITE
+    with st.expander(f"A carga inicial vale até {_mes_curto(limite)}" if limite
+                     else "A carga inicial não tem limite"):
+        st.caption(
+            "A planilha da casa traz o ano inteiro: os meses já vividos, e depois a "
+            "expectativa — o mesmo salário repetido mês a mês. Do mês seguinte a este "
+            "limite em diante, conta só o que veio de extrato ou fatura. Nada é "
+            "apagado: mover o limite para a frente devolve o que voltar a caber nele."
+        )
+        escolha = st.selectbox(
+            "A carga inicial vale até", [SEM_LIMITE, *opcoes],
+            index=([SEM_LIMITE, *opcoes].index(atual)),
+            format_func=lambda v: v if v == SEM_LIMITE else _mes_curto(v),
+            key="fim_carga_inicial",
+        )
+        if st.button("Salvar o limite", type="primary", key="salvar_fim_carga"):
+            feito = repo.definir_fim_da_carga_inicial(
+                engine, "" if escolha == SEM_LIMITE else escolha
+            )
+            st.success(
+                f"{feito['retiradas']} lançamento(s) da planilha saíram da conta e "
+                f"{feito['devolvidas']} voltaram."
+            )
+            st.rerun()
 
 
 def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:

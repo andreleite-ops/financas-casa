@@ -966,3 +966,97 @@ def test_transferencia_nao_conta_como_renda_no_alarme(engine):
     ], pessoa_padrao="Rô")
     with engine.connect() as conn:
         assert analytics.renda_possivelmente_dobrada(conn, ano=2026) == []
+
+
+def _planilha_do_ano(engine):
+    """A planilha da casa: meses vividos ate agosto e a expectativa ate dezembro."""
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 7, 5), descricao="SALARIO JULHO", valor_centavos=2_059_621,
+             competencia="2026-07", pessoa_hint="André", categoria_hint="Trabalho"),
+        dict(data=date(2026, 8, 5), descricao="SALARIO AGOSTO", valor_centavos=2_059_621,
+             competencia="2026-08", pessoa_hint="André", categoria_hint="Trabalho"),
+        dict(data=date(2026, 9, 5), descricao="SALARIO SETEMBRO", valor_centavos=2_059_621,
+             competencia="2026-09", pessoa_hint="André", categoria_hint="Trabalho"),
+        dict(data=date(2026, 10, 5), descricao="SALARIO OUTUBRO", valor_centavos=2_059_621,
+             competencia="2026-10", pessoa_hint="André", categoria_hint="Trabalho"),
+        dict(data=date(2026, 10, 18), descricao="SEGURO CARRO OUTUBRO", valor_centavos=-23_220,
+             competencia="2026-10", categoria_hint="Transporte"),
+    ], origem="planilha", competencia=None)
+    return planilha
+
+
+def test_a_carga_inicial_acaba_no_ultimo_mes_com_extrato(engine):
+    """A planilha preve o ano inteiro: o mesmo salario repetido ate dezembro.
+    Isso nao e receita da casa — e uma ilacao. Do mes seguinte ao ultimo
+    extrato em diante, so conta o que veio de arquivo."""
+    _planilha_do_ano(engine)
+    corrente = _conta(engine, "Banco teste", "corrente", titular="André")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 7), descricao="PIX RECEBIDO REM: EMPRESA LTDA",
+             valor_centavos=2_059_621),
+    ], pessoa_padrao="André")
+
+    feito = repo.aplicar_fim_da_carga_inicial(engine)
+    assert feito["limite"] == "2026-08"
+    assert feito["retiradas"] == 3, "o salário de set e out, e o seguro de out"
+    assert _linha(engine, "SALARIO SETEMBRO").ativo is False
+    assert _linha(engine, "SEGURO CARRO OUTUBRO").ativo is False
+    assert _linha(engine, "SALARIO JULHO").ativo is True
+    assert _resumo(engine, "2026-09")["receitas"] == 0
+    assert _resumo(engine, "2026-10")["despesas"] == 0
+    assert _resumo(engine, "2026-07")["receitas"] == 2_059_621
+    # o extrato de agosto continua de pe; so a planilha foi tocada
+    assert _linha(engine, "PIX RECEBIDO REM: EMPRESA LTDA").ativo is True
+    assert repo.aplicar_fim_da_carga_inicial(engine)["retiradas"] == 0, "idempotente"
+
+
+def test_mover_o_limite_devolve_o_que_volta_a_caber(engine):
+    """Nada e apagado: o limite e uma decisao, e decisao se muda."""
+    _planilha_do_ano(engine)
+    corrente = _conta(engine, "Banco teste", "corrente", titular="André")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 7), descricao="PIX RECEBIDO", valor_centavos=2_059_621),
+    ], pessoa_padrao="André")
+    repo.aplicar_fim_da_carga_inicial(engine)
+
+    feito = repo.definir_fim_da_carga_inicial(engine, "2026-09")
+    assert feito["devolvidas"] == 1
+    assert _linha(engine, "SALARIO SETEMBRO").ativo is True
+    assert _linha(engine, "SALARIO OUTUBRO").ativo is False
+
+    feito = repo.definir_fim_da_carga_inicial(engine, "")
+    assert feito["devolvidas"] == 2
+    assert _linha(engine, "SALARIO OUTUBRO").ativo is True
+    with engine.connect() as conn:
+        assert repo.fim_da_carga_inicial(conn) == ""
+
+
+def test_reenviar_a_planilha_nao_traz_a_previsao_de_volta(engine):
+    """O reenvio recria as linhas dos meses a frente; a regra as desliga de
+    novo, sem depender de reboot."""
+    _planilha_do_ano(engine)
+    corrente = _conta(engine, "Banco teste", "corrente", titular="André")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 7), descricao="PIX RECEBIDO", valor_centavos=2_059_621),
+    ], pessoa_padrao="André")
+    repo.aplicar_fim_da_carga_inicial(engine)
+    assert _resumo(engine, "2026-09")["receitas"] == 0
+
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 9, 5), descricao="SALARIO SETEMBRO OUTRA VEZ",
+             valor_centavos=2_059_621, competencia="2026-09", pessoa_hint="André",
+             categoria_hint="Trabalho"),
+    ], origem="planilha", competencia=None, arquivo="planilha2.xlsx")
+    repo.aplicar_fim_da_carga_inicial(engine)
+    assert _resumo(engine, "2026-09")["receitas"] == 0
+
+
+def test_sem_extrato_nenhum_a_carga_inicial_continua_inteira(engine):
+    """Casa que ainda nao importou extrato nenhum vive da planilha: aqui a
+    regra nao decide nada sozinha."""
+    _planilha_do_ano(engine)
+    feito = repo.aplicar_fim_da_carga_inicial(engine)
+    assert feito == {"retiradas": 0, "devolvidas": 0, "limite": ""}
+    assert _resumo(engine, "2026-10")["receitas"] == 2_059_621
