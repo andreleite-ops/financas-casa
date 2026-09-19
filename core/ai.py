@@ -12,10 +12,10 @@ import os
 from dataclasses import dataclass
 
 MODELO_CLASSIFICACAO = "claude-haiku-4-5-20251001"
-# Sonnet dá conta da leitura do mês, que só interpreta números já apurados.
-# Trocar por um modelo mais forte (claude-opus-5) é uma linha no segredo
-# MODELO_ANALISE, sem mexer no código.
-MODELO_PADRAO_ANALISE = "claude-sonnet-5"
+# A leitura escrita acontece algumas vezes por mês e é o produto final da
+# casa: vale o modelo mais forte. Trocar por um mais barato (claude-sonnet-5)
+# é uma linha no segredo MODELO_ANALISE, sem mexer no código.
+MODELO_PADRAO_ANALISE = "claude-opus-5"
 LOTE = 40
 
 
@@ -157,10 +157,23 @@ REGRAS = (
     "totais por categoria como parciais — fale em 'do que já está classificado'.\n"
     "- Transferências entre contas do casal não são gasto nem receita; venda de bem "
     "não é renda do mês. Não some nem uma coisa nem outra ao orçamento.\n"
-    "- Nunca escreva que alguém gastou demais sem citar o número e a média de "
-    "comparação.\n"
-    "- Português do Brasil, direto, sem conselho genérico de manual de finanças. "
-    "Eles são André e Rô; o que não tem dono declarado é do Casal."
+    "- Toda afirmação carrega o número que a sustenta e a régua de comparação: "
+    "'R$ 17.563 contra R$ 6.600 de média' e uma frase; 'a saúde pesou' não é nada.\n"
+    "- Não descreva o que a tabela já mostra. O dono lê os números sozinho; o que ele "
+    "não vê é a relação entre eles — o que explica o quê, o que é causa e o que é "
+    "consequência, o que vai se repetir e o que não vai.\n"
+    "- Separe compromisso que se repete de gasto avulso. Cortar assinatura vale o ano; "
+    "cortar um jantar vale uma semana. Toda sugestão vem com o valor que libera POR MÊS "
+    "e com o que ela custa em troca.\n"
+    "- Quantifique o que sugerir: em vez de 'reduzir alimentação', diga qual "
+    "subcategoria, quanto ela é hoje, e para quanto dá para ir com base no que já "
+    "aconteceu em outro mês.\n"
+    "- Nada de conselho genérico de manual de finanças, nada de elogio, nada de "
+    "encerramento motivacional. Se um número for bom, diga por quê, com a comparação.\n"
+    "- Markdown: títulos ### na ordem pedida, parágrafos curtos, listas quando houver "
+    "itens paralelos. Pode usar tabela quando a comparação for de três colunas ou mais.\n"
+    "- Português do Brasil, direto. Eles são André e Rô; o que não tem dono declarado "
+    "é do Casal."
 )
 
 
@@ -210,7 +223,8 @@ def falhou(texto: str) -> bool:
     return not texto.strip() or texto.lstrip().startswith(MARCA_DE_FALHA)
 
 
-def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000) -> str:
+def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000,
+               esforco: str = "medium") -> str:
     """Uma pergunta, uma resposta — com espaço de sobra para o raciocínio.
 
     `max_tokens` limita o raciocínio **e** o texto final, somados. Os modelos
@@ -223,7 +237,7 @@ def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000) -> str:
     parametros = dict(
         model=modelo,
         max_tokens=max_tokens,
-        output_config={"effort": "medium"},
+        output_config={"effort": esforco},
         messages=[{"role": "user", "content": prompt}],
     )
     try:
@@ -324,58 +338,93 @@ def sugerir_subcategorias(
 
 
 def analisar_mes(contexto: str, modelo: str = MODELO_ANALISE) -> str:
-    """Texto da tela Analise IA a partir do resumo numerico ja calculado."""
+    """A leitura do mês, escrita a partir do resumo numérico já apurado."""
     if not disponivel():
         return SEM_CHAVE
     prompt = (
-        "Você acompanha as contas de uma casa brasileira e escreve a leitura do mês "
-        "para o casal que a mantém. Escreva no máximo 5 parágrafos curtos, com "
-        "números concretos:\n"
-        "1) onde o dinheiro foi neste mês;\n"
-        "2) o que fugiu do padrão — use a seção 'Fora do padrão', que já traz a "
-        "comparação com a média do ano;\n"
-        "3) três sugestões de economia, cada uma com o valor que liberaria por mês. "
-        "Prefira compromisso recorrente a gasto avulso: cortar assinatura vale o ano, "
-        "cortar um jantar vale uma semana;\n"
-        "4) como está a poupança e a sobra do mês;\n"
-        "5) feche situando o mês no ano: use 'O ano até aqui' para dizer se este mês "
-        "puxa a média para cima ou para baixo, e o que isso projeta para o ano se o "
-        "ritmo continuar. Um mês sozinho não diz se foi caro — a média diz.\n\n"
+        "Você é o analista que acompanha as contas desta casa brasileira e escreve a "
+        "leitura do mês para o casal que a mantém. Eles já viram os totais na tela: o "
+        "que esperam de você é o que os totais não dizem.\n\n"
+        "Escreva em markdown, com estes títulos, nesta ordem:\n"
+        "### O mês em três linhas\n"
+        "O veredito: mês caro ou barato contra a média, por causa de quê, e o que sobrou. "
+        "Três frases, cada uma com número.\n"
+        "### Para onde foi o dinheiro\n"
+        "As categorias que explicam o mês, da maior para a menor, com a subcategoria que "
+        "puxou cada uma e a comparação com o mês anterior. Pare quando as seguintes "
+        "virarem ruído.\n"
+        "### O que fugiu do padrão\n"
+        "Use a seção 'Fora do padrão' e a comparação com o mês anterior. Para cada desvio, "
+        "diga se foi um lançamento só ou um comportamento — a lista das maiores saídas e a "
+        "de gasto novo respondem isso. Um desvio explicado por uma compra única não é "
+        "tendência, e dizer isso vale mais do que o alarme.\n"
+        "### Piso e escolha\n"
+        "Quanto do mês era compromisso já assumido e quanto era decisão do mês. É o que "
+        "separa o que dá para mudar amanhã do que só muda cancelando algo.\n"
+        "### Três decisões que valem dinheiro\n"
+        "Ranqueadas pelo que liberam POR MÊS, com o valor de cada uma e o que custa em "
+        "troca. Prefira compromisso recorrente a gasto avulso. Se alguma exigir uma "
+        "informação que não está nos números, diga qual.\n"
+        "### O mês dentro do ano\n"
+        "Onde este mês fica na série, o que ele faz com a média e o que o ritmo atual "
+        "projeta se continuar.\n"
+        "### O que ainda não dá para afirmar\n"
+        "O que falta classificar ou importar para as conclusões acima ficarem firmes. Se "
+        "não faltar nada, diga isso em uma linha.\n\n"
         f"{REGRAS}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo)
+    return _perguntar(prompt, modelo, max_tokens=24000, esforco="high")
 
 
-def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE) -> str:
-    """A leitura longa: padrão, sazonalidade e o que é piso do orçamento.
+def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE, rotulo: str = "o período") -> str:
+    """A leitura longa: padrão, piso do orçamento e o que decide o próximo ano.
 
     Pergunta diferente da do mês, e por isso vale uma chamada própria. O mês
-    responde "para onde foi o dinheiro"; só a série responde "isto acontece
-    todo ano nesta época" — e é essa a diferença entre reagir ao mês e planejar
-    o ano.
+    responde "para onde foi o dinheiro"; só a série responde "isto se repete",
+    e é dela que sai meta — não do último mês.
     """
     if not disponivel():
         return SEM_CHAVE
     prompt = (
-        "Leia a série de meses abaixo e escreva a visão longa das contas desta casa, "
-        "em no máximo 6 parágrafos curtos:\n"
-        "1) o retrato do período: quanto entrou, quanto saiu, quanto ficou, e se a "
-        "trajetória melhora ou piora ao longo dos meses;\n"
-        "2) o que se repete — categorias estáveis mês a mês, que formam o piso do "
-        "orçamento — e quanto esse piso custa;\n"
-        "3) o que oscila, e em quais meses. Aponte concentração ('quase tudo de "
-        "Lazer & Viagens está em dois meses') em vez de tratar como se fosse "
-        "distribuído. Só chame de sazonalidade o que se repetir no mesmo mês em anos "
-        "diferentes; havendo um ano só, diga que ainda é cedo para afirmar isso;\n"
-        "4) as três categorias em que vale gastar atenção no próximo ano, com o "
-        "valor anual de cada uma;\n"
-        "5) o que a série sugere para as metas do ano que vem, em percentual da "
-        "renda, a partir do que realmente aconteceu;\n"
-        "6) o que ainda não dá para afirmar por falta de dado classificado ou de "
-        "histórico.\n\n"
+        f"Você é o analista que acompanha as contas desta casa brasileira. Leia a série "
+        f"de meses abaixo e escreva a leitura de {rotulo} para o casal que a mantém. "
+        "Eles já viram os totais: o que esperam de você é a leitura da série — o que se "
+        "repete, o que oscila, o que mudou de patamar e o que isso obriga a decidir.\n\n"
+        "Escreva em markdown, com estes títulos, nesta ordem:\n"
+        "### O retrato do período\n"
+        "Quanto entrou, quanto saiu, quanto sobrou, e se a trajetória melhora ou piora ao "
+        "longo dos meses. Diga a proporção entre gasto e renda.\n"
+        "### A trajetória mês a mês\n"
+        "Os meses que destoam e por quê, usando a matriz de categorias. Distinga o mês "
+        "caro por um evento único do mês caro por patamar novo — a diferença decide se "
+        "vale reagir.\n"
+        "### O piso do orçamento\n"
+        "O que se repete e quanto custa por mês. Este é o número que o casal precisa "
+        "cobrir todo mês aconteça o que acontecer; diga que porcentagem da renda ele "
+        "consome, e quais compromissos subiram dentro do período.\n"
+        "### O que oscila, e quando\n"
+        "Aponte concentração com o número: 'quase tudo de Lazer & Viagens está em dois "
+        "meses'. Só chame de sazonalidade o que se repetir no mesmo mês em anos "
+        "diferentes; havendo um ano só, diga que ainda é cedo.\n"
+        "### Onde o dinheiro foi parar\n"
+        "Use a lista por estabelecimento. Categoria é tipo de gasto; estabelecimento é "
+        "decisão — e é onde a conversa sobre cortar acontece.\n"
+        "### Quem trouxe o quê, e de onde\n"
+        "A composição da receita, por pessoa e por fonte, e o que ela tem de frágil: "
+        "concentração numa fonte só, entrada única tratada como renda, previsão "
+        "convivendo com extrato.\n"
+        "### Cinco decisões para os próximos doze meses\n"
+        "Ranqueadas pelo que liberam por ano, cada uma com o valor e o que custa em "
+        "troca. Prefira o que se repete ao que é avulso.\n"
+        "### Metas sugeridas\n"
+        "Em percentual da renda, categoria por categoria, a partir do que realmente "
+        "aconteceu — e não de um ideal. Diga onde a meta sugerida é mais apertada que o "
+        "histórico e quanto isso exige por mês.\n"
+        "### O que ainda não dá para afirmar\n"
+        "Falta de dado classificado, de histórico ou de mês fechado.\n\n"
         f"{REGRAS}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo, max_tokens=20000)
+    return _perguntar(prompt, modelo, max_tokens=32000, esforco="high")
 
 
 def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE) -> str:

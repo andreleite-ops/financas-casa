@@ -81,9 +81,10 @@ def contexto_do_mes(_engine, versao: int, competencia: str) -> str:
 
 
 @st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
-def contexto_do_ano(_engine, versao: int, competencia: str) -> str:
+def contexto_longo(_engine, versao: int, competencia: str, escopo: str = "12m") -> str:
+    """Os números da leitura longa: o ano civil ou a janela de doze meses."""
     with _engine.connect() as conn:
-        return analytics.contexto_do_ano(conn, competencia)
+        return analytics.contexto_longo(conn, competencia, escopo=escopo)
 
 
 @st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
@@ -227,11 +228,13 @@ def cobertura_do_mes(_engine, versao: int, competencia: str) -> dict:
 
 
 @st.cache_data(ttl=TTL, max_entries=MAX, show_spinner=False)
-def painel_do_ano(_engine, versao: int, competencia: str) -> dict:
+def painel_do_ano(_engine, versao: int, competencia: str, escopo: str = "12m") -> dict:
     with _engine.connect() as conn:
+        janela = analytics.competencias_do_periodo(conn, competencia, escopo)
         return {
-            "janela": analytics.janela_de_doze_meses(conn, competencia),
+            "janela": janela,
             "do_ano": analytics.resumo_do_ano(conn, competencia),
+            "do_periodo": analytics.resumo(conn, competencias=janela) if janela else None,
         }
 
 

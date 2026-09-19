@@ -99,18 +99,28 @@ def _sinal():
     return sa.case((db.transacoes.c.valor_centavos > 0, 1), else_=-1)
 
 
-def _base(competencia: str | None = None, ano: int | None = None, pessoa: str | None = None):
+def _base(competencia: str | None = None, ano: int | None = None, pessoa: str | None = None,
+          competencias: list[str] | None = None):
+    """Os filtros de sempre. `competencias` e a janela que atravessa o ano.
+
+    A leitura longa pode ser o ano civil ou os ultimos doze meses, e doze
+    meses terminando em agosto pegam dois anos. Sem esta porta, toda consulta
+    da analise sabia responder so por ano.
+    """
     filtros = [db.transacoes.c.ativo == sa.true()]
     if competencia:
         filtros.append(db.transacoes.c.competencia == competencia)
     if ano:
         filtros.append(db.transacoes.c.competencia.like(f"{ano}-%"))
+    if competencias:
+        filtros.append(db.transacoes.c.competencia.in_(list(competencias)))
     if pessoa and pessoa != "Todos":
         filtros.append(db.transacoes.c.pessoa == pessoa)
     return filtros
 
 
-def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa: str | None = None) -> dict:
+def resumo(conn, competencia: str | None = None, ano: int | None = None,
+           pessoa: str | None = None, competencias: list[str] | None = None) -> dict:
     """Cards do topo: receitas, despesas correntes, poupanca e sobra.
 
     Uma consulta só. Eram tres — esta, a que buscava o id da poupanca e a que
@@ -140,7 +150,7 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
             .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
             .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
-        .where(*_base(competencia, ano, pessoa))
+        .where(*_base(competencia, ano, pessoa, competencias))
         .group_by(
             db.categorias.c.natureza,
             db.categorias.c.nome,
@@ -206,6 +216,7 @@ def resumo(conn, competencia: str | None = None, ano: int | None = None, pessoa:
 def por_categoria(
     conn, competencia: str | None = None, ano: int | None = None,
     natureza: str = "despesa", pessoa: str | None = None,
+    competencias: list[str] | None = None,
 ) -> list[dict]:
     consulta = (
         sa.select(
@@ -218,7 +229,7 @@ def por_categoria(
             db.transacoes.join(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
         )
         .where(
-            *_base(competencia, ano, pessoa),
+            *_base(competencia, ano, pessoa, competencias),
             db.categorias.c.natureza == natureza,
             # transferência entre contas não é gasto nem ganho: é o mesmo
             # dinheiro mudando de bolso. Deixá-la aqui punha o pagamento da
@@ -282,7 +293,8 @@ def _pelo_lado(natureza: str | None, total: int) -> int:
     return total if natureza == "receita" else -total
 
 
-def subcategorias_de_todas(conn, competencia=None, ano=None, pessoa=None) -> dict[int, list[dict]]:
+def subcategorias_de_todas(conn, competencia=None, ano=None, pessoa=None,
+                           competencias=None) -> dict[int, list[dict]]:
     """O mesmo de por_subcategoria, para todas as categorias de uma vez.
 
     Existe para o contexto da IA, que abre cada categoria do mês nas
@@ -305,7 +317,7 @@ def subcategorias_de_todas(conn, competencia=None, ano=None, pessoa=None) -> dic
             .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
             .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
         )
-        .where(*_base(competencia, ano, pessoa))
+        .where(*_base(competencia, ano, pessoa, competencias))
         .group_by(db.transacoes.c.categoria_id, db.subcategorias.c.nome, db.categorias.c.natureza)
     )
     saida: dict[int, list[dict]] = {}
@@ -416,7 +428,7 @@ def serie_mensal(conn, ano: int, pessoa: str | None = None) -> list[dict]:
 SEM_CATEGORIA = "— sem categoria —"
 
 
-def _consulta_da_matriz(ano: int, pessoa: str | None):
+def _consulta_da_matriz(ano: int | None, pessoa: str | None, competencias=None):
     """Base da matriz de despesas: junção externa, para o pendente entrar.
 
     Junção interna deixava de fora o que ainda não tem categoria — e era
@@ -440,7 +452,7 @@ def _consulta_da_matriz(ano: int, pessoa: str | None):
                 db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id
             )
         )
-        .where(*_base(ano=ano, pessoa=pessoa))
+        .where(*_base(ano=ano, pessoa=pessoa, competencias=competencias))
         .group_by(
             db.categorias.c.nome, db.categorias.c.natureza, db.transacoes.c.natureza,
             db.transacoes.c.categoria_id, db.transacoes.c.competencia, _sinal(),
@@ -663,7 +675,8 @@ def _lado_da_linha():
     )
 
 
-def composicao_de_receitas(conn, competencia=None, ano=None, pessoa=None) -> list[dict]:
+def composicao_de_receitas(conn, competencia=None, ano=None, pessoa=None,
+                           competencias=None) -> list[dict]:
     """De onde veio cada real da receita do periodo, agrupado por origem.
 
     O cartao do topo diz *quanto* entrou; ele nao diz *de onde*, e e essa a
@@ -694,7 +707,7 @@ def composicao_de_receitas(conn, competencia=None, ano=None, pessoa=None) -> lis
             .join(db.contas, db.transacoes.c.conta_id == db.contas.c.id)
             .outerjoin(db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id)
         )
-        .where(*_base(competencia, ano, pessoa))
+        .where(*_base(competencia, ano, pessoa, competencias))
         .group_by(db.transacoes.c.origem, db.contas.c.nome, db.categorias.c.nome, lado)
         .having(lado == "receita")
     )
@@ -887,7 +900,7 @@ def receitas_por_pessoa(conn, competencia=None, ano=None) -> list[dict]:
 
 def lancamentos(
     conn, competencia=None, ano=None, natureza=None, pessoa=None,
-    categoria_id=None, limite: int = 500,
+    categoria_id=None, limite: int = 500, competencias=None,
 ) -> list[dict]:
     consulta = (
         sa.select(
@@ -917,7 +930,7 @@ def lancamentos(
             .outerjoin(db.subcategorias, db.transacoes.c.subcategoria_id == db.subcategorias.c.id)
             .outerjoin(db.uploads, db.transacoes.c.upload_id == db.uploads.c.id)
         )
-        .where(*_base(competencia, ano, pessoa))
+        .where(*_base(competencia, ano, pessoa, competencias))
         .order_by(db.transacoes.c.data.desc(), db.transacoes.c.id.desc())
         .limit(limite)
     )
@@ -1168,114 +1181,440 @@ def resumo_do_ano(conn, competencia: str) -> dict:
     }
 
 
-def contexto_do_ano(conn, ate: str) -> str:
-    """Os números da leitura longa: padrão, sazonalidade e o que é fixo.
+ESCOPOS = {"ano": "o ano civil", "12m": "os últimos doze meses"}
 
-    O mês responde "para onde foi o dinheiro". Só a série responde "isto
-    acontece todo ano nesta época" — e é essa a diferença entre reagir ao mês e
-    planejar o ano.
+
+def competencias_do_periodo(conn, ate: str, escopo: str = "12m") -> list[str]:
+    """Os meses da leitura longa: o ano civil de `ate`, ou a janela de doze.
+
+    As duas perguntas sao diferentes e as duas sao legitimas. O ano civil e a
+    conta que se presta ao imposto, ao balanco de dezembro e a comparacao com
+    o ano passado. A janela de doze meses e a que responde "como esta a casa
+    hoje" sem esperar janeiro — e a unica que pode falar de sazonalidade,
+    porque so ela ve o mesmo mes duas vezes.
+    """
+    if escopo == "12m":
+        return janela_de_doze_meses(conn, ate)
+    ano = int(ate[:4])
+    todas = sorted(
+        linha.competencia
+        for linha in conn.execute(
+            sa.select(db.transacoes.c.competencia)
+            .where(db.transacoes.c.ativo == sa.true(),
+                   db.transacoes.c.competencia.isnot(None),
+                   db.transacoes.c.competencia.like(f"{ano}-%"))
+            .distinct()
+        )
+    )
+    return [c for c in todas if c <= ate]
+
+
+def matriz_de_competencias(conn, competencias: list[str], pessoa: str | None = None) -> dict:
+    """Categoria x mes para uma janela qualquer, inclusive atravessando o ano.
+
+    `tabela_mes_a_mes` responde por ano civil e usa so o "MM" como coluna:
+    numa janela de doze meses que atravessa dezembro, agosto de dois anos
+    diferentes cairia na mesma coluna. Aqui a coluna e a competencia inteira.
+    """
+    if not competencias:
+        return {"meses": [], "linhas": []}
+    matriz: dict[str, dict[str, int]] = {}
+    for linha in conn.execute(_consulta_da_matriz(None, pessoa, competencias=competencias)):
+        nome = _nome_da_linha(linha)
+        if nome is None or nome == CATEGORIA_TRANSFERENCIA:
+            continue
+        acumulado = matriz.setdefault(nome, {})
+        acumulado[linha.competencia] = (acumulado.get(linha.competencia, 0)
+                                        - int(linha.total or 0))
+    meses = sorted(competencias)
+    saida = []
+    for nome, valores in matriz.items():
+        serie = {mes: valores.get(mes, 0) for mes in meses}
+        com_gasto = [v for v in serie.values() if v]
+        total = sum(serie.values())
+        if total <= 0 and not com_gasto:
+            continue
+        pico = max(serie.items(), key=lambda par: par[1], default=("—", 0))
+        saida.append({
+            "categoria": nome,
+            "meses": serie,
+            "total": total,
+            "media": total // len(meses),
+            "media_com_gasto": (sum(com_gasto) // len(com_gasto)) if com_gasto else 0,
+            "meses_com_gasto": len(com_gasto),
+            "pico_mes": pico[0],
+            "pico": pico[1],
+        })
+    saida.sort(key=lambda linha: -linha["total"])
+    return {"meses": meses, "linhas": saida}
+
+
+def estabelecimentos(conn, competencias: list[str], quantos: int = 20) -> list[dict]:
+    """Onde o dinheiro foi parar, pelo nome do lugar, no periodo inteiro.
+
+    Categoria diz o tipo de gasto; o estabelecimento diz a decisao. "Mercado"
+    nao se corta; um restaurante especifico, tres vezes por semana, se discute.
+    """
+    from .texto import chave_estabelecimento
+
+    consulta = (
+        sa.select(db.transacoes.c.descricao, db.transacoes.c.competencia,
+                  db.transacoes.c.valor_centavos, db.categorias.c.nome.label("categoria"))
+        .select_from(
+            db.transacoes.outerjoin(db.categorias,
+                                    db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(*_base(competencias=competencias), db.transacoes.c.valor_centavos < 0,
+               sa.or_(db.categorias.c.nome.is_(None),
+                      db.categorias.c.nome.not_in((CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA))))
+    )
+    por_chave: dict[str, dict] = {}
+    for linha in conn.execute(consulta):
+        chave = chave_estabelecimento(linha.descricao)
+        if not chave or len(chave) < 4:
+            continue
+        registro = por_chave.setdefault(chave, {
+            "estabelecimento": chave, "total": 0, "qtd": 0, "meses": set(),
+            "categoria": linha.categoria or "sem categoria",
+        })
+        registro["total"] += abs(int(linha.valor_centavos))
+        registro["qtd"] += 1
+        registro["meses"].add(linha.competencia)
+    saida = [
+        {**r, "meses": len(r["meses"]), "primeiro_mes": min(r["meses"])}
+        for r in sorted(por_chave.values(), key=lambda r: -r["total"])[:quantos]
+    ]
+    return saida
+
+
+def estreantes(conn, competencias: list[str], mes: str, minimo: int = 20_000) -> list[dict]:
+    """Lugares que aparecem em `mes` e nunca tinham aparecido antes na janela.
+
+    Gasto novo e a explicacao mais comum de um mes fora da curva, e e o que
+    nenhuma media mostra: a media sobe, e ninguem sabe por causa de quem.
+    """
+    from .texto import chave_estabelecimento
+
+    consulta = (
+        sa.select(db.transacoes.c.descricao, db.transacoes.c.competencia,
+                  db.transacoes.c.valor_centavos, db.categorias.c.nome.label("categoria"))
+        .select_from(
+            db.transacoes.outerjoin(db.categorias,
+                                    db.transacoes.c.categoria_id == db.categorias.c.id)
+        )
+        .where(*_base(competencias=competencias), db.transacoes.c.valor_centavos < 0,
+               sa.or_(db.categorias.c.nome.is_(None),
+                      db.categorias.c.nome.not_in((CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA))))
+    )
+    por_chave: dict[str, dict] = {}
+    for linha in conn.execute(consulta):
+        chave = chave_estabelecimento(linha.descricao)
+        if not chave or len(chave) < 4:
+            continue
+        registro = por_chave.setdefault(chave, {
+            "estabelecimento": chave, "no_mes": 0, "antes": 0,
+            "categoria": linha.categoria or "sem categoria",
+        })
+        if linha.competencia == mes:
+            registro["no_mes"] += abs(int(linha.valor_centavos))
+        elif linha.competencia < mes:
+            registro["antes"] += abs(int(linha.valor_centavos))
+    novos = [r for r in por_chave.values() if r["no_mes"] >= minimo and not r["antes"]]
+    return sorted(novos, key=lambda r: -r["no_mes"])
+
+
+def piso_e_escolha(conn, competencias: list[str], competencia: str | None = None) -> dict:
+    """Quanto do gasto e compromisso que se repete e quanto e decisao do mes.
+
+    A diferenca entre os dois muda o que se pode fazer: o piso so cai
+    cancelando alguma coisa; o resto cai decidindo diferente amanha.
+    """
+    fixos = compromissos_recorrentes(conn, competencia or competencias[-1],
+                                     competencias=competencias)
+    piso = sum(item["media"] for item in fixos)
+    meses = len(competencias) or 1
+    total = -sum(
+        int(linha.total or 0)
+        for linha in conn.execute(_consulta_da_matriz(None, None, competencias=competencias))
+        if _nome_da_linha(linha) not in (None, CATEGORIA_TRANSFERENCIA)
+    )
+    media_total = max(total, 0) // meses
+    return {
+        "piso": piso,
+        "media_total": media_total,
+        "escolha": max(media_total - piso, 0),
+        "percentual_do_piso": round(100 * piso / media_total, 1) if media_total else 0.0,
+        "compromissos": fixos,
+    }
+
+
+def contexto_do_ano(conn, ate: str) -> str:
+    """A leitura longa dos ultimos doze meses. Mantida pelo nome antigo."""
+    return contexto_longo(conn, ate, escopo="12m")
+
+
+def _mes_anterior_a(competencia: str) -> str:
+    ano, mes = int(competencia[:4]), int(competencia[5:7])
+    return f"{ano - 1:04d}-12" if mes == 1 else f"{ano:04d}-{mes - 1:02d}"
+
+
+def _variacao(agora: int, antes: int) -> str:
+    if not antes:
+        return "sem base de comparação"
+    delta = round(100 * (agora - antes) / antes)
+    return f"{'+' if delta > 0 else ''}{delta}%"
+
+
+def contexto_longo(conn, ate: str, escopo: str = "12m") -> str:
+    """Os numeros da leitura longa, no ano civil ou na janela de doze meses.
+
+    O mes responde "para onde foi o dinheiro". A serie responde outra coisa:
+    o que se repete e portanto e piso, o que oscila e portanto e decisao, em
+    que meses a casa gasta mais, quem trouxe o que, e qual gasto e novo. Este
+    texto e tudo o que a IA vai saber — ela nao consulta o banco —, entao ele
+    carrega tambem o que NAO se sabe: o mes que ainda esta pela metade, a
+    janela curta demais para falar de sazonalidade.
     """
     from .money import fmt_brl
 
-    competencias = janela_de_doze_meses(conn, ate)
+    competencias = competencias_do_periodo(conn, ate, escopo)
     if not competencias:
         return f"Sem lançamentos até {ate}."
 
     ano = int(ate[:4])
-    resumo_ano = resumo_do_ano(conn, ate)
-    fechada = len(competencias) >= 12
+    meses_do_periodo = len(competencias)
+    ultimo = competencias[-1]
+    fechada = meses_do_periodo >= 12
+    total = resumo(conn, competencias=competencias)
+    rotulo = "ano civil de " + str(ano) if escopo == "ano" else "últimos 12 meses"
 
     linhas = [
-        f"Janela: {competencias[0]} a {competencias[-1]} "
-        f"({len(competencias)} {'meses' if len(competencias) > 1 else 'mês'} com lançamento)",
+        f"PERÍODO DA LEITURA: {rotulo} — de {competencias[0]} a {ultimo}, "
+        f"{meses_do_periodo} {'meses' if meses_do_periodo > 1 else 'mês'} com lançamento.",
     ]
     if not fechada:
         linhas.append(
-            "ATENÇÃO: menos de doze meses de histórico. Dá para descrever o que houve; "
-            "NÃO dá para afirmar sazonalidade — para isso é preciso ver o mesmo mês "
-            "repetir em anos diferentes. Diga isso ao falar de padrão anual."
+            "ATENÇÃO: menos de doze meses de histórico. Dá para descrever o que houve e "
+            "apontar concentração; NÃO dá para afirmar sazonalidade — para isso é preciso "
+            "ver o mesmo mês repetir em anos diferentes. Diga isso ao falar de padrão anual."
         )
 
+    coberturas = cobertura_por_competencia(conn, competencias)
+    incompletos = [
+        f"{mes} ({coberturas[mes]['percentual_classificado']:.0f}% classificado)"
+        for mes in competencias
+        if coberturas[mes]["percentual_classificado"] < 95
+    ]
+    if incompletos:
+        linhas += [
+            "",
+            "COBERTURA (leia antes de concluir qualquer coisa): estes meses não estão "
+            "classificados por inteiro — " + ", ".join(incompletos)
+            + ". Os totais deles são parciais e a comparação com os outros meses fica "
+            "prejudicada.",
+        ]
+    else:
+        linhas += ["", "COBERTURA: todos os meses do período estão classificados acima de 95%."]
+
+    sobra = total["receitas"] - total["despesas"] - total["poupanca"]
     linhas += [
         "",
-        "Acumulado do ano:",
-        f"- receitas {fmt_brl(resumo_ano['receitas'])}, "
-        f"despesas {fmt_brl(resumo_ano['despesas'])}, "
-        f"poupança {fmt_brl(resumo_ano['poupanca'])}",
-        f"- média mensal (acumulado ÷ {resumo_ano['meses_decorridos']} meses decorridos): "
-        f"receitas {fmt_brl(resumo_ano['media_receita'])}, "
-        f"despesas {fmt_brl(resumo_ano['media_despesa'])}",
-        f"- taxa de poupança sobre a receita do ano: {resumo_ano['taxa_de_poupanca']:.1f}%",
-        "",
-        "Mês a mês:",
+        "TOTAIS DO PERÍODO:",
+        f"- receitas {fmt_brl(total['receitas'])}, despesas {fmt_brl(total['despesas'])}, "
+        f"poupança {fmt_brl(total['poupanca'])}, sobra livre {fmt_brl(sobra)}",
+        f"- média por mês do período ({meses_do_periodo} meses): "
+        f"receitas {fmt_brl(total['receitas'] // meses_do_periodo)}, "
+        f"despesas {fmt_brl(total['despesas'] // meses_do_periodo)}",
+        f"- a casa gastou {round(100 * total['despesas'] / total['receitas'])}% do que "
+        f"recebeu no período." if total["receitas"] else
+        "- sem receita lançada no período: a proporção gasto/renda não pode ser calculada.",
     ]
-    for mes in serie_mensal(conn, ano):
-        if mes["competencia"] not in competencias:
-            continue
+    if total["receitas_nao_recorrentes"]:
         linhas.append(
-            f"- {mes['competencia']}: receitas {fmt_brl(mes['receitas'])}, "
-            f"despesas {fmt_brl(mes['despesas'])}, poupança {fmt_brl(mes['poupanca'])}"
+            f"- dentro das receitas, {fmt_brl(total['receitas_nao_recorrentes'])} é venda de "
+            "bem: entrada de uma vez só, não é renda que se repita."
+        )
+    if total["transferencias"]:
+        linhas.append(
+            f"- fora dos dois totais, {fmt_brl(total['transferencias'])} de transferência "
+            "entre contas do casal: dinheiro que só mudou de bolso."
         )
 
-    tabela = tabela_mes_a_mes(conn, ano)
-    if tabela["linhas"]:
+    linhas += ["", "MÊS A MÊS (a variação é contra o mês anterior da série):"]
+    series: dict[str, dict] = {}
+    for a in sorted({int(c[:4]) for c in competencias}):
+        for mes in serie_mensal(conn, a):
+            series[mes["competencia"]] = mes
+    anterior_despesa = None
+    for mes in competencias:
+        dados_do_mes = series.get(mes)
+        if not dados_do_mes:
+            continue
+        sobra_mes = (dados_do_mes["receitas"] - dados_do_mes["despesas"]
+                     - dados_do_mes["poupanca"])
+        variacao = (f", despesa {_variacao(dados_do_mes['despesas'], anterior_despesa)} "
+                    "vs o mês anterior" if anterior_despesa is not None else "")
+        linhas.append(
+            f"- {mes}: receitas {fmt_brl(dados_do_mes['receitas'])}, "
+            f"despesas {fmt_brl(dados_do_mes['despesas'])}, "
+            f"poupança {fmt_brl(dados_do_mes['poupanca'])}, "
+            f"sobra {fmt_brl(sobra_mes)}{variacao}"
+        )
+        anterior_despesa = dados_do_mes["despesas"]
+
+    matriz = matriz_de_competencias(conn, competencias)
+    if matriz["linhas"]:
+        gasto_total = sum(l["total"] for l in matriz["linhas"]) or 1
         linhas += [
             "",
-            "Gasto por categoria, mês a mês (é aqui que a sazonalidade aparece — "
-            "meses vazios significam que não houve gasto naquele mês):",
+            "GASTO POR CATEGORIA, MÊS A MÊS (mês vazio = não houve gasto naquele mês; "
+            "'concentração' é quando quase tudo está em um ou dois meses):",
+            "  categoria | " + " | ".join(matriz["meses"])
+            + " | total | % do gasto | média/mês | meses com gasto | pico",
         ]
-        cabecalho = " | ".join(tabela["meses"])
-        linhas.append(f"  categoria: {cabecalho} | média/mês | pico")
-        for linha in tabela["linhas"][:14]:
-            if linha["categoria"] == CATEGORIA_TRANSFERENCIA:
-                continue
-            valores = [linha["meses"].get(mes, 0) for mes in tabela["meses"]]
-            pico = max(zip(valores, tabela["meses"]), default=(0, "—"))
+        for linha in matriz["linhas"][:16]:
             linhas.append(
                 f"  {linha['categoria']}: "
-                + " | ".join(fmt_brl(v) for v in valores)
-                + f" | {fmt_brl(linha['media'])} | maior em {pico[1]}"
+                + " | ".join(fmt_brl(linha["meses"][mes]) for mes in matriz["meses"])
+                + f" | {fmt_brl(linha['total'])}"
+                + f" | {round(100 * linha['total'] / gasto_total)}%"
+                + f" | {fmt_brl(linha['media'])}"
+                + f" | {linha['meses_com_gasto']} de {meses_do_periodo}"
+                + f" | maior em {linha['pico_mes']} ({fmt_brl(linha['pico'])})"
             )
 
-    fixos = compromissos_recorrentes(conn, ate)
-    if fixos:
-        total_fixo = sum(item["media"] for item in fixos)
+    abertura = subcategorias_de_todas(conn, competencias=competencias)
+    detalhe = []
+    for linha in por_categoria(conn, competencias=competencias):
+        for sub in abertura.get(linha["categoria_id"], [])[:6]:
+            detalhe.append((linha["categoria"], sub["subcategoria"], sub["total"], sub["qtd"]))
+    if detalhe:
+        linhas += ["", "ABERTURA POR SUBCATEGORIA no período (as maiores de cada categoria):"]
+        for categoria, sub, valor, qtd in sorted(detalhe, key=lambda item: -item[2])[:28]:
+            linhas.append(
+                f"- {categoria} › {sub}: {fmt_brl(valor)} em {qtd} lançamento(s), "
+                f"{fmt_brl(valor // meses_do_periodo)}/mês"
+            )
+
+    divisao = piso_e_escolha(conn, competencias)
+    if divisao["media_total"]:
         linhas += [
             "",
-            f"Compromissos que se repetem (3 meses ou mais): {fmt_brl(total_fixo)} por mês "
-            "somados — é o piso do orçamento, o que não muda decidindo mês a mês:",
+            "PISO x ESCOLHA (a diferença mais útil do orçamento):",
+            f"- gasto médio do período: {fmt_brl(divisao['media_total'])}/mês",
+            f"- do que se repete (mesmo lugar em 3 meses ou mais): "
+            f"{fmt_brl(divisao['piso'])}/mês, {divisao['percentual_do_piso']:.0f}% do gasto. "
+            "Isso só cai cancelando alguma coisa.",
+            f"- o resto, {fmt_brl(divisao['escolha'])}/mês, é decisão do mês — cai decidindo "
+            "diferente, sem cancelar nada.",
         ]
-        for item in fixos[:15]:
+    fixos = divisao["compromissos"]
+    if fixos:
+        recentes = competencias[-3:]
+        antigos = competencias[:-3]
+        linhas += ["", "COMPROMISSOS QUE SE REPETEM (com a tendência dentro do período):"]
+        for item in fixos[:18]:
+            por_mes = item.get("por_mes", {})
+            media_recente = sum(por_mes.get(m, 0) for m in recentes) // max(len(recentes), 1)
+            media_antiga = (sum(por_mes.get(m, 0) for m in antigos) // len(antigos)
+                            if antigos else 0)
+            tendencia = (f" — últimos 3 meses {fmt_brl(media_recente)}/mês contra "
+                         f"{fmt_brl(media_antiga)}/mês antes ({_variacao(media_recente, media_antiga)})"
+                         if antigos else "")
             linhas.append(
-                f"- {item['estabelecimento']}: {fmt_brl(item['media'])}/mês em "
-                f"{item['meses']} meses"
+                f"- {item['estabelecimento']}: {fmt_brl(item['media'])}/mês, visto em "
+                f"{item['meses']} meses, {fmt_brl(item['total'])} no total{tendencia}"
             )
 
-    anterior = [item for item in comparativo_anual(conn) if item.get("ano") == ano - 1]
-    if anterior:
-        linhas += ["", "Ano anterior, para comparar:"]
-        for item in anterior:
+    lugares = estabelecimentos(conn, competencias, quantos=18)
+    if lugares:
+        linhas += ["", "ONDE O DINHEIRO FOI PARAR (por estabelecimento, no período):"]
+        for item in lugares:
+            linhas.append(
+                f"- {item['estabelecimento']} ({item['categoria']}): {fmt_brl(item['total'])} "
+                f"em {item['qtd']} compra(s), em {item['meses']} mês(es)"
+            )
+
+    novos = estreantes(conn, competencias, ultimo)
+    if novos:
+        linhas += [
+            "",
+            f"GASTO NOVO em {ultimo} (lugares que não apareciam antes nesta janela — "
+            "é a explicação mais comum de um mês fora da curva):",
+        ]
+        for item in novos[:10]:
+            linhas.append(
+                f"- {item['estabelecimento']} ({item['categoria']}): {fmt_brl(item['no_mes'])}"
+            )
+
+    linhas += ["", "POR PESSOA no período (sem dono declarado = Casal):"]
+    for quem in db.PESSOAS:
+        da_pessoa = resumo(conn, competencias=competencias, pessoa=quem)
+        topo = por_categoria(conn, competencias=competencias, pessoa=quem)[:3]
+        detalhe_pessoa = ("; maiores gastos: "
+                          + ", ".join(f"{c['categoria']} {fmt_brl(c['total'])}" for c in topo)
+                          if topo else "")
+        linhas.append(
+            f"- {quem}: despesas {fmt_brl(da_pessoa['despesas'])}, "
+            f"receitas {fmt_brl(da_pessoa['receitas'])}{detalhe_pessoa}"
+        )
+
+    composicao = [c for c in composicao_de_receitas(conn, competencias=competencias)
+                  if c["no_total"]]
+    if composicao:
+        linhas += ["", "DE ONDE VEIO A RECEITA do período (origem, conta e tipo):"]
+        for item in composicao[:12]:
+            linhas.append(
+                f"- {item['categoria']} — {item['conta']} ({item['origem']}): "
+                f"{fmt_brl(item['total'])} em {item['quantos']} lançamento(s)"
+            )
+        previsto, realizado = previsto_e_realizado(composicao)
+        if previsto and realizado:
+            linhas.append(
+                f"  (destes, {fmt_brl(previsto)} vieram de planilha ou lançamento à mão e "
+                f"{fmt_brl(realizado)} de extrato bancário.)"
+            )
+
+    maiores = lancamentos(conn, competencias=competencias, natureza="despesa", limite=800)
+    maiores = [m for m in maiores
+               if m["categoria"] not in (CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA)]
+    maiores = sorted(maiores, key=lambda linha: linha["valor_centavos"])[:15]
+    if maiores:
+        linhas += ["", "AS MAIORES SAÍDAS DO PERÍODO, uma a uma:"]
+        for item in maiores:
+            linhas.append(
+                f"- {item['data']:%d/%m/%Y} {item['descricao'][:45]}: "
+                f"{fmt_brl(abs(item['valor_centavos']))} "
+                f"({item['categoria'] or 'sem categoria'}, {item['pessoa']})"
+            )
+
+    from . import repo
+
+    metas = repo.listar_metas(conn, ano)
+    if metas:
+        do_orcamento = [item for item in orcamento(conn, ultimo, metas)
+                        if item["percentual"] and item["meta"]]
+        if do_orcamento:
+            linhas += ["", f"METAS DO ANO (% da renda) x realizado em {ultimo}:"]
+            for item in do_orcamento:
+                uso = f"{item['uso']:.0f}%" if item["uso"] is not None else "—"
+                linhas.append(
+                    f"- {item['categoria']}: meta {item['percentual']:.0f}% "
+                    f"({fmt_brl(item['meta'])}), realizado {fmt_brl(item['realizado'])} "
+                    f"= {uso} da meta"
+                )
+
+    anteriores = [item for item in comparativo_anual(conn) if item.get("ano") != ano]
+    if anteriores:
+        linhas += ["", "ANOS ANTERIORES, para comparar:"]
+        for item in anteriores:
             linhas.append(
                 f"- {item['ano']}: receitas {fmt_brl(item.get('receitas', 0))}, "
                 f"despesas {fmt_brl(item.get('despesas', 0))}"
             )
-
-    # a cobertura dos doze meses numa consulta só: uma por mês eram doze idas
-    # ao banco para descobrir quais meses ainda estão pela metade
-    coberturas = cobertura_por_competencia(conn, competencias)
-    faltando = [
-        competencia for competencia in competencias
-        if coberturas[competencia]["percentual_classificado"] < 95
-    ]
-    if faltando:
-        linhas += [
-            "",
-            "COBERTURA: estes meses ainda não estão classificados por inteiro — "
-            + ", ".join(faltando)
-            + ". Os totais deles são parciais e as comparações com os outros meses "
-            "ficam prejudicadas. Diga isso antes de apontar tendência.",
-        ]
     return "\n".join(linhas)
+
+
 
 
 def contexto_para_ia(conn, competencia: str) -> str:
@@ -1319,14 +1658,36 @@ def contexto_para_ia(conn, competencia: str) -> str:
         f"{cobertura['sem_subcategoria']} lançamentos",
     ]
 
-    linhas += ["", "Gasto por categoria no mês:"]
+    # o mes anterior ao lado de cada categoria: "Saude 17 mil" nao diz nada
+    # sozinho, e a media do ano nao pega o que acabou de mudar
+    anterior_mes = _mes_anterior_a(competencia)
+    do_anterior = {
+        linha["categoria"]: linha["total"]
+        for linha in por_categoria(conn, competencia=anterior_mes)
+    }
+    gasto_do_mes = atual["despesas"] or 1
+    linhas += [
+        "",
+        f"Gasto por categoria no mês (com o mês anterior, {anterior_mes}, ao lado):",
+    ]
     # as subcategorias de todas as categorias numa consulta só: uma por
     # categoria eram catorze idas ao banco para montar este mesmo texto
     abertura = subcategorias_de_todas(conn, competencia=competencia)
     for linha in por_categoria(conn, competencia=competencia):
-        linhas.append(f"- {linha['categoria']}: {fmt_brl(linha['total'])} ({linha['qtd']} lançamentos)")
-        for sub in abertura.get(linha["categoria_id"], [])[:4]:
-            linhas.append(f"    · {sub['subcategoria']}: {fmt_brl(sub['total'])}")
+        antes = do_anterior.get(linha["categoria"], 0)
+        comparacao = (f"; em {anterior_mes} foi {fmt_brl(antes)} "
+                      f"({_variacao(linha['total'], antes)})" if antes
+                      else f"; não houve gasto nesta categoria em {anterior_mes}")
+        linhas.append(
+            f"- {linha['categoria']}: {fmt_brl(linha['total'])} "
+            f"({linha['qtd']} lançamentos, {round(100 * linha['total'] / gasto_do_mes)}% "
+            f"do gasto do mês){comparacao}"
+        )
+        for sub in abertura.get(linha["categoria_id"], [])[:6]:
+            linhas.append(
+                f"    · {sub['subcategoria']}: {fmt_brl(sub['total'])} "
+                f"({sub['qtd']} lançamentos)"
+            )
 
     fora_do_padrao = desvios_do_mes(conn, competencia)
     if fora_do_padrao:
@@ -1401,6 +1762,32 @@ def contexto_para_ia(conn, competencia: str) -> str:
                 f"visto em {item['meses']} meses"
             )
 
+    janela = janela_de_doze_meses(conn, competencia)
+    if len(janela) > 1:
+        divisao = piso_e_escolha(conn, janela, competencia)
+        if divisao["media_total"]:
+            linhas += [
+                "",
+                "Piso x escolha (olhando os últimos meses):",
+                f"- do gasto médio de {fmt_brl(divisao['media_total'])}/mês, "
+                f"{fmt_brl(divisao['piso'])} é compromisso que se repete "
+                f"({divisao['percentual_do_piso']:.0f}%) e {fmt_brl(divisao['escolha'])} é "
+                "decisão do mês. Cortar o primeiro exige cancelar algo; o segundo muda "
+                "decidindo diferente.",
+            ]
+        novos = estreantes(conn, janela, competencia)
+        if novos:
+            linhas += [
+                "",
+                "Gasto NOVO neste mês (lugares que não apareciam nos meses anteriores — "
+                "costuma ser a explicação de um mês fora da curva):",
+            ]
+            for item in novos[:8]:
+                linhas.append(
+                    f"- {item['estabelecimento']} ({item['categoria']}): "
+                    f"{fmt_brl(item['no_mes'])}"
+                )
+
     # o mês sozinho não diz se foi um mês caro: diz quanto se gastou. Sem o
     # acumulado e a média ao lado, "gastamos 126 mil" não tem régua nenhuma.
     do_ano = resumo_do_ano(conn, competencia)
@@ -1422,7 +1809,8 @@ def contexto_para_ia(conn, competencia: str) -> str:
     return "\n".join(linhas)
 
 
-def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3) -> list[dict]:
+def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3,
+                             competencias: list[str] | None = None) -> list[dict]:
     """Gasto que aparece todo mês, pelo nome do estabelecimento.
 
     Separa o que é escolha do mês do que é compromisso assumido. Cortar R$ 200
@@ -1444,7 +1832,8 @@ def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3) -
         )
         # o pagamento da fatura se repete todo mes e nao e compromisso: e o
         # mesmo dinheiro das compras; o aporte tampouco e gasto
-        .where(*_base(ano=ano), db.transacoes.c.valor_centavos < 0,
+        .where(*_base(ano=None if competencias else ano, competencias=competencias),
+               db.transacoes.c.valor_centavos < 0,
                sa.or_(db.categorias.c.nome.is_(None),
                       db.categorias.c.nome.not_in((CATEGORIA_TRANSFERENCIA, CATEGORIA_POUPANCA))))
     )
@@ -1454,12 +1843,15 @@ def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3) -
         if not chave or len(chave) < 4:
             continue
         registro = por_chave.setdefault(
-            chave, {"estabelecimento": chave, "meses": set(), "total": 0, "no_mes": 0}
+            chave, {"estabelecimento": chave, "meses": set(), "total": 0, "no_mes": 0,
+                    "por_mes": {}}
         )
         registro["meses"].add(linha.competencia)
-        registro["total"] += abs(int(linha.valor_centavos))
+        valor = abs(int(linha.valor_centavos))
+        registro["total"] += valor
+        registro["por_mes"][linha.competencia] = registro["por_mes"].get(linha.competencia, 0) + valor
         if linha.competencia == competencia:
-            registro["no_mes"] += abs(int(linha.valor_centavos))
+            registro["no_mes"] += valor
 
     saida = [
         {
@@ -1468,6 +1860,7 @@ def compromissos_recorrentes(conn, competencia: str, minimo_de_meses: int = 3) -
             "total": r["total"],
             "media": r["total"] // len(r["meses"]),
             "no_mes": r["no_mes"],
+            "por_mes": r["por_mes"],
         }
         for r in por_chave.values()
         if len(r["meses"]) >= minimo_de_meses

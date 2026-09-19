@@ -9,11 +9,44 @@ que é hoje.
 
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 
 from core import ai, repo
 from core.money import fmt_brl
 from ui import dados, destinos
+
+# "R$ 1.234,56", "-R$ 80,00", "12%", "3,5%": o que numa análise é número e
+# precisa saltar do texto. O cifrão é escapado no mesmo passo — o Streamlit lê
+# um par deles como fórmula LaTeX e come a frase do meio.
+_NUMERO = re.compile(r"-?R\$ ?-?[\d.]+,\d{2}|(?<![\w,.])[+-]?\d{1,3}(?:[.,]\d+)?%")
+
+
+def _destacar(texto: str) -> str:
+    """Envolve cada número do texto num span, para a folha de estilo aumentá-lo.
+
+    HTML em linha atravessa o markdown do Streamlit sem atrapalhar o resto: os
+    títulos, as listas e as tabelas continuam sendo markdown. É por isso que o
+    destaque é feito assim, e não embrulhando o texto inteiro numa div — uma
+    div é bloco, e dentro de bloco o markdown deixa de ser interpretado.
+    """
+    return _NUMERO.sub(
+        lambda achado: f"<span class='num'>{achado.group().replace('$', chr(92) + '$')}</span>",
+        texto,
+    )
+
+
+def _mostrar_analise(texto: str, chave: str) -> None:
+    """A análise na tela, com o número em destaque.
+
+    A chave do container vira uma classe no HTML (st-key-analise_…), e é por
+    ela que a folha de estilo alcança este texto sem aumentar a letra do app
+    inteiro. Cada lugar que mostra análise passa a sua, porque duas chaves
+    iguais na mesma tela são erro de Streamlit.
+    """
+    with st.container(key=f"analise_{chave}"):
+        st.markdown(_destacar(texto), unsafe_allow_html=True)
 
 
 def _reais(centavos: int) -> str:
@@ -45,7 +78,7 @@ def render(engine, usuario: dict) -> None:
         )
 
     aba_mes, aba_ano, aba_pergunta, aba_sub = st.tabs(
-        ["Leitura do mês", "Ano & padrões", "Perguntar sobre o mês", "Completar subcategorias"]
+        ["Leitura do mês", "Ano & 12 meses", "Perguntar sobre o mês", "Completar subcategorias"]
     )
     with aba_mes:
         _leitura_do_mes(engine, competencia, usuario, ligada)
@@ -127,7 +160,7 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
                 "classificação ou importação depois. Gere de novo para valer.",
                 icon="🕓",
             )
-        st.markdown(anterior["texto"])
+        _mostrar_analise(anterior["texto"], "mes")
         st.caption(
             f"Escrita por {anterior['gerada_por']} em "
             f"{anterior['gerada_em']:%d/%m/%Y às %H:%M} · modelo {anterior['modelo']}"
@@ -153,7 +186,7 @@ def _leitura_do_mes(engine, competencia: str, usuario: dict, ligada: bool) -> No
         engine, competencia=competencia, texto=texto, modelo=ai.MODELO_ANALISE,
         contexto=contexto, usuario=usuario.get("nome", "—"),
     )
-    st.markdown(texto)
+    _mostrar_analise(texto, "mes")
     with st.expander("Números usados"):
         st.code(contexto, language="text")
 
@@ -173,56 +206,74 @@ def _mostrar_falha(texto: str) -> None:
         st.json(ai.diagnostico())
 
 
+ESCOPOS = {"Ano civil": "ano", "Últimos 12 meses": "12m"}
+
+
 def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> None:
     """A visão longa: o que se repete, o que oscila e em que meses.
 
     Vale uma chamada própria, e não um parágrafo a mais na do mês: a pergunta é
-    outra. O mês responde para onde foi o dinheiro; a série responde o que
-    acontece todo ano nesta época — e é dela que sai meta, não do último mês.
+    outra. O mês responde para onde foi o dinheiro; a série responde o que é
+    piso e o que é decisão — e é dela que sai meta, não do último mês.
+
+    Duas janelas, porque são duas perguntas. O ano civil é a conta que fecha em
+    dezembro e se compara com o ano passado; os últimos doze meses respondem
+    "como está a casa hoje" sem esperar janeiro, e é a única janela que pode
+    falar de sazonalidade, porque é a única que vê o mesmo mês duas vezes.
     """
-    contexto = dados.contexto_do_ano(engine, dados.versao(), competencia)
-    painel = dados.painel_do_ano(engine, dados.versao(), competencia)
-    janela, do_ano = painel["janela"], painel["do_ano"]
+    rotulo_escopo = st.radio(
+        "Janela da leitura", list(ESCOPOS), horizontal=True, key="ia_escopo",
+        help="O ano civil vai de janeiro até o mês escolhido. A janela de doze meses "
+             "termina no mês escolhido e anda com ele.",
+    )
+    escopo = ESCOPOS[rotulo_escopo]
+    # "ano" era o nome do tipo quando a única janela era a de doze meses: as
+    # leituras já gravadas continuam aparecendo na aba que as gerou
+    tipo = "ano" if escopo == "12m" else "periodo_ano"
+    contexto = dados.contexto_longo(engine, dados.versao(), competencia, escopo)
+    painel = dados.painel_do_ano(engine, dados.versao(), competencia, escopo)
+    janela, do_periodo = painel["janela"], painel["do_periodo"]
     anterior = dados.analise_gravada(
-        engine, dados.versao(), competencia, contexto, tipo="ano"
+        engine, dados.versao(), competencia, contexto, tipo=tipo
     )
 
-    if not janela:
+    if not janela or not do_periodo:
         st.info("Sem meses lançados até esta competência.", icon="📭")
         return
 
+    meses = len(janela)
+    sobra = do_periodo["receitas"] - do_periodo["despesas"] - do_periodo["poupanca"]
     colunas = st.columns(4)
-    colunas[0].metric("Receitas no ano", fmt_brl(do_ano["receitas"]))
-    colunas[1].metric("Despesas no ano", fmt_brl(do_ano["despesas"]))
-    colunas[2].metric(
-        f"Média mensal ({do_ano['meses_decorridos']} meses)", fmt_brl(do_ano["media_despesa"])
-    )
-    colunas[3].metric("Poupança / receita", f"{do_ano['taxa_de_poupanca']:.1f}%")
+    colunas[0].metric("Receitas no período", fmt_brl(do_periodo["receitas"]))
+    colunas[1].metric("Despesas no período", fmt_brl(do_periodo["despesas"]))
+    colunas[2].metric(f"Despesa média ({meses} meses)",
+                      fmt_brl(do_periodo["despesas"] // meses))
+    colunas[3].metric("Sobra livre no período", fmt_brl(sobra))
 
-    if len(janela) < 12:
+    if meses < 12:
         st.caption(
-            f"Janela de {janela[0]} a {janela[-1]} — {len(janela)} meses. Com menos de "
-            "doze, dá para ver concentração, não sazonalidade: para afirmar que algo "
-            "acontece todo ano nesta época é preciso ver o mesmo mês repetir em anos "
-            "diferentes."
+            f"Janela de {janela[0]} a {janela[-1]} — {meses} "
+            f"{'meses' if meses > 1 else 'mês'}. Com menos de doze, dá para ver "
+            "concentração, não sazonalidade: para afirmar que algo acontece todo ano "
+            "nesta época é preciso ver o mesmo mês repetir em anos diferentes."
         )
     else:
-        st.caption(f"Últimos 12 meses: {janela[0]} a {janela[-1]}.")
+        st.caption(f"{rotulo_escopo}: {janela[0]} a {janela[-1]}, {meses} meses.")
 
     if not ligada:
-        with st.expander("Ver os números da leitura do ano"):
+        with st.expander("Ver os números da leitura"):
             st.code(contexto, language="text")
         return
 
     gerar = st.button(
-        "Ler o ano" if anterior is None else "Ler o ano de novo",
+        f"Ler {rotulo_escopo.lower()}" if anterior is None else "Ler de novo",
         type="primary", key="ia_gerar_ano",
     )
 
     if anterior and not gerar:
         if anterior["desatualizada"]:
             st.info("Os números mudaram desde este texto. Gere de novo para valer.", icon="🕓")
-        st.markdown(anterior["texto"])
+        _mostrar_analise(anterior["texto"], "longa")
         st.caption(
             f"Escrita por {anterior['gerada_por']} em "
             f"{anterior['gerada_em']:%d/%m/%Y às %H:%M}"
@@ -233,21 +284,22 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
 
     if not gerar:
         st.caption(
-            "A leitura do ano olha a matriz categoria × mês, os compromissos que se "
-            "repetem, o comparativo com o ano anterior e o que ainda falta classificar."
+            "A leitura olha a matriz categoria × mês, a abertura por subcategoria, o "
+            "que é piso e o que é escolha, os lugares onde o dinheiro foi parar, o "
+            "gasto novo do último mês, quem trouxe a receita e o que falta classificar."
         )
         return
 
-    with st.spinner("Lendo o ano…"):
-        texto = ai.analisar_ano(contexto)
+    with st.spinner("Lendo a série…"):
+        texto = ai.analisar_ano(contexto, rotulo=rotulo_escopo.lower())
     if _falhou(texto):
         _mostrar_falha(texto)
         return
     repo.salvar_analise(
         engine, competencia=competencia, texto=texto, modelo=ai.MODELO_ANALISE,
-        contexto=contexto, usuario=usuario.get("nome", "—"), tipo="ano",
+        contexto=contexto, usuario=usuario.get("nome", "—"), tipo=tipo,
     )
-    st.markdown(texto)
+    _mostrar_analise(texto, "longa")
     with st.expander("Números usados"):
         st.code(contexto, language="text")
 
@@ -273,7 +325,7 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
                 contexto=contexto, usuario=usuario.get("nome", "—"),
                 pergunta=pergunta.strip(),
             )
-            st.markdown(resposta)
+            _mostrar_analise(resposta, "pergunta")
 
     anteriores = dados.perguntas_anteriores(engine, dados.versao(), competencia)
     if anteriores:
@@ -284,7 +336,7 @@ def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
                 f"{item['pergunta'][:80]} — {item['gerada_por']}, "
                 f"{item['gerada_em']:%d/%m %H:%M}"
             ):
-                st.markdown(item["texto"])
+                _mostrar_analise(item["texto"], f"antiga{item['id']}")
 
 
 def _subcategorias(engine, competencia: str, usuario: dict, ligada: bool) -> None:

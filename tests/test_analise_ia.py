@@ -136,7 +136,7 @@ def test_transferencia_nao_conta_como_gasto_por_classificar(engine, conn):
     assert cobertura["gasto_total"] == 60_000
     # e nem aparece na lista de gasto por categoria, para ninguém somá-la de volta
     texto = analytics.contexto_para_ia(conn, "2026-08")
-    linhas_de_categoria = texto.split("Gasto por categoria no mês:")[1].split("\n\n")[0]
+    linhas_de_categoria = texto.split("Gasto por categoria no mês")[1].split("\n\n")[0]
     assert analytics.CATEGORIA_TRANSFERENCIA not in linhas_de_categoria
 
 
@@ -549,7 +549,7 @@ def test_com_menos_de_um_ano_o_texto_proibe_falar_de_sazonalidade(engine, conn):
     texto = analytics.contexto_do_ano(conn, "2026-03")
 
     assert "NÃO dá para afirmar sazonalidade" in texto
-    assert "Gasto por categoria, mês a mês" in texto
+    assert "GASTO POR CATEGORIA, MÊS A MÊS" in texto
 
 
 def test_leitura_do_ano_aponta_o_mes_de_pico_de_cada_categoria(engine, conn):
@@ -561,7 +561,9 @@ def test_leitura_do_ano_aponta_o_mes_de_pico_de_cada_categoria(engine, conn):
 
     texto = analytics.contexto_do_ano(conn, "2026-07")
 
-    assert "maior em 07" in texto
+    # o pico traz a competência inteira: numa janela de doze meses que atravessa
+    # o ano, "07" sozinho seria julho de dois anos diferentes
+    assert "maior em 2026-07" in texto
     assert "Lazer & Viagens" in texto
 
 
@@ -769,3 +771,101 @@ def test_importar_sem_chave_nao_tenta_a_ia(engine, monkeypatch):
         lancamentos=[Lancamento(_date(2026, 8, 5), "ESTABELECIMENTO SEM REGRA", -10_000)],
     )
     assert resumo["importados"] == 1
+
+
+# ---------------------------------------------------------------------------
+# a leitura longa: duas janelas, e mais do que a soma por categoria
+# ---------------------------------------------------------------------------
+def test_a_janela_da_leitura_longa_e_escolhida(engine, conn):
+    """Ano civil e últimos doze meses são duas perguntas diferentes, e as duas
+    são legítimas: uma fecha em dezembro, a outra anda com o mês."""
+    alimentacao = _categoria_id(conn, "Alimentação")
+    for ano, mes in [(2025, m) for m in range(6, 13)] + [(2026, m) for m in range(1, 9)]:
+        _inserir(conn, date(ano, mes, 10), "SUPERMERCADO", -100_000, alimentacao)
+
+    do_ano = analytics.competencias_do_periodo(conn, "2026-08", "ano")
+    assert do_ano == [f"2026-{m:02d}" for m in range(1, 9)]
+
+    doze = analytics.competencias_do_periodo(conn, "2026-08", "12m")
+    assert len(doze) == 12 and doze[0] == "2025-09" and doze[-1] == "2026-08"
+
+    texto_ano = analytics.contexto_longo(conn, "2026-08", "ano")
+    assert "ano civil de 2026" in texto_ano
+    assert "2025-09" not in texto_ano.split("MÊS A MÊS")[1].split("\n\n")[0]
+
+    texto_doze = analytics.contexto_longo(conn, "2026-08", "12m")
+    assert "últimos 12 meses" in texto_doze
+    assert "2025-09" in texto_doze
+
+
+def test_a_matriz_longa_nao_junta_o_mesmo_mes_de_anos_diferentes(engine, conn):
+    """Numa janela que atravessa o ano, agosto de 2025 e agosto de 2026 são
+    duas colunas. Com "MM" como chave seriam a mesma, e o pico mentiria."""
+    lazer = _categoria_id(conn, "Lazer & Viagens")
+    _inserir(conn, date(2025, 8, 10), "VIAGEM ANTIGA", -100_000, lazer)
+    _inserir(conn, date(2026, 8, 10), "VIAGEM NOVA", -900_000, lazer)
+
+    matriz = analytics.matriz_de_competencias(conn, ["2025-08", "2026-08"])
+
+    linha = next(l for l in matriz["linhas"] if l["categoria"] == "Lazer & Viagens")
+    assert linha["meses"] == {"2025-08": 100_000, "2026-08": 900_000}
+    assert linha["pico_mes"] == "2026-08"
+
+
+def test_a_leitura_longa_separa_o_piso_do_que_e_escolha(engine, conn):
+    """O que se repete só cai cancelando algo; o resto cai decidindo
+    diferente. É a divisão que decide o que dá para fazer."""
+    moradia = _categoria_id(conn, "Moradia")
+    alimentacao = _categoria_id(conn, "Alimentação")
+    for mes in (5, 6, 7, 8):
+        _inserir(conn, date(2026, mes, 5), "CONDOMINIO EDIFICIO", -200_000, moradia)
+    _inserir(conn, date(2026, 8, 20), "RESTAURANTE CARO", -100_000, alimentacao)
+
+    divisao = analytics.piso_e_escolha(conn, ["2026-05", "2026-06", "2026-07", "2026-08"])
+
+    assert divisao["piso"] == 200_000
+    assert divisao["media_total"] == 225_000
+    assert divisao["escolha"] == 25_000
+    texto = analytics.contexto_longo(conn, "2026-08", "ano")
+    assert "PISO x ESCOLHA" in texto
+    assert "ONDE O DINHEIRO FOI PARAR" in texto
+
+
+def test_gasto_novo_aparece_como_gasto_novo(engine, conn):
+    """Um mês fora da curva quase sempre tem um lugar novo dentro dele, e
+    nenhuma média mostra isso."""
+    saude = _categoria_id(conn, "Saúde")
+    for mes in (6, 7, 8):
+        _inserir(conn, date(2026, mes, 5), "FARMACIA DE SEMPRE", -20_000, saude)
+    _inserir(conn, date(2026, 8, 12), "HOSPITAL NOVO", -1_200_000, saude)
+
+    novos = analytics.estreantes(conn, ["2026-06", "2026-07", "2026-08"], "2026-08")
+
+    assert [n["estabelecimento"] for n in novos] == ["HOSPITAL NOVO"]
+    assert novos[0]["no_mes"] == 1_200_000
+    assert "GASTO NOVO em 2026-08" in analytics.contexto_longo(conn, "2026-08", "ano")
+
+
+def test_a_leitura_do_mes_compara_cada_categoria_com_o_mes_anterior(engine, conn):
+    """"Saúde: R$ 17 mil" não diz nada sozinho. Contra o mês anterior, diz."""
+    saude = _categoria_id(conn, "Saúde")
+    _inserir(conn, date(2026, 7, 5), "CONSULTA", -200_000, saude)
+    _inserir(conn, date(2026, 8, 5), "CIRURGIA", -600_000, saude)
+
+    texto = analytics.contexto_para_ia(conn, "2026-08")
+
+    assert "em 2026-07 foi R$ 2.000,00 (+200%)" in texto
+    assert "% do gasto do mês" in texto
+
+
+def test_o_numero_sai_maior_no_texto_da_analise():
+    """O destaque é inline: os títulos e as listas continuam sendo markdown."""
+    from views.analise_ia import _destacar
+
+    saida = _destacar("### Título\n- Saúde: R$ 17.563,63 contra a média (+166%).")
+
+    assert saida.startswith("### Título\n- Saúde: ")
+    assert "<span class='num'>R\\$ 17.563,63</span>" in saida
+    assert "<span class='num'>+166%</span>" in saida
+    # texto sem número nenhum passa intacto
+    assert _destacar("nada aqui") == "nada aqui"

@@ -245,6 +245,28 @@ CSS = f"""
   .login-topo p {{ color: {CINZA}; }}
 
   .nota {{ font-size: .78rem; color: {CINZA_CLARO}; margin-top: .4rem; }}
+
+  /* ============ o texto escrito pela IA: leitura longa, número grande ======
+     A análise é para ser lida inteira, e o número é o que se procura dentro
+     dela. Corpo maior que o padrão do Streamlit, linha mais alta, e o valor
+     em destaque — vinho, um pouco maior, sem quebrar no meio.            */
+  div[class*="st-key-analise_"] p,
+  div[class*="st-key-analise_"] li {{ font-size: 1.04rem; line-height: 1.68;
+       color: {PRETO}; }}
+  div[class*="st-key-analise_"] li {{ margin-bottom: .35rem; }}
+  div[class*="st-key-analise_"] h3 {{ font-size: 1.14rem !important; color: {VINHO_ESCURO};
+       margin: 1.5rem 0 .5rem; padding-bottom: .3rem; border-bottom: 1px solid {LINHA}; }}
+  div[class*="st-key-analise_"] h2 {{ font-size: 1.3rem !important; margin: 1.6rem 0 .5rem; }}
+  div[class*="st-key-analise_"] .num {{ font-size: 1.2em; font-weight: 700;
+       color: {VINHO_ESCURO}; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  div[class*="st-key-analise_"] strong {{ color: {PRETO}; }}
+  div[class*="st-key-analise_"] table {{ border-collapse: collapse; width: 100%;
+       font-size: .95rem; margin: .6rem 0; }}
+  div[class*="st-key-analise_"] th {{ background: {AREIA}; text-align: left;
+       padding: .45rem .7rem; font-size: .8rem; text-transform: uppercase;
+       letter-spacing: .04em; color: {CINZA}; }}
+  div[class*="st-key-analise_"] td {{ padding: .45rem .7rem; border-bottom: 1px solid {LINHA};
+       font-variant-numeric: tabular-nums; }}
   button[data-testid="stTab"][aria-selected="true"] {{ color: {VINHO} !important; }}
 </style>
 """
