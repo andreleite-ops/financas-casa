@@ -207,6 +207,8 @@ def _mostrar_falha(texto: str) -> None:
 
 
 ESCOPOS = {"Ano civil": "ano", "Últimos 12 meses": "12m"}
+# na aba de perguntar, o mês entra na frente e é o padrão
+JANELAS_DA_PERGUNTA = ESCOPOS
 
 
 def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> None:
@@ -306,24 +308,41 @@ def _leitura_do_ano(engine, competencia: str, usuario: dict, ligada: bool) -> No
 
 def _perguntar(engine, competencia: str, usuario: dict, ligada: bool) -> None:
     st.caption(
-        "Pergunta livre sobre este mês. A resposta sai só dos números apurados — "
+        "Pergunta livre. A resposta sai só dos números apurados da janela escolhida — "
         "quando a resposta não estiver neles, ela diz o que falta classificar."
     )
+    # a mesma pergunta tem respostas diferentes em cada janela ("quanto gastamos
+    # de saúde" no mês, no ano e em doze meses são três números), e é o dono quem
+    # sabe qual quer. Antes só havia o mês, e para perguntar do ano não havia como
+    rotulo_janela = st.radio(
+        "Sobre o quê", [f"O mês de {competencia}", *JANELAS_DA_PERGUNTA],
+        horizontal=True, key="ia_janela_pergunta", disabled=not ligada,
+    )
+    escopo = JANELAS_DA_PERGUNTA.get(rotulo_janela)
     pergunta = st.text_input(
         "Sua pergunta", placeholder="Por que este mês ficou mais caro que a média?",
         key="ia_pergunta", disabled=not ligada,
     )
     if st.button("Perguntar", key="ia_perguntar", disabled=not ligada) and pergunta.strip():
-        contexto = dados.contexto_do_mes(engine, dados.versao(), competencia)
+        if escopo is None:
+            contexto = dados.contexto_do_mes(engine, dados.versao(), competencia)
+            sobre = f"o mês de {competencia}"
+        else:
+            contexto = dados.contexto_longo(engine, dados.versao(), competencia, escopo)
+            sobre = ("o ano civil até " + competencia if escopo == "ano"
+                     else f"os últimos doze meses até {competencia}")
         with st.spinner("Consultando os números…"):
-            resposta = ai.responder_pergunta(contexto, pergunta)
+            resposta = ai.responder_pergunta(contexto, pergunta, rotulo=sobre)
         if _falhou(resposta):
             _mostrar_falha(resposta)
         else:
             repo.salvar_analise(
                 engine, competencia=competencia, texto=resposta, modelo=ai.MODELO_ANALISE,
                 contexto=contexto, usuario=usuario.get("nome", "—"),
-                pergunta=pergunta.strip(),
+                # a janela entra na pergunta gravada: sem isso, a lista de
+                # perguntas anteriores mistura três perguntas iguais com
+                # respostas diferentes e nada explica a diferença
+                pergunta=f"[{sobre}] {pergunta.strip()}",
             )
             _mostrar_analise(resposta, "pergunta")
 

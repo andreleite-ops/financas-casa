@@ -223,6 +223,41 @@ def falhou(texto: str) -> bool:
     return not texto.strip() or texto.lstrip().startswith(MARCA_DE_FALHA)
 
 
+def _chamar(parametros: dict):
+    """A chamada em streaming, com os desvios de SDK que já apareceram.
+
+    Streaming não é detalhe de desempenho aqui: o SDK recusa de saída uma
+    chamada sem streaming que possa demorar mais de dez minutos, e a leitura
+    longa pede espaço grande de resposta. Foi exatamente essa recusa que
+    apareceu na tela como "Streaming is required for operations that may take
+    longer than 10 minutes" — a análise nunca chegou a ser pedida.
+
+    Dois desvios: SDK sem `messages.stream` (cai no `create` de sempre) e SDK
+    que não conhece `output_config` (a chamada vale sem ele).
+    """
+    cliente = _cliente()
+    fluxo = getattr(cliente.messages, "stream", None)
+    if fluxo is None:
+        try:
+            return cliente.messages.create(**parametros)
+        except TypeError:
+            return cliente.messages.create(
+                **{k: v for k, v in parametros.items() if k != "output_config"}
+            )
+    try:
+        with fluxo(**parametros) as corrente:
+            return corrente.get_final_message()
+    except Exception:
+        # o SDK antigo pode recusar `output_config` de dois jeitos: erro de
+        # argumento aqui, ou 400 vindo da API. Uma segunda tentativa sem ele
+        # separa "esta versão não conhece o campo" de "a chamada falhou mesmo"
+        if "output_config" not in parametros:
+            raise
+        sem_config = {k: v for k, v in parametros.items() if k != "output_config"}
+        with fluxo(**sem_config) as corrente:
+            return corrente.get_final_message()
+
+
 def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000,
                esforco: str = "medium") -> str:
     """Uma pergunta, uma resposta — com espaço de sobra para o raciocínio.
@@ -230,9 +265,9 @@ def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000,
     `max_tokens` limita o raciocínio **e** o texto final, somados. Os modelos
     atuais pensam antes de responder, e com 1.600 o pensamento consumia a cota
     inteira: a chamada voltava sem erro nenhum e sem texto nenhum, e a tela
-    ficava em branco sem nada explicando o porquê. Aqui a folga é grande e o
-    esforço é médio — a análise lê números já apurados, não precisa do
-    raciocínio mais caro.
+    ficava em branco sem nada explicando o porquê. Aqui a folga é grande, e a
+    resposta vem em streaming: com espaço grande, o SDK recusa a chamada que
+    não é em streaming.
     """
     parametros = dict(
         model=modelo,
@@ -241,12 +276,7 @@ def _perguntar(prompt: str, modelo: str, max_tokens: int = 16000,
         messages=[{"role": "user", "content": prompt}],
     )
     try:
-        try:
-            resposta = _cliente().messages.create(**parametros)
-        except TypeError:
-            # SDK mais antigo não conhece output_config; a chamada vale sem ele
-            parametros.pop("output_config", None)
-            resposta = _cliente().messages.create(**parametros)
+        resposta = _chamar(parametros)
     except Exception as exc:
         # o nome da exceção sozinho não permite diagnóstico nenhum: "chave
         # inválida", "modelo inexistente" e "sem crédito" chegavam todos como
@@ -427,22 +457,28 @@ def analisar_ano(contexto: str, modelo: str = MODELO_ANALISE, rotulo: str = "o p
     return _perguntar(prompt, modelo, max_tokens=32000, esforco="high")
 
 
-def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE) -> str:
-    """Pergunta livre sobre o mês, respondida só com os números do contexto.
+def responder_pergunta(contexto: str, pergunta: str, modelo: str = MODELO_ANALISE,
+                       rotulo: str = "este mês") -> str:
+    """Pergunta livre sobre o período, respondida só com os números do contexto.
 
-    Vale mais que a análise pronta quando a dúvida é específica ("por que agosto
-    ficou tão caro?"). A trava é a mesma: o que não está nos números não pode
-    ser respondido, e dizer "isto não está nos dados" é uma resposta melhor do
-    que uma frase plausível.
+    Vale mais que a análise pronta quando a dúvida é específica ("por que
+    agosto ficou tão caro?", "quanto a casa gasta de fixo por ano?"). A janela
+    é escolhida na tela: mês, ano civil ou últimos doze meses — a mesma
+    pergunta tem respostas diferentes em cada uma, e é o dono quem sabe qual
+    quer. A trava é a mesma: o que não está nos números não pode ser
+    respondido, e dizer "isto não está nos dados" é uma resposta melhor do que
+    uma frase plausível.
     """
     if not disponivel():
         return SEM_CHAVE
     prompt = (
-        "Responda à pergunta do casal sobre as contas da casa, em no máximo 3 "
-        "parágrafos curtos, usando apenas os números abaixo. Se a resposta não "
-        "estiver neles, diga exatamente o que falta classificar ou importar para "
-        "que ela possa ser respondida.\n\n"
+        f"Responda à pergunta do casal sobre as contas da casa, olhando {rotulo}, "
+        "usando apenas os números abaixo. Vá direto ao ponto: comece pela resposta, "
+        "com o número que a sustenta, e só depois explique. Se a pergunta pedir uma "
+        "conta que dá para fazer com os números fornecidos, faça e mostre as parcelas. "
+        "Se a resposta não estiver neles, diga exatamente o que falta classificar ou "
+        "importar para que ela possa ser respondida — e não invente nada no lugar.\n\n"
         f"{REGRAS}\n\n"
         f"PERGUNTA: {pergunta.strip()}\n\n{contexto}"
     )
-    return _perguntar(prompt, modelo, max_tokens=8000)
+    return _perguntar(prompt, modelo, max_tokens=12000)

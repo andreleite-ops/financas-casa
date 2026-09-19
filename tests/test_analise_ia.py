@@ -869,3 +869,69 @@ def test_o_numero_sai_maior_no_texto_da_analise():
     assert "<span class='num'>+166%</span>" in saida
     # texto sem número nenhum passa intacto
     assert _destacar("nada aqui") == "nada aqui"
+
+
+# ---------------------------------------------------------------------------
+# a chamada: streaming, porque resposta longa sem ele o SDK recusa
+# ---------------------------------------------------------------------------
+class _ClienteComStream:
+    """Como o SDK de verdade: tem `messages.stream` e recusa o `create` longo."""
+
+    def __init__(self, texto: str):
+        self.texto = texto
+        self.chamadas: list[dict] = []
+        self.messages = self
+
+    def create(self, **kwargs):
+        raise ValueError(
+            "Streaming is required for operations that may take longer than 10 minutes"
+        )
+
+    def stream(self, **kwargs):
+        self.chamadas.append(kwargs)
+        texto = self.texto
+
+        class _Fluxo:
+            def __enter__(self_interno):
+                return self_interno
+
+            def __exit__(self_interno, *erro):
+                return False
+
+            def get_final_message(self_interno):
+                return _Resposta(content=[_Bloco(text=texto)])
+
+        return _Fluxo()
+
+
+def test_a_analise_longa_vai_em_streaming(monkeypatch):
+    """Sem streaming o SDK recusa de saída a chamada que pode passar de dez
+    minutos, e a análise nunca chegava a ser pedida."""
+    cliente = _ClienteComStream("### O retrato\nGastou R$ 10,00.")
+    monkeypatch.setattr(ai, "disponivel", lambda: True)
+    monkeypatch.setattr(ai, "_cliente", lambda: cliente)
+
+    texto = ai.analisar_ano("números", rotulo="ano civil")
+
+    assert not ai.falhou(texto)
+    assert cliente.chamadas, "foi pelo caminho do streaming"
+    assert cliente.chamadas[0]["max_tokens"] == 32000
+
+
+def test_sdk_sem_streaming_continua_funcionando(monkeypatch):
+    """Cliente antigo, sem `messages.stream`, continua pelo `create`."""
+    cliente = _ligar_ia(monkeypatch, "texto da análise")
+
+    assert not ai.falhou(ai.analisar_mes("números"))
+    assert cliente.prompts
+
+
+def test_a_pergunta_livre_aceita_a_janela_que_o_dono_escolher(monkeypatch):
+    """A mesma pergunta tem respostas diferentes no mês, no ano e em doze
+    meses: quem escolhe é o dono."""
+    cliente = _ligar_ia(monkeypatch, "resposta")
+
+    ai.responder_pergunta("números do ano", "quanto é fixo?", rotulo="o ano civil até 2026-09")
+
+    assert "olhando o ano civil até 2026-09" in cliente.prompts[0]
+    assert "quanto é fixo?" in cliente.prompts[0]
