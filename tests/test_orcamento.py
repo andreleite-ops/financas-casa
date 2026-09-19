@@ -231,3 +231,18 @@ def test_a_renda_considerada_fica_salva(engine):
     with engine.connect() as conn:
         assert repo.renda_base_gravada(conn, 2026) == 8_000_000
         assert repo.renda_base_gravada(conn, 2025) is None
+
+
+def test_a_tela_abre_no_ultimo_mes_que_ja_aconteceu():
+    """A lista do banco vem do mais recente para o mais antigo. Pegar "o
+    último que já aconteceu" dela abria a tela em janeiro — e, com a janela do
+    ano, o período inteiro valia um mês só."""
+    from views.orcamento import _meses_do_ano
+
+    do_banco = ["2026-08", "2026-07", "2026-06", "2026-05", "2026-04",
+                "2026-03", "2026-02", "2026-01"]
+    meses, inicial = _meses_do_ano(do_banco, 2026)
+
+    assert meses == sorted(do_banco), "em ordem, para o período somar tudo"
+    assert inicial == "2026-08"
+    assert _meses_do_ano([], 2026) == (["2026-01"], "2026-01")

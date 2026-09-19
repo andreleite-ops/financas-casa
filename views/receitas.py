@@ -110,7 +110,7 @@ def render(engine, usuario: dict) -> None:
     anos = sorted({int(c[:4]) for c in competencias}, reverse=True)
     c1, c2, _ = st.columns([1, 1.4, 2.2])
     ano = c1.selectbox("Ano", anos)
-    do_ano = [c for c in competencias if c.startswith(str(ano))]
+    do_ano = sorted(c for c in competencias if c.startswith(str(ano)))
     escopo = c2.radio("Ver", [f"Ano {ano} inteiro", "Um mês"], horizontal=True)
 
     if escopo == "Um mês":

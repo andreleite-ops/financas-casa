@@ -13,6 +13,23 @@ from ui.tema import ACENTO, CRITICO
 
 
 JANELAS = {"Mês": "mes", "Ano civil": "ano", "Últimos 12 meses": "12m"}
+
+
+def _meses_do_ano(competencias, ano: int) -> tuple[list[str], str]:
+    """Os meses do ano em ordem, e em qual a tela abre.
+
+    Abre no mês em curso, ou no último que já aconteceu — nunca no mais
+    recente da base, porque a planilha traz previsão até dezembro e
+    "realizado em dezembro" seria previsão apresentada como gasto.
+
+    A ordem crescente não é estética: a lista do banco vem do mais recente
+    para o mais antigo, e pegar "o último que já aconteceu" dela abria a tela
+    em janeiro. Com a janela do ano, o período inteiro valia um mês só.
+    """
+    do_ano = sorted(c for c in competencias if c.startswith(str(ano))) or [f"{ano}-01"]
+    hoje = date.today().strftime("%Y-%m")
+    ja_aconteceram = [c for c in do_ano if c <= hoje]
+    return do_ano, (ja_aconteceram[-1] if ja_aconteceram else do_ano[-1])
 # metade do gasto do período num mês só: a média mensal daquela categoria não
 # descreve mês nenhum, e dizer isso vale mais do que a média
 CONCENTRADO = 50
@@ -83,13 +100,7 @@ def render(engine, usuario: dict) -> None:
 
     c1, c2, c3 = st.columns([1, 1.2, 1.6])
     ano = c1.selectbox("Ano", anos)
-    do_ano = [c for c in competencias if c.startswith(str(ano))] or [f"{ano}-01"]
-    # abre no mes em curso (ou no ultimo que ja aconteceu), nao no mes mais
-    # recente da base — a planilha traz previsao ate dezembro, e "realizado
-    # em dezembro" era previsao apresentada como gasto
-    hoje = date.today().strftime("%Y-%m")
-    ja_aconteceram = [c for c in do_ano if c <= hoje]
-    inicial = ja_aconteceram[-1] if ja_aconteceram else do_ano[-1]
+    do_ano, inicial = _meses_do_ano(competencias, ano)
     competencia = c2.selectbox("Mês de referência", do_ano, index=do_ano.index(inicial))
 
     # metas e média do ano, guardadas até alguém gravar: eram sete idas ao
