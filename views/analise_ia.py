@@ -25,24 +25,30 @@ PEDIDO = "ia_pedido"
 # saltar de bloco em bloco
 PASSO_DO_FLUXO = 120
 
-# "R$ 1.234,56", "-R$ 80,00", "12%", "3,5%": o que numa análise é número e
-# precisa saltar do texto. O cifrão é escapado no mesmo passo — o Streamlit lê
-# um par deles como fórmula LaTeX e come a frase do meio.
-_NUMERO = re.compile(r"-?R\$ ?-?[\d.]+,\d{2}|(?<![\w,.])[+-]?\d{1,3}(?:[.,]\d+)?%")
+# o que numa análise é número e precisa saltar do texto: "R$ 1.234,56",
+# "-R$ 80,00", "R$ 13.200" (sem centavos, como o modelo às vezes escreve),
+# "12%", "+3,5%". O cifrão já vem escapado quando esta expressão roda.
+_NUMERO = re.compile(
+    r"[+-]?R\\\$ ?-?\d[\d.]*(?:,\d{1,2})?|(?<![\w,.])[+-]?\d{1,3}(?:[.,]\d+)?%"
+)
 
 
 def _destacar(texto: str) -> str:
     """Envolve cada número do texto num span, para a folha de estilo aumentá-lo.
+
+    Antes disso, escapa TODO cifrão. O Streamlit lê um par de cifrões como
+    fórmula LaTeX: bastou o modelo escrever "R$ 13.200" sem centavos — que a
+    expressão de então não reconhecia, e por isso não escapava — para o trecho
+    entre aquele cifrão e o seguinte virar matemática, sumir com o "$" e expor
+    o `<span>` como texto cru no meio da frase.
 
     HTML em linha atravessa o markdown do Streamlit sem atrapalhar o resto: os
     títulos, as listas e as tabelas continuam sendo markdown. É por isso que o
     destaque é feito assim, e não embrulhando o texto inteiro numa div — uma
     div é bloco, e dentro de bloco o markdown deixa de ser interpretado.
     """
-    return _NUMERO.sub(
-        lambda achado: f"<span class='num'>{achado.group().replace('$', chr(92) + '$')}</span>",
-        texto,
-    )
+    escapado = texto.replace(chr(92) + "$", "$").replace("$", chr(92) + "$")
+    return _NUMERO.sub(lambda achado: f"<span class='num'>{achado.group()}</span>", escapado)
 
 
 def _em_fluxo_na_tela(pedacos, chave: str) -> str:

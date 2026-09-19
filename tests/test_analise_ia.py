@@ -871,6 +871,23 @@ def test_o_numero_sai_maior_no_texto_da_analise():
     assert _destacar("nada aqui") == "nada aqui"
 
 
+def test_todo_cifrao_e_escapado_mesmo_sem_centavos():
+    """O Streamlit lê um par de cifrões como fórmula. Bastou o modelo escrever
+    "R$ 13.200" sem centavos para o trecho até o cifrão seguinte virar
+    matemática e o `<span>` aparecer como texto cru no meio da frase."""
+    from views.analise_ia import _destacar
+
+    saida = _destacar(
+        "**Teto para Lazer em R$ 13.200** — libera R$ 8.483,96/mês, R$ 101.807,52/ano."
+    )
+
+    assert "$" not in saida.replace("\\$", ""), "nenhum cifrão solto sobra"
+    assert saida.count("<span class='num'>") == 3, "o sem centavos também é número"
+    assert saida.startswith("**Teto para Lazer em <span"), "o negrito continua markdown"
+    # escapar duas vezes seria pior que não escapar: "\\\\$" vira barra na tela
+    assert _destacar(_destacar("R$ 10,00")).count("\\") == 1
+
+
 # ---------------------------------------------------------------------------
 # a chamada: streaming, porque resposta longa sem ele o SDK recusa
 # ---------------------------------------------------------------------------
