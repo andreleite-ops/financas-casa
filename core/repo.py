@@ -402,28 +402,6 @@ def importar(
             competencia_da_linha = (
                 lan.competencia or (competencia or lan.data.strftime("%Y-%m"))
             )
-            decisao = indice.avaliar(
-                conta_id=conta_id,
-                dia=lan.data,
-                competencia=competencia_da_linha,
-                valor_centavos=lan.valor_centavos,
-                descricao=lan.descricao,
-                descricao_norm=descricao_norm,
-                origem=lan.origem or origem,
-                upload_id=upload_id,
-                # o dono ainda nao foi decidido aqui; o que a origem declara ja
-                # basta para desempatar entre duas receitas previstas no mes
-                pessoa=lan.pessoa_hint or pessoa_padrao,
-                # Num cartao nao existe receita, entao nada que venha dele pode
-                # "realizar" uma receita prevista a mao. Sem esta porta, uma
-                # fatura lida com o sinal trocado aposentava a previsao do mes:
-                # a compra de R$ 19.000 casava por mes e por ordem de grandeza
-                # com o pro-labore previsto e o desligava — e o salario de
-                # verdade, chegando depois, ja nao encontrava com quem parear.
-                pode_realizar_previsao=conta["tipo"] != "cartao",
-            )
-            if decisao.existente_id:
-                indice.marcar_usado(decisao.existente_id)
 
             # Num cartão de crédito não existe receita: o que entra é compra, e
             # o crédito que aparece é estorno ou o pagamento da própria fatura.
@@ -514,6 +492,33 @@ def importar(
                     categoria_id, subcategoria_id = transferencia_id, pagamento_fatura_id
                     status, confianca = "auto_regra", 0.95
                     achado.explicacao = motivo
+
+            # O confronto com o que ja existe vem DEPOIS de saber o que a linha
+            # e, porque uma das respostas depende disso: so renda realiza uma
+            # receita prevista. Num cartao nao existe receita (uma fatura lida
+            # com o sinal trocado aposentava o pro-labore previsto), e dinheiro
+            # da propria casa — a TED da Ro para ela mesma, o resgate — nao e
+            # renda: casava por mes e ordem de grandeza com a receita prevista,
+            # herdava a categoria dela e entrava como renda, a mao, blindado
+            # de toda varredura.
+            decisao = indice.avaliar(
+                conta_id=conta_id,
+                dia=lan.data,
+                competencia=competencia_da_linha,
+                valor_centavos=lan.valor_centavos,
+                descricao=lan.descricao,
+                descricao_norm=descricao_norm,
+                origem=lan.origem or origem,
+                upload_id=upload_id,
+                # o dono ainda nao foi decidido aqui; o que a origem declara ja
+                # basta para desempatar entre duas receitas previstas no mes
+                pessoa=lan.pessoa_hint or pessoa_padrao,
+                pode_realizar_previsao=(conta["tipo"] != "cartao"
+                                        and (transferencia_id is None
+                                             or categoria_id != transferencia_id)),
+            )
+            if decisao.existente_id:
+                indice.marcar_usado(decisao.existente_id)
 
             # quem diz de quem é o gasto, em ordem: a coluna de pessoa do
             # arquivo, a regra, a própria descrição ("ALMOÇO ANDRÉ") e a
@@ -1232,7 +1237,7 @@ def _gravar_config(conn, chave: str, valor: str) -> None:
 # varreduras quando esta versao ou o conjunto de uploads mudou: a cadeia e
 # idempotente, mas custava uma centena de idas ao banco a cada start, e cada
 # publicacao e um start
-VERSAO_DAS_VARREDURAS = "2026-09-18.1"
+VERSAO_DAS_VARREDURAS = "2026-09-19.1"
 _CHAVE_VARREDURAS = "varreduras"
 
 
@@ -1289,12 +1294,6 @@ _PREFIXO_CONTRAPARTE = re.compile(
     r"\b(?:REMET|REM|DEST|DES|PIX TRANSF|TED TRANSF|TED)\b\s*"
 )
 _NOMES_DA_CASA = {"ANDRE": "André", "RO": "Rô", "ROSANA": "Rô"}
-# a outra ponta e uma instituicao financeira: o dinheiro e do proprio dono,
-# voltando de uma aplicacao — resgate, nao renda
-_INSTITUICAO = re.compile(
-    r"\b(BANCO|BCO|INVESTIMENTOS?|CORRETORA|DTVM|CCTVM|PACTUAL|ASSET|TESOURO|"
-    r"NU PAGAMENTOS|INTER S ?A|XP|BTG)\b"
-)
 
 
 def _contraparte(descricao: str) -> list[str]:
@@ -1343,20 +1342,6 @@ def contraparte_da_casa(descricao: str) -> str | None:
     return _NOMES_DA_CASA.get(palavras[0])
 
 
-def resgate_de_investimento(descricao: str, valor_centavos: int) -> bool:
-    """Credito cuja outra ponta e uma instituicao financeira: resgate, nao renda.
-
-    "PIX RECEBIDO REM: BANCO INTER SA" e o dinheiro do proprio dono voltando de
-    uma aplicacao. O salario vem de uma empresa ("TAG PARTNERS LTDA."), o
-    paciente vem com nome de gente; o banco como remetente e o proprio dono.
-    Entrava como pro-labore — R$ 11.944,57 de resgate virando renda de agosto.
-    """
-    if valor_centavos <= 0:
-        return False
-    palavras = _contraparte(descricao)
-    return bool(palavras) and bool(_INSTITUICAO.search(" ".join(palavras)))
-
-
 _RESGATE_NO_TEXTO = re.compile(r"\b(RESGATE|RES APLIC|RESG APLIC)\b")
 # resgate DE QUE: so de aplicacao. Resgate de pontos, de seguro, do FGTS e
 # dinheiro novo, e o texto tem de dizer que era aplicacao
@@ -1387,18 +1372,28 @@ def aplicacao_resgatada(descricao: str, valor_centavos: int) -> bool:
 
 
 def _nao_foi_a_mao():
-    """Filtro SQL: fora o que alguem classificou na tela ou ensinou por regra."""
+    """Filtro SQL: fora o que alguem classificou na tela ou ensinou por regra.
+
+    A linha que "realizou" uma receita prevista herdou dela o status manual,
+    mas ninguem a olhou: o pareamento foi da maquina. Essa a varredura pode
+    rever — e a TED da Ro para ela mesma, que casou com a receita prevista
+    dela e entrou como renda.
+    """
     return sa.or_(db.transacoes.c.status.is_(None),
-                  db.transacoes.c.status.not_in(("manual", "auto_memoria")))
+                  db.transacoes.c.status.not_in(("manual", "auto_memoria")),
+                  db.transacoes.c.observacao.like(dedup.MARCA_REALIZA_PREVISAO + "%"))
 
 
 def _transferencia_propria(descricao: str, valor_centavos: int) -> tuple[str, str] | None:
-    """(subcategoria, motivo) quando o lancamento e dinheiro da propria casa."""
+    """(subcategoria, motivo) quando o lancamento e dinheiro da propria casa.
+
+    O banco como remetente ("PIX RECEBIDO REM: BANCO INTER SA") nao prova
+    nada: e por ele que chega tanto o resgate quanto o aluguel de um imovel.
+    Essa linha fica para o dono classificar; a memoria aprende da primeira.
+    """
     pessoa = contraparte_da_casa(descricao)
     if pessoa:
         return "Entre Contas Próprias", f"transferência entre contas da casa ({pessoa})"
-    if resgate_de_investimento(descricao, valor_centavos):
-        return "Aplicação / Resgate", "resgate de aplicação: a outra ponta é uma instituição financeira"
     if aplicacao_resgatada(descricao, valor_centavos):
         return "Aplicação / Resgate", "resgate de aplicação: é o principal voltando, não renda"
     return None
@@ -1521,9 +1516,10 @@ def _aposentar_previsoes_do_mes_fechado(conn, *, conta: dict, upload_id: int | N
     return total
 
 
-# v4: a parcela conta no ciclo da fatura que a cobra, em qualquer cartao; a
-# marca nova faz a passagem rodar de novo sobre o que ja esta gravado
-CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v5"
+# v6: o ciclo da fatura termina no mes dela ou no anterior e e a janela com
+# mais compras; data posterior ao mes da fatura e do ano passado. A marca nova
+# faz a passagem rodar de novo sobre o que ja esta gravado
+CARTAO_PELA_COMPRA = "cartao_pela_compra_2026_09_v6"
 
 
 def contar_cartao_pela_compra(engine) -> dict:
@@ -1532,9 +1528,11 @@ def contar_cartao_pela_compra(engine) -> dict:
     Ate aqui toda linha da fatura levava o mes do menu — o da fatura. A casa
     conta pela data da compra, e a planilha de julho ja tinha, item a item,
     as compras de 17 a 31 de julho que a fatura de agosto trouxe. Cada linha
-    vai para o mes da propria data (com a folga de `competencia_da_compra`),
-    e em cada mes fechado que recebeu compras a planilha e conferida pelo
-    valor, como o botao da critica faria. Roda uma vez; a marca fica em config.
+    vai para o mes que `competencia_da_compra` da; a compra que estava fora
+    de conta num mes da planilha e voltou para um mes de extrato volta a
+    contar; e em cada mes fechado que recebeu compras a planilha e conferida
+    pelo valor, como o botao da critica faria. Roda uma vez; a marca fica em
+    config.
     """
     from . import reconcile
 
@@ -1543,6 +1541,8 @@ def contar_cartao_pela_compra(engine) -> dict:
             return {"movidas": 0, "conferidas": 0}
         movidas, meses = _recompetenciar_cartao(conn)
         _gravar_config(conn, CARTAO_PELA_COMPRA, "1")
+    if movidas:
+        aplicar_meses_da_planilha(engine)
     em_curso = date.today().strftime("%Y-%m")
     conferidas = 0
     for mes in sorted(m for m in meses if m < em_curso):
@@ -1585,12 +1585,12 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
     Devolve (quantas mudaram, meses que receberam linha). Com `upload_id`,
     so as linhas daquele arquivo.
     """
-    from parsers.base import DURACAO_MAXIMA_DO_CICLO, competencia_da_compra
+    from parsers.base import ano_da_compra, ciclo_da_fatura, competencia_da_compra
 
     consulta = (
         sa.select(db.transacoes.c.id, db.transacoes.c.data, db.transacoes.c.competencia,
-                  db.transacoes.c.descricao, db.transacoes.c.valor_centavos,
-                  db.transacoes.c.upload_id,
+                  db.transacoes.c.descricao_norm, db.transacoes.c.valor_centavos,
+                  db.transacoes.c.conta_id, db.transacoes.c.upload_id,
                   db.uploads.c.competencia.label("mes_da_fatura"))
         .select_from(
             db.transacoes
@@ -1602,22 +1602,38 @@ def _recompetenciar_cartao(conn, upload_id: int | None = None) -> tuple[int, set
     if upload_id is not None:
         consulta = consulta.where(db.transacoes.c.upload_id == upload_id)
     linhas = conn.execute(consulta).all()
-    # o ciclo de cada fatura sai das linhas dela: a janela de um mes que
-    # termina na ultima compra (a mesma regra de parsers.base.inicio_do_ciclo)
+    # a mesma regra do leitor, sobre o que ja esta gravado: primeiro o ano
+    # das datas (a parcela de outubro do ano passado que tinha ficado em
+    # outubro deste), depois o ciclo de cada fatura, tirado das linhas dela
+    datas_certas: dict[int, date] = {}
+    fatura_por_upload: dict[int | None, str] = {}
     datas_por_upload: dict[int | None, list[date]] = {}
     for linha in linhas:
+        fatura = linha.mes_da_fatura or linha.competencia
+        fatura_por_upload.setdefault(linha.upload_id, fatura)
+        dia = ano_da_compra(linha.data, fatura)
+        if dia != linha.data:
+            datas_certas[linha.id] = dia
         if linha.valor_centavos < 0:
-            datas_por_upload.setdefault(linha.upload_id, []).append(linha.data)
-    inicio_por_upload: dict[int | None, date] = {}
-    for chave, datas in datas_por_upload.items():
-        ultimo = max(datas)
-        inicio_por_upload[chave] = min(d for d in datas if d >= ultimo - DURACAO_MAXIMA_DO_CICLO)
+            datas_por_upload.setdefault(linha.upload_id, []).append(dia)
+    ciclo_por_upload = {
+        chave: ciclo_da_fatura(datas, fatura_por_upload[chave])
+        for chave, datas in datas_por_upload.items()
+    }
+    for linha in linhas:
+        if linha.id in datas_certas:
+            dia = datas_certas[linha.id]
+            conn.execute(
+                sa.update(db.transacoes).where(db.transacoes.c.id == linha.id)
+                .values(data=dia, hash_dedup=dedup.hash_lancamento(
+                    linha.conta_id, dia, linha.valor_centavos, linha.descricao_norm or ""))
+            )
     por_mes: dict[str, list[int]] = {}
     for linha in linhas:
-        fatura = linha.mes_da_fatura or linha.competencia
+        fatura = fatura_por_upload[linha.upload_id]
         nova = competencia_da_compra(
-            linha.data, fatura, linha.descricao or "",
-            inicio_do_ciclo=inicio_por_upload.get(linha.upload_id),
+            datas_certas.get(linha.id, linha.data), fatura,
+            ciclo=ciclo_por_upload.get(linha.upload_id),
         )
         if nova != linha.competencia:
             por_mes.setdefault(nova, []).append(linha.id)

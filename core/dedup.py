@@ -17,6 +17,8 @@ from . import db
 from .texto import chave_estabelecimento
 
 JANELA_PROVAVEL = timedelta(days=3)
+# comeco da observacao da linha do extrato que realizou uma receita prevista
+MARCA_REALIZA_PREVISAO = "realiza a receita de "
 
 # Quanto o valor real pode divergir da receita prevista a mao e ainda ser o
 # mesmo dinheiro. Previsao e digitada redonda ou com o valor do mes passado; o
@@ -336,7 +338,7 @@ class Indice:
             if previsao is not None:
                 return Decisao(
                     "realiza_previsao", previsao["id"],
-                    f"realiza a receita de {previsao['data']:%m/%Y} lançada à mão"
+                    f"{MARCA_REALIZA_PREVISAO}{previsao['data']:%m/%Y} lançada à mão"
                     + (f" ({previsao['descricao'][:30]})" if previsao.get("descricao") else ""),
                 )
 

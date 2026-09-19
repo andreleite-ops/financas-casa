@@ -128,9 +128,9 @@ def _aba_enviar(engine, usuario: dict) -> None:
             # existem para a fatura de cartão, e não são o caso comum
             index=MESES_A_FRENTE,
             help="O mês em que a fatura vence. Cada compra conta no mês da própria data "
-                 "(a compra de julho é de julho, mesmo na fatura de agosto); o mês da "
-                 "fatura completa o ano das datas e diz ao mapa qual fatura entrou. "
-                 "Dá para digitar o mês (“2027-03”) em vez de rolar.",
+                 "(a compra de julho é de julho, mesmo na fatura de agosto) e a parcela "
+                 "no ciclo da fatura; nenhuma compra é posterior a este mês, e ele diz "
+                 "ao mapa qual fatura entrou. Dá para digitar o mês (“2027-03”) em vez de rolar.",
         )
     # só serve para completar data sem ano, o caso da fatura de cartão
     ano_referencia = int(competencia[:4]) if competencia else date.today().year
@@ -1254,8 +1254,8 @@ def _aba_historico(engine) -> None:
                        if escolha["competencia"] in _competencias_sugeridas() else MESES_A_FRENTE),
                 key=f"mes_fatura_{escolha['id']}",
                 help="O mês em que a fatura vence. Cada compra conta na data dela, e a "
-                     "parcela no ciclo da fatura; este mês só decide o ano das datas e o "
-                     "mapa de uploads. Raramente muda alguma linha de mês.",
+                     "parcela no ciclo da fatura (o mês anterior a este, quando o arquivo "
+                     "só traz parcelas). Nenhuma compra é posterior a este mês.",
             )
             if m2.button("Corrigir o mês da fatura", width="stretch",
                          key=f"btn_mes_fatura_{escolha['id']}"):

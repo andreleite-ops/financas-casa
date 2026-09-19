@@ -439,17 +439,20 @@ def test_parcela_antiga_na_fatura_de_janeiro_nao_vai_para_o_futuro():
     assert [l.data.month for l in lancamentos] == [11, 12, 1]
 
 
-def test_compra_depois_do_fechamento_continua_no_mes_seguinte():
-    """Um mês de folga tem de ficar de pé: é a compra feita depois do
-    fechamento, que cai na fatura seguinte."""
+def test_data_posterior_ao_mes_da_fatura_e_do_ano_passado():
+    """Nenhuma compra de uma fatura vem depois do mês em que ela vence. A
+    linha "02/06" na fatura de maio é a parcela de uma compra de junho do ano
+    passado — e conta no ciclo desta fatura, não em junho que ainda vem."""
     from datetime import date as _date
 
     from parsers.base import Lancamento, ajustar_ano_fatura
 
     lancamentos = ajustar_ano_fatura(
-        [Lancamento(_date(2026, 6, 2), "COMPRA APOS FECHAMENTO", -10_000)], "2026-05"
+        [Lancamento(_date(2026, 6, 2), "PARCELA ANTIGA", -10_000),
+         Lancamento(_date(2026, 5, 3), "COMPRA DO MES", -5_000)], "2026-05"
     )
-    assert lancamentos[0].data == _date(2026, 6, 2)
+    assert lancamentos[0].data == _date(2025, 6, 2)
+    assert [l.competencia for l in lancamentos] == ["2026-05", "2026-05"]
 
 
 def test_nome_parecido_de_terceiro_nao_vira_dono_do_gasto():

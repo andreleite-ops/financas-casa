@@ -46,6 +46,7 @@ def _linha(engine, descricao):
             sa.select(db.transacoes.c.ativo, db.transacoes.c.categoria_id,
                       db.transacoes.c.status, db.transacoes.c.substituido_por,
                       db.transacoes.c.observacao, db.transacoes.c.pessoa,
+                      db.transacoes.c.data, db.transacoes.c.competencia,
                       db.categorias.c.nome.label("categoria"))
             .select_from(db.transacoes.outerjoin(
                 db.categorias, db.transacoes.c.categoria_id == db.categorias.c.id))
@@ -298,7 +299,7 @@ def test_raio_x_abre_o_mes_por_origem_conta_e_lado(engine):
              competencia="2026-08"),
     ], origem="planilha", competencia="2026-08")
     _importar(engine, corrente, [
-        dict(data=date(2026, 8, 7), descricao="PIX RECEBIDO REM: BANCO INTER SA",
+        dict(data=date(2026, 8, 7), descricao="TED-TRANSF ELET DISPON REMET.ANDRE LUIZ",
              valor_centavos=1_194_457),
         dict(data=date(2026, 8, 8), descricao="ZZZ SAIDA SEM REGRA", valor_centavos=-30_000),
     ])
@@ -457,8 +458,9 @@ def test_compra_do_cartao_conta_no_mes_da_compra():
     assert competencia_da_compra(date(2026, 7, 17), "2026-08") == "2026-07"
     assert competencia_da_compra(date(2026, 8, 2), "2026-08") == "2026-08"
     assert competencia_da_compra(date(2026, 8, 23), "2026-09") == "2026-08"
-    # parcela com data de meses atras nao volta para o passado: vale a fatura
-    assert competencia_da_compra(date(2026, 2, 10), "2026-08") == "2026-08"
+    # parcela com data de meses atras nao volta para o passado: sem ciclo
+    # conhecido, vale o comeco do ciclo presumido — o mes anterior ao da fatura
+    assert competencia_da_compra(date(2026, 2, 10), "2026-08") == "2026-07"
     lancamentos = ajustar_ano_fatura(
         [Lancamento(date(2026, 7, 17), "PCART TAB", -335_165),
          Lancamento(date(2026, 8, 5), "POSTO", -20_000)], "2026-08")
@@ -518,7 +520,10 @@ def test_parcela_conta_no_ciclo_da_fatura_em_qualquer_cartao():
     sai do proprio arquivo (a primeira compra a vista). Parcela datada dentro
     do ciclo (Nubank) conta pela data; datada de antes (XP imprime a compra
     original) conta no mes em que o ciclo comeca."""
-    from parsers.base import ajustar_ano_fatura, competencia_da_compra, inicio_do_ciclo
+    from parsers.base import ajustar_ano_fatura, ciclo_da_fatura, competencia_da_compra
+
+    def _datas(lancamentos):
+        return [l.data for l in lancamentos if l.valor_centavos < 0]
 
     nubank = ajustar_ano_fatura([
         Lancamento(date(2026, 8, 14), "Drogaria Sao Paulo - Parcela 6/6", -90_883),
@@ -526,7 +531,7 @@ def test_parcela_conta_no_ciclo_da_fatura_em_qualquer_cartao():
         Lancamento(date(2026, 9, 13), "Deco Skin - Parcela 1/2", -8_495),
         Lancamento(date(2026, 9, 12), "Pagamento recebido", 83_148),
     ], "2026-09")
-    assert inicio_do_ciclo(nubank) == date(2026, 8, 14)
+    assert ciclo_da_fatura(_datas(nubank), "2026-09") == (date(2026, 8, 14), date(2026, 9, 13))
     assert [l.competencia for l in nubank] == ["2026-08", "2026-08", "2026-09", "2026-09"]
 
     # o XP nem escreve "parcela": a linha datada de antes do ciclo e cobranca do ciclo
@@ -537,13 +542,96 @@ def test_parcela_conta_no_ciclo_da_fatura_em_qualquer_cartao():
         Lancamento(date(2026, 8, 2), "POSTO", -20_000),
         Lancamento(date(2026, 8, 30), "MERCADO", -30_000),
     ], "2026-09")
-    assert inicio_do_ciclo(xp) == date(2026, 8, 2)
+    # duas compras a vista em cinco linhas nao desenham um ciclo: vale o
+    # presumido, o mes anterior ao da fatura
+    assert ciclo_da_fatura(_datas(xp), "2026-09") == (date(2026, 8, 1), date(2026, 8, 31))
     assert [l.competencia for l in xp] == ["2026-08"] * 5
 
-    # sem ciclo conhecido, parcela de fora do ciclo vale o mes da fatura
-    assert competencia_da_compra(date(2026, 6, 10), "2026-09", "LOJA PARC 03/06") == "2026-09"
+    # sem ciclo conhecido, parcela de fora do ciclo vale o comeco do ciclo
+    # presumido: o mes anterior ao da fatura
+    assert competencia_da_compra(date(2026, 6, 10), "2026-09", "LOJA PARC 03/06") == "2026-08"
     # numero de documento nao e parcela: compra a vista, mes da compra
     assert competencia_da_compra(date(2026, 8, 20), "2026-09", "PAGUE MENOS 0225") == "2026-08"
+
+
+def test_fatura_do_xp_so_de_parcelas_antigas_conta_no_mes_das_compras():
+    """A fatura do XP paga em setembro e a das compras de agosto. Quando so
+    traz parcelas, todas datadas da compra original — "05/10" e "10/09" do
+    ano passado, "07/04" deste —, nenhuma delas e de setembro nem de outubro
+    que ainda vem: e tudo cobranca do ciclo de agosto. A versao anterior
+    mandava "10/09" para setembro, "05/10" para outubro de 2026 e o resto
+    para maio, onde a planilha as apagava — e agosto ficava sem o XP."""
+    from parsers.base import ajustar_ano_fatura, ciclo_da_fatura
+
+    xp = ajustar_ano_fatura([
+        Lancamento(date(2026, 10, 5), "LOJA DE MOVEIS", -73_237),
+        Lancamento(date(2026, 9, 10), "CURSO ONLINE", -30_404),
+        Lancamento(date(2026, 4, 7), "EINSTEIN MORUMBI", -57_640),
+        Lancamento(date(2026, 11, 20), "PASSAGEM AEREA", -120_000),
+    ], "2026-09")
+    assert [l.data.year for l in xp] == [2025, 2026, 2026, 2025]
+    assert [l.competencia for l in xp] == ["2026-08"] * 4
+
+    # com compras a vista em agosto, a parcela "10/09" do ano passado fica
+    # fora do ciclo: ele e a janela onde as compras se concentram
+    xp = ajustar_ano_fatura([
+        Lancamento(date(2026, 8, d), f"COMPRA {d}", -1_000) for d in range(1, 29)
+    ] + [Lancamento(date(2026, 9, 10), "CURSO ONLINE", -30_404)], "2026-09")
+    assert ciclo_da_fatura([l.data for l in xp], "2026-09") == (date(2026, 8, 1), date(2026, 8, 28))
+    assert {l.competencia for l in xp} == {"2026-08"}
+
+    # o Nubank continua como antes: o ciclo de 15/08 a 14/09 e tudo dentro dele
+    nubank = ajustar_ano_fatura([
+        Lancamento(date(2026, 8, 15), "MERCADO", -5_000),
+        Lancamento(date(2026, 9, 14), "POSTO", -20_000),
+        Lancamento(date(2026, 9, 2), "FARMACIA - Parcela 2/3", -9_000),
+    ], "2026-09")
+    assert [l.competencia for l in nubank] == ["2026-08", "2026-09", "2026-09"]
+
+
+def test_migracao_v6_traz_a_fatura_do_xp_de_volta_para_agosto(engine):
+    """O que a regra antiga gravou errado — a parcela de outubro do ano
+    passado em outubro deste, e o resto num mes da planilha, fora de conta —
+    volta para agosto e casa, pelo valor, com a planilha de agosto."""
+    xp = _conta(engine, "Visa XP teste", "cartao", instituicao="XP")
+    planilha = repo.conta_da_planilha(engine)
+    _importar(engine, planilha, [
+        dict(data=date(2026, 5, 3), descricao="MERCADO MAIO", valor_centavos=-10_000,
+             competencia="2026-05"),
+        dict(data=date(2026, 8, 10), descricao="MOVEIS PARCELA", valor_centavos=-73_237,
+             competencia="2026-08"),
+        dict(data=date(2026, 8, 12), descricao="HOSPITAL PARCELA", valor_centavos=-57_640,
+             competencia="2026-08"),
+    ], origem="planilha", competencia="2026-08")
+    corrente = _conta(engine, "Banco teste", "corrente")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 5), descricao="PIX QUALQUER", valor_centavos=-1_000,
+             competencia="2026-08"),
+    ], competencia="2026-08")
+    # gravado como a regra antiga gravava: sem passar pelo leitor
+    resultado = _importar(engine, xp, [
+        dict(data=date(2026, 10, 5), descricao="LOJA DE MOVEIS", valor_centavos=-73_237,
+             competencia="2026-10"),
+        dict(data=date(2026, 4, 7), descricao="EINSTEIN MORUMBI", valor_centavos=-57_640,
+             competencia="2026-05"),
+    ], competencia="2026-09")
+    repo.aplicar_meses_da_planilha(engine)
+    assert _linha(engine, "EINSTEIN MORUMBI").ativo is False, "maio e mes da planilha"
+    assert _resumo(engine, "2026-08")["despesas"] == 73_237 + 57_640 + 1_000
+
+    with engine.begin() as conn:
+        conn.execute(sa.delete(db.config).where(db.config.c.chave == repo.CARTAO_PELA_COMPRA))
+    feito = repo.contar_cartao_pela_compra(engine)
+    assert feito == {"movidas": 2, "conferidas": 2}
+    moveis = _linha(engine, "LOJA DE MOVEIS")
+    assert (moveis.data, moveis.competencia) == (date(2025, 10, 5), "2026-08")
+    hospital = _linha(engine, "EINSTEIN MORUMBI")
+    assert (hospital.ativo, hospital.competencia) == (True, "2026-08")
+    assert _linha(engine, "MOVEIS PARCELA").substituido_por == resultado["upload_id"]
+    assert _linha(engine, "HOSPITAL PARCELA").ativo is False
+    assert _resumo(engine, "2026-08")["despesas"] == 73_237 + 57_640 + 1_000, "uma vez só"
+    assert _resumo(engine, "2026-10")["despesas"] == 0
+    assert _resumo(engine, "2026-05")["despesas"] == 10_000
 
 def test_busca_por_valor_acha_a_mesma_compra_em_qualquer_origem(engine):
     assert repo._termo_em_centavos("3.351,65") == 335_165

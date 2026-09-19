@@ -141,67 +141,97 @@ def ajustar_ano_fatura(lancamentos: list[Lancamento], competencia: str,
     setembro, em março. Ler "05/11" como novembro do ano da fatura jogava a
     parcela dez meses para a frente, para um mês que ainda nem existe.
 
-    A régua é a distância até a competência: mês muito à frente é do ano
-    passado; mês muito atrás, do ano que vem. Um mês de folga fica de pé, que é
-    a compra feita depois do fechamento e cobrada na fatura seguinte.
+    A régua é o mês da fatura: data em mês posterior a ele é do ano passado
+    (`ano_da_compra`). Depois disso cada linha ganha o mês em que conta
+    (`competencia_da_compra`), a partir do ciclo tirado do próprio arquivo.
     """
     if not competencia:
         return lancamentos
-    ano, mes = int(competencia[:4]), int(competencia[5:7])
     for lan in lancamentos:
-        distancia = (lan.data.year - ano) * 12 + lan.data.month - mes
-        # mes muito a frente da fatura e do ano passado (a compra de 28/12 na
-        # fatura de janeiro). O contrario nao existe: uma data meses antes
-        # da fatura e parcela de compra antiga, e fica no ano em que esta —
-        # a versao que a jogava para o ano seguinte mandava "TV 12/12" de
-        # 05/01 para janeiro do ano que vem
-        if distancia > 1:
-            lan.data = _trocar_ano(lan.data, lan.data.year - 1)
-    inicio = inicio_do_ciclo(lancamentos)
+        lan.data = ano_da_compra(lan.data, competencia)
+    ciclo = ciclo_da_fatura([lan.data for lan in lancamentos if lan.data and lan.valor_centavos < 0],
+                            competencia)
     for lan in lancamentos:
-        lan.competencia = competencia_da_compra(lan.data, competencia, lan.descricao,
-                                                inicio_do_ciclo=inicio)
+        lan.competencia = competencia_da_compra(lan.data, competencia, ciclo=ciclo)
     return lancamentos
 
 
-# um ciclo de fatura dura um mes; o que esta mais de 32 dias antes da ultima
-# compra do arquivo nao e compra do ciclo — e parcela, ou lancamento antigo,
-# datado de quando a compra original aconteceu
+def ano_da_compra(dia: date, competencia_da_fatura: str) -> date:
+    """O ano de uma data "dd/mm" da fatura.
+
+    Nenhuma compra de uma fatura e posterior ao mes em que ela vence: a de
+    setembro (paga em setembro) fecha com compras de agosto ou de setembro,
+    nunca de outubro. Uma data em mes posterior ao da fatura e do ano passado
+    — a compra de 28/12 na fatura de janeiro, e a parcela de outubro do ano
+    passado que o XP imprime como "05/10" na fatura de setembro. A versao que
+    dava um mes de folga mandava essa parcela para outubro do ano corrente,
+    um mes que ainda nem chegou.
+    """
+    ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
+    if (dia.year, dia.month) > (ano, mes):
+        return _trocar_ano(dia, dia.year - 1)
+    return dia
+
+
+# um ciclo de fatura dura um mes: 32 dias cobrem qualquer fechamento
 DURACAO_MAXIMA_DO_CICLO = timedelta(days=32)
 
 
-def inicio_do_ciclo(lancamentos: list[Lancamento]) -> date | None:
-    """O primeiro dia do ciclo da fatura, tirado do proprio arquivo.
+def _mes_anterior(ano: int, mes: int) -> tuple[int, int]:
+    return (ano - 1, 12) if mes == 1 else (ano, mes - 1)
 
-    A fatura e uma janela de um mes que termina na ultima compra. A data
-    mais antiga dentro dessa janela e o inicio do ciclo. O que vem datado de
-    antes (a parcela que o XP imprime com a data da compra original, meses
-    atras) fica de fora da conta — e e justamente o que depois vai contar no
-    mes em que o ciclo comeca.
+
+def _fim_do_mes(ano: int, mes: int) -> date:
+    proximo = (ano + 1, 1) if mes == 12 else (ano, mes + 1)
+    return date(*proximo, 1) - timedelta(days=1)
+
+
+def ciclo_da_fatura(datas: list[date], competencia_da_fatura: str) -> tuple[date, date]:
+    """(inicio, fim) do ciclo da fatura, tirado das datas das compras.
+
+    A fatura que vence em setembro fecha em setembro (Nubank, dia 14) ou no
+    fim de agosto (XP): o ciclo termina no mes da fatura ou no anterior, e
+    dura ate 32 dias. Dentro dessa regra, o ciclo e a janela que mais compras
+    contem — as compras a vista se concentram nela; a parcela que o XP
+    imprime com a data da compra original (meses atras, ou "10/09" do ano
+    passado) fica de fora, sozinha.
+
+    Janela que nao contem nem metade das compras nao e ciclo: e a fatura que
+    e so de parcelas antigas, cada uma datada de um mes diferente, e uma ou
+    outra por acaso datada do mes da fatura ("10/09" do ano passado). Nesse
+    caso — e quando nenhuma compra e datada desses dois meses — o ciclo
+    presumido e o mes anterior ao da fatura: a fatura de setembro cobra as
+    compras de agosto.
     """
-    datas = [lan.data for lan in lancamentos if lan.data and lan.valor_centavos < 0]
-    if not datas:
-        return None
-    ultimo = max(datas)
-    no_ciclo = [d for d in datas if d >= ultimo - DURACAO_MAXIMA_DO_CICLO]
-    return min(no_ciclo)
+    ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
+    anterior = _mes_anterior(ano, mes)
+    presumido = (date(*anterior, 1), _fim_do_mes(*anterior))
+    candidatos = sorted({d for d in datas if presumido[0] <= d <= _fim_do_mes(ano, mes)})
+    if not candidatos:
+        return presumido
+    melhor_fim, melhor_total = None, -1
+    for fim in candidatos:
+        total = sum(1 for d in datas if fim - DURACAO_MAXIMA_DO_CICLO <= d <= fim)
+        # empate: o ciclo termina na compra mais recente
+        if total >= melhor_total:
+            melhor_fim, melhor_total = fim, total
+    if melhor_total * 2 < len(datas):
+        return presumido
+    inicio = min(d for d in datas if melhor_fim - DURACAO_MAXIMA_DO_CICLO <= d <= melhor_fim)
+    return inicio, melhor_fim
 
 
 def e_parcela(descricao: str | None) -> bool:
     return bool(descricao) and bool(_PARCELA.search(descricao))
 
 
-# quantos meses antes do mes da fatura uma compra ainda conta pela propria
-# data: a fatura de agosto fecha com compras de meados de julho (um mes
-# antes), e a de janeiro pode trazer uma de novembro (dois)
-MESES_ATRAS_NA_FATURA = 2
 # "Parcela 3/6", "PARC 03/06", "3/6": a linha e uma parcela, e a data que a
 # fatura imprime e a da compra original — meses atras
 _PARCELA = re.compile(r"(?i)\bparc(?:ela|\.)?\s*\d{1,2}\s*/\s*\d{1,2}\b|\b\d{1,2}/\d{1,2}\b(?!/)")
 
 
 def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str = "",
-                          inicio_do_ciclo: date | None = None) -> str:
+                          ciclo: tuple[date, date] | None = None) -> str:
     """A compra conta no mes em que foi feita, nao no mes da fatura.
 
     E como a casa sempre anotou: o gasto de julho e de julho, mesmo que a
@@ -210,23 +240,21 @@ def competencia_da_compra(dia: date, competencia_da_fatura: str, descricao: str 
     planilha — e as de 14 a 31 de agosto em setembro.
 
     Parcela conta no ciclo da fatura que a cobra, em qualquer cartao — e
-    isso vale para toda linha datada de antes do ciclo, tenha ou nao a
+    isso vale para toda linha datada de fora do ciclo, tenha ou nao a
     palavra "parcela" (o XP nem a escreve). O que muda entre cartoes e so a
     data impressa: o Nubank imprime o dia em que a parcela entrou no ciclo
     (14/08, dentro dele) e ai a data serve; o XP imprime a compra original
     (10/06, antes do ciclo) e ai vale o mes em que o ciclo comeca. O ciclo
-    sai do proprio arquivo.
-
-    Sem ciclo conhecido, data muito longe do mes da fatura e lancamento fora
-    do ciclo: vale o mes da fatura.
+    sai do proprio arquivo (`ciclo_da_fatura`). Sem ele, a data do mes da
+    fatura ou do anterior vale por si; a de fora vai para o mes anterior.
     """
-    if inicio_do_ciclo and dia < inicio_do_ciclo:
-        return f"{inicio_do_ciclo.year:04d}-{inicio_do_ciclo.month:02d}"
-    ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
-    distancia = (dia.year - ano) * 12 + dia.month - mes
-    if -MESES_ATRAS_NA_FATURA <= distancia <= 1:
+    if ciclo is None:
+        ano, mes = int(competencia_da_fatura[:4]), int(competencia_da_fatura[5:7])
+        ciclo = (date(*_mes_anterior(ano, mes), 1), _fim_do_mes(ano, mes))
+    inicio, fim = ciclo
+    if inicio <= dia <= fim:
         return f"{dia.year:04d}-{dia.month:02d}"
-    return competencia_da_fatura
+    return f"{inicio.year:04d}-{inicio.month:02d}"
 
 
 # Numa fatura de cartao a compra e a regra e o credito e a excecao: dezenas de

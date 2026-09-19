@@ -45,15 +45,12 @@ def test_reconhece_quem_da_casa_esta_na_outra_ponta():
     assert repo.contraparte_da_casa("PIX TRANSF RICARDO") is None
 
 
-def test_credito_vindo_de_instituicao_financeira_e_resgate():
-    assert repo.resgate_de_investimento("PIX RECEBIDO REM: BANCO INTER SA", 1_194_457)
-    assert repo.resgate_de_investimento("TED RECEBIDA XP INVESTIMENTOS CCTVM", 500_000)
-    assert not repo.resgate_de_investimento("PIX RECEBIDO REM: TAG PARTNERS LTDA.", 2_059_621)
-    assert not repo.resgate_de_investimento("PIX TRANSF ANDREA", 84_000)
-    assert not repo.resgate_de_investimento("PIX ENVIADO DES: BANCO XP S.A", -100_000), "só crédito"
-
-
-def test_resgate_nao_e_receita(engine):
+def test_banco_como_remetente_nao_decide_nada(engine):
+    """"PIX RECEBIDO REM: BANCO INTER SA" foi o aluguel de um imóvel, não um
+    resgate. O banco na outra ponta não prova de onde veio o dinheiro: a linha
+    fica para o dono classificar, em vez de sumir em Transferências."""
+    assert repo._transferencia_propria("PIX RECEBIDO REM: BANCO INTER SA", 1_194_457) is None
+    assert repo._transferencia_propria("RESGATE CDB AUTOMATICO", 500_000) is not None
     corrente = _corrente(engine)
     _importar(engine, corrente, [
         dict(data=date(2026, 8, 3), descricao="PIX RECEBIDO REM: BANCO INTER SA", valor_centavos=1_194_457),
@@ -61,8 +58,64 @@ def test_resgate_nao_e_receita(engine):
     ])
     with engine.connect() as conn:
         agosto = analytics.resumo(conn, competencia="2026-08")
-    assert agosto["receitas"] == 2_059_621
-    assert agosto["transferencias"] == 1_194_457
+        inter = conn.execute(sa.select(db.transacoes).where(
+            db.transacoes.c.descricao.like("%INTER%"))).mappings().one()
+    assert agosto["transferencias"] == 0
+    assert inter["categoria_id"] is None or inter["status"] != "auto_regra"
+
+
+def test_transferencia_propria_nao_realiza_receita_prevista(engine):
+    """A TED da Rô para ela mesma casava, por mês e ordem de grandeza, com a
+    receita prevista dela, herdava a categoria e entrava como renda — a mão,
+    blindada. Dinheiro da casa não realiza receita nenhuma."""
+    corrente = _corrente(engine, titular="Rô")
+    planilha = repo.conta_da_planilha(engine)
+    repo.importar(
+        engine, conta_id=planilha, arquivo="planilha.xlsx", origem="planilha", usuario="André",
+        usar_ia=False, competencia="2026-08",
+        lancamentos=[Lancamento(date(2026, 8, 28), "CONSULTAS PREVISTAS", 300_000,
+                                categoria_hint="Trabalho", pessoa_hint="Rô",
+                                competencia="2026-08")],
+    )
+    resultado = repo.importar(
+        engine, conta_id=corrente, arquivo="b.pdf", origem="extrato", usuario="Rô",
+        usar_ia=False, lancamentos=[Lancamento(date(2026, 8, 14), "TED 102.0001.RO C", 314_327)],
+    )
+    assert resultado["previsoes_realizadas"] == 0
+    with engine.connect() as conn:
+        agosto = analytics.resumo(conn, competencia="2026-08")
+    assert agosto["transferencias"] == 314_327
+    assert agosto["receitas"] == 300_000, "a previsão continua de pé"
+
+
+def test_varredura_revê_a_linha_que_realizou_previsao(engine):
+    """O que ja esta gravado com a regra antiga: a TED da Ro entrou como renda
+    com status manual herdado da previsao. Ninguem a olhou — a varredura da
+    subida pode passar por ela."""
+    from core import dedup
+
+    corrente = _corrente(engine, titular="Rô")
+    with engine.begin() as conn:
+        trabalho = conn.execute(sa.select(db.categorias.c.id).where(
+            db.categorias.c.nome == "Trabalho")).scalar_one()
+        conn.execute(sa.insert(db.transacoes).values(
+            data=date(2026, 8, 14), competencia="2026-08", descricao="TED 102.0001.RO C",
+            descricao_norm="TED RO C", valor_centavos=314_327, conta_id=corrente,
+            categoria_id=trabalho, pessoa="Rô", status="manual", confianca=1.0,
+            origem="extrato", hash_dedup="x", ativo=True,
+            observacao=f"{dedup.MARCA_REALIZA_PREVISAO}08/2026 lançada à mão",
+        ))
+        conn.execute(sa.insert(db.transacoes).values(
+            data=date(2026, 8, 15), competencia="2026-08", descricao="PIX RECEBIDO REM: Andre Luiz",
+            descricao_norm="PIX RECEBIDO REM ANDRE LUIZ", valor_centavos=100_000, conta_id=corrente,
+            categoria_id=trabalho, pessoa="Rô", status="manual", confianca=1.0,
+            origem="extrato", hash_dedup="y", ativo=True,
+        ))
+    assert repo.marcar_transferencias_proprias(engine) == 1
+    with engine.connect() as conn:
+        agosto = analytics.resumo(conn, competencia="2026-08")
+    assert agosto["transferencias"] == 314_327
+    assert agosto["receitas"] == 100_000, "o que alguém classificou na tela fica"
 
 
 def test_ted_para_si_mesmo_nao_e_receita(engine):
