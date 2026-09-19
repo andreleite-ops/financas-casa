@@ -1241,22 +1241,30 @@ VERSAO_DAS_VARREDURAS = "2026-09-19.2"
 _CHAVE_VARREDURAS = "varreduras"
 
 
-def _assinatura_das_varreduras(conn) -> str:
+def _assinatura_das_varreduras(conn, cadeia: list[str] | None = None) -> str:
+    """O que faz a cadeia precisar rodar de novo: a versao das regras, a
+    propria lista de varreduras, e os uploads que existem.
+
+    A lista entra na assinatura porque a versao sozinha depende de alguem
+    lembrar de muda-la. Aconteceu uma vez: a varredura nova entrou na cadeia,
+    a constante ficou onde estava, e a subida seguinte pulou tudo em silencio.
+    """
     maior, quantos = conn.execute(
         sa.select(sa.func.coalesce(sa.func.max(db.uploads.c.id), 0), sa.func.count())
         .select_from(db.uploads)
     ).one()
-    return f"{VERSAO_DAS_VARREDURAS}|{maior}|{quantos}"
+    nomes = "+".join(cadeia or [])
+    return f"{VERSAO_DAS_VARREDURAS}|{nomes}|{maior}|{quantos}"
 
 
-def varreduras_pendentes(engine) -> bool:
+def varreduras_pendentes(engine, cadeia: list[str] | None = None) -> bool:
     with engine.connect() as conn:
-        return _config(conn, _CHAVE_VARREDURAS) != _assinatura_das_varreduras(conn)
+        return _config(conn, _CHAVE_VARREDURAS) != _assinatura_das_varreduras(conn, cadeia)
 
 
-def registrar_varreduras(engine) -> None:
+def registrar_varreduras(engine, cadeia: list[str] | None = None) -> None:
     with engine.begin() as conn:
-        _gravar_config(conn, _CHAVE_VARREDURAS, _assinatura_das_varreduras(conn))
+        _gravar_config(conn, _CHAVE_VARREDURAS, _assinatura_das_varreduras(conn, cadeia))
 
 
 DEVOLUCAO_DA_CONFERENCIA = "conferencia_devolvida_2026_09"

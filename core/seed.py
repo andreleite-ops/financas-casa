@@ -213,6 +213,32 @@ def _semear_metas(conn, ano: int) -> None:
     )
 
 
+def _cadeia_de_varreduras(repo) -> list[tuple[str, object]]:
+    """As varreduras da subida, na ordem, com o nome de cada uma.
+
+    O nome nao e enfeite: ele entra na assinatura que decide se a cadeia
+    precisa rodar. Acrescentar uma varredura aqui ja e o bastante para que a
+    proxima subida rode a cadeia inteira. Antes era preciso lembrar de mexer
+    numa constante noutro arquivo, e a primeira vez que alguem esqueceu a
+    varredura nova simplesmente nao rodou — o app subiu, nada mudou, e nada
+    disse por que.
+    """
+    return [
+        # fatura de cartao gravada com a compra positiva e corrigida aqui, na
+        # subida, sem depender de clique: a que entrou antes da trava existir,
+        # ou a que voltou ao erro por um clique a mais no reparo antigo
+        ("endireitar_faturas_gravadas", repo.endireitar_faturas_gravadas),
+        ("desclassificar_receita_em_cartao", repo.desclassificar_receita_em_cartao),
+        ("marcar_pagamentos_de_cartao", repo.marcar_pagamentos_de_cartao),
+        ("marcar_transferencias_proprias", repo.marcar_transferencias_proprias),
+        ("devolver_descartes_da_conferencia", repo.devolver_descartes_da_conferencia),
+        ("contar_cartao_pela_compra", repo.contar_cartao_pela_compra),
+        ("aplicar_meses_da_planilha", repo.aplicar_meses_da_planilha),
+        ("aposentar_previsoes_de_meses_fechados", repo.aposentar_previsoes_de_meses_fechados),
+        ("aplicar_fim_da_carga_inicial", repo.aplicar_fim_da_carga_inicial),
+    ]
+
+
 def semear(engine=None, ano_metas: int | None = None) -> dict:
     """Idempotente: pode rodar a cada inicializacao do app sem duplicar nada."""
     from datetime import date
@@ -220,20 +246,11 @@ def semear(engine=None, ano_metas: int | None = None) -> dict:
     engine = engine or db.get_engine()
     db.criar_schema(engine)
     from . import repo
-    if repo.varreduras_pendentes(engine):
-        # fatura de cartao gravada com a compra positiva e corrigida aqui, na
-        # subida, sem depender de clique: a que entrou antes da trava existir,
-        # ou a que voltou ao erro por um clique a mais no reparo antigo
-        repo.endireitar_faturas_gravadas(engine)
-        repo.desclassificar_receita_em_cartao(engine)
-        repo.marcar_pagamentos_de_cartao(engine)
-        repo.marcar_transferencias_proprias(engine)
-        repo.devolver_descartes_da_conferencia(engine)
-        repo.contar_cartao_pela_compra(engine)
-        repo.aplicar_meses_da_planilha(engine)
-        repo.aposentar_previsoes_de_meses_fechados(engine)
-        repo.aplicar_fim_da_carga_inicial(engine)
-        repo.registrar_varreduras(engine)
+    cadeia = _cadeia_de_varreduras(repo)
+    if repo.varreduras_pendentes(engine, cadeia=[nome for nome, _ in cadeia]):
+        for _, varredura in cadeia:
+            varredura(engine)
+        repo.registrar_varreduras(engine, cadeia=[nome for nome, _ in cadeia])
     ano = ano_metas or date.today().year
     with engine.begin() as conn:
         _semear_categorias(conn)

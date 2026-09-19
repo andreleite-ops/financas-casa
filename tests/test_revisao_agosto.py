@@ -1060,3 +1060,24 @@ def test_sem_extrato_nenhum_a_carga_inicial_continua_inteira(engine):
     feito = repo.aplicar_fim_da_carga_inicial(engine)
     assert feito == {"retiradas": 0, "devolvidas": 0, "limite": ""}
     assert _resumo(engine, "2026-10")["receitas"] == 2_059_621
+
+
+def test_varredura_nova_na_cadeia_faz_a_subida_rodar_de_novo(engine):
+    """Acrescentar uma varredura já é o bastante para a próxima subida rodar
+    a cadeia. Da primeira vez em que isso dependeu de lembrar de mexer numa
+    constante, a varredura nova não rodou e nada disse por quê."""
+    nomes = ["endireitar_faturas_gravadas", "marcar_pagamentos_de_cartao"]
+    assert repo.varreduras_pendentes(engine, cadeia=nomes)
+    repo.registrar_varreduras(engine, cadeia=nomes)
+    assert not repo.varreduras_pendentes(engine, cadeia=nomes)
+    assert repo.varreduras_pendentes(engine, cadeia=[*nomes, "aplicar_fim_da_carga_inicial"])
+
+
+def test_a_cadeia_da_subida_e_a_que_o_semeador_roda(engine):
+    """A lista de nomes que entra na assinatura é a mesma que roda: um nome
+    que não existisse em repo deixaria a subida quebrada no primeiro start."""
+    from core import seed
+
+    cadeia = seed._cadeia_de_varreduras(repo)
+    assert [nome for nome, _ in cadeia] == [f.__name__ for _, f in cadeia]
+    assert "aplicar_fim_da_carga_inicial" in [nome for nome, _ in cadeia]
