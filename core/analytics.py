@@ -616,29 +616,32 @@ def receitas_por_pessoa_e_tipo(conn, ano: int) -> dict:
             db.subcategorias.c.nome, db.categorias.c.nome, db.transacoes.c.competencia,
         )
     )
-    linhas: dict[tuple[str, str, str], dict[str, int]] = {}
+    # a linha e (pessoa, tipo); a fonte e o rotulo que a planilha deu a essa
+    # linha. O extrato nao traz rotulo: o pro-labore de agosto, vindo do banco,
+    # e a mesma linha "TAG" dos meses da planilha — nao uma segunda linha "—"
+    linhas: dict[tuple[str, str], dict[str, int]] = {}
+    fontes: dict[tuple[str, str], set[str]] = {}
     meses: set[str] = set()
     for registro in conn.execute(consulta):
         mes = registro.competencia[5:7]
         meses.add(mes)
-        chave = (
-            registro.pessoa,
-            (registro.fonte or "—").strip() or "—",
-            registro.tipo or registro.categoria or SEM_CATEGORIA,
-        )
+        chave = (registro.pessoa, registro.tipo or registro.categoria or SEM_CATEGORIA)
         alvo = linhas.setdefault(chave, {})
         alvo[mes] = alvo.get(mes, 0) + int(registro.total or 0)
+        fonte = (registro.fonte or "").strip()
+        if fonte and fonte != "—":
+            fontes.setdefault(chave, set()).add(fonte)
 
     ordem = sorted(meses)
     saida = [
         {
             "pessoa": pessoa,
-            "fonte": fonte,
+            "fonte": " / ".join(sorted(fontes.get((pessoa, tipo), ()))) or "—",
             "tipo": tipo,
             "meses": {mes: valores.get(mes, 0) for mes in ordem},
             "total": sum(valores.values()),
         }
-        for (pessoa, fonte, tipo), valores in linhas.items()
+        for (pessoa, tipo), valores in linhas.items()
     ]
     saida.sort(key=lambda linha: (linha["pessoa"], -linha["total"]))
     return {"meses": ordem, "linhas": saida}

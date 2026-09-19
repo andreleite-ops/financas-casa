@@ -848,3 +848,53 @@ def test_soma_por_categoria_nao_usa_abs(engine):
     assert linhas[analytics.SEM_CATEGORIA] == 2_000_000
     assert cats["Lazer & Viagens"] == -40_000
     assert sum(linhas.values()) == resumo["despesas"]
+
+
+def test_receita_do_extrato_entra_na_linha_da_planilha_e_nao_numa_segunda(engine):
+    """O aluguel de agosto veio do extrato, sem o rotulo que a planilha da
+    ("ALUGUEL"). E a mesma linha da tabela "quem trouxe o que" — nao uma
+    segunda linha "—" para o mesmo dono e o mesmo tipo."""
+    planilha = repo.conta_da_planilha(engine)
+    corrente = _conta(engine, "Banco teste", "corrente")
+    repo.importar(
+        engine, conta_id=planilha, arquivo="planilha.xlsx", origem="planilha", usuario="André",
+        usar_ia=False,
+        lancamentos=[Lancamento(date(2026, 7, 5), "ALUGUEL APTO", 960_000,
+                                categoria_hint="ALUGUEL", pessoa_hint="Casal",
+                                competencia="2026-07")],
+    )
+    repo.importar(
+        engine, conta_id=corrente, arquivo="b.pdf", origem="extrato", usuario="André",
+        usar_ia=False, lancamentos=[Lancamento(date(2026, 8, 3), "PIX RECEBIDO", 1_194_457)],
+    )
+    with engine.begin() as conn:
+        rendimentos = conn.execute(sa.select(db.categorias.c.id).where(
+            db.categorias.c.nome == "Rendimentos")).scalar_one()
+        alugueis = conn.execute(sa.select(db.subcategorias.c.id).where(
+            db.subcategorias.c.categoria_id == rendimentos,
+            db.subcategorias.c.nome == "Aluguéis")).scalar_one()
+        conn.execute(sa.update(db.transacoes).where(db.transacoes.c.descricao == "PIX RECEBIDO")
+                     .values(categoria_id=rendimentos, subcategoria_id=alugueis,
+                             pessoa="Casal", status="manual"))
+    with engine.connect() as conn:
+        matriz = analytics.receitas_por_pessoa_e_tipo(conn, 2026)
+    linhas = [l for l in matriz["linhas"] if l["tipo"] == "Aluguéis"]
+    assert len(linhas) == 1
+    assert linhas[0]["fonte"] == "ALUGUEL"
+    assert linhas[0]["meses"] == {"07": 960_000, "08": 1_194_457}
+
+
+def test_transferencia_entra_na_lista_de_destinos_dos_dois_lados(engine):
+    """O resgate da Ro e um credito, e credito abre a lista de receitas. Sem
+    "Transferencias entre Contas" nela, nao havia como dizer que aquilo nao e
+    renda — e ele ficava na renda."""
+    from ui import destinos
+
+    with engine.connect() as conn:
+        plano = repo.plano_de_contas(conn)
+    entrada = destinos.do_plano(plano, "receita")
+    saida = destinos.do_plano(plano, "despesa")
+    resgate = f"    ↳ {analytics.CATEGORIA_TRANSFERENCIA} › Aplicação / Resgate"
+    assert resgate in entrada and resgate in saida
+    assert not any("Moradia" in rotulo for rotulo in entrada)
+    assert not any("Trabalho" in rotulo for rotulo in saida)

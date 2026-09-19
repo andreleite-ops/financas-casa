@@ -30,9 +30,16 @@ def do_plano(plano, natureza: str, primeiro: int | None = None) -> dict[str, Des
     detalhe dela: o caso comum fica à mão sem esconder o resto do plano, que é
     justamente o que se precisa quando o grupo veio errado.
     """
+    from core.analytics import CATEGORIA_TRANSFERENCIA
+
     blocos: dict[int, dict[str, Destino]] = {}
     for categoria in plano:
-        if categoria["natureza"] != natureza or not categoria["ativa"]:
+        # Transferencia entre contas vale para os dois sinais: o resgate e a
+        # TED para si mesmo entram como credito e nao sao renda. Sem ela na
+        # lista da entrada, o unico jeito de tirar um resgate da renda era nao
+        # classifica-lo
+        dos_dois_lados = categoria["nome"] == CATEGORIA_TRANSFERENCIA
+        if (categoria["natureza"] != natureza and not dos_dois_lados) or not categoria["ativa"]:
             continue
         bloco: dict[str, Destino] = {rotulo(categoria["nome"]): (categoria["id"], None)}
         for sub in categoria["subcategorias"]:
