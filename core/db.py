@@ -230,8 +230,34 @@ def url_configurada() -> str | None:
     return _segredo("DATABASE_URL") or _url_por_partes()
 
 
+# os dois drivers de Postgres que existem no mundo Python, na ordem em que
+# preferimos usá-los quando os dois estiverem instalados
+DRIVERS_DE_POSTGRES = ("psycopg2", "psycopg")
+
+
+def driver_de_postgres() -> str | None:
+    """Qual driver de Postgres está instalado nesta máquina."""
+    from importlib.util import find_spec
+
+    for nome in DRIVERS_DE_POSTGRES:
+        try:
+            if find_spec(nome) is not None:
+                return nome
+        except (ImportError, ValueError):
+            continue
+    return None
+
+
 def url_do_banco() -> str:
-    """Prioridade: DATABASE_URL -> campos separados -> SQLite local."""
+    """Prioridade: DATABASE_URL -> campos separados -> SQLite local.
+
+    A URL também é normalizada aqui, e isso inclui dizer QUAL driver usar.
+    "postgresql://" sem driver deixa a escolha para o SQLAlchemy, e o padrão
+    dele mudou de versão para versão: um deploy que só reinstalou dependências
+    passou a procurar o psycopg 3 num app que declara o psycopg2, e o banco
+    ficou inalcançável sem nada ter mudado no banco nem no segredo. Nomear o
+    driver que está instalado tira a versão do SQLAlchemy da jogada.
+    """
     url = url_configurada()
     if not url:
         destino = Path(__file__).resolve().parent.parent / "dados" / "financas.db"
@@ -240,7 +266,43 @@ def url_do_banco() -> str:
     # o Supabase entrega a URL como postgres://; SQLAlchemy 2 exige postgresql://
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://"):
+        driver = driver_de_postgres()
+        if driver:
+            url = url.replace("postgresql://", f"postgresql+{driver}://", 1)
     return url
+
+
+def destino_da_conexao() -> dict:
+    """Para onde o app tenta se conectar, sem a senha.
+
+    Quando o banco nao responde, a primeira pergunta e "a que servidor voce
+    esta falando?" — e ela nao tinha resposta na tela: o segredo e invisivel e
+    o erro do Postgres nao diz o host. Comparar este host com o do painel do
+    Supabase separa "o projeto caiu" de "o app fala com outro projeto".
+    """
+    url = url_do_banco()
+    try:
+        partes = sa.engine.make_url(url)
+    except Exception:
+        return {"tipo": "desconhecido"}
+    if partes.drivername.startswith("sqlite"):
+        return {"tipo": "sqlite", "arquivo": partes.database or ":memory:"}
+    hospedeiro = partes.host or ""
+    return {
+        "tipo": "postgres",
+        "host": hospedeiro,
+        "porta": partes.port,
+        "usuario": partes.username or "",
+        "banco": partes.database or "",
+        # o pooler e o caminho que funciona de fora da rede do Supabase; a
+        # conexao direta (db.<ref>.supabase.co) so responde em IPv6, que a
+        # maquina do Streamlit nao tem
+        "pelo_pooler": "pooler." in hospedeiro,
+        # o projeto que o host nomeia, para conferir com o painel
+        "projeto": (partes.username or "").split(".", 1)[-1]
+        if "." in (partes.username or "") else hospedeiro.split(".")[0],
+    }
 
 
 def diagnostico() -> dict:

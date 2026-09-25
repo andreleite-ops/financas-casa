@@ -79,19 +79,76 @@ def _explicar_banco_fora(erro: Exception) -> None:
         "respondeu foi o Supabase.",
         icon="🔌",
     )
-    st.markdown(
-        "**O que costuma ser, em ordem de probabilidade:**\n\n"
+    destino = db.destino_da_conexao()
+    if destino.get("tipo") == "postgres":
+        st.markdown(
+            f"**Ele está tentando falar com** `{destino['host']}`"
+            + (f":{destino['porta']}" if destino.get("porta") else "")
+            + f", como `{destino['usuario']}`."
+            + ("" if destino["pelo_pooler"] else
+               " Este é o endereço **direto** do banco, não o do pooler.")
+        )
+    st.markdown("**O que costuma ser, nesta ordem:**\n\n" + _causas(erro, destino))
+    with st.expander("Detalhe técnico do erro"):
+        st.code(f"{type(erro).__name__}: {erro}"[:1500], language="text")
+
+
+def _causas(erro: Exception, destino: dict) -> str:
+    """As causas prováveis, lidas da mensagem do Postgres.
+
+    Cada uma destas falhas tem uma frase própria no erro, e cada uma pede uma
+    ação diferente. Listar sempre as mesmas três possibilidades fazia quem
+    estava olhando começar pela errada — e a primeira delas, hibernação, é
+    justamente a que o painel do Supabase desmente num relance.
+    """
+    texto = f"{type(erro).__name__}: {erro}".lower()
+    hospedeiro = destino.get("host", "")
+    if "tenant or user not found" in texto:
+        return (
+            "1. **O usuário do pooler está incompleto.** Pelo pooler, o usuário é "
+            "`postgres.<ref-do-projeto>`, não `postgres`. Pegue a string em "
+            "Supabase › Project Settings › Database › **Connection pooling** e "
+            "atualize o segredo `DATABASE_URL`."
+        )
+    if "password authentication failed" in texto or "auth" in texto:
+        return (
+            "1. **A senha do banco não confere.** Gere outra em Supabase › Project "
+            "Settings › Database › Reset database password e atualize o segredo "
+            "`DATABASE_URL` em Settings › Secrets.\n"
+            "2. Se a senha tem `@`, `#`, `/` ou `:`, ela precisa ser escapada dentro "
+            "da URL — ou use os segredos separados `DB_HOST`, `DB_USER`, `DB_PASSWORD`."
+        )
+    if "could not translate host name" in texto or "name or service not known" in texto:
+        return (
+            f"1. **O endereço `{hospedeiro}` não existe mais.** É o caso quando o "
+            "projeto foi recriado: o identificador muda, e o segredo fica apontando "
+            "para o antigo. Compare com a URL que aparece no painel do Supabase."
+        )
+    if "timeout" in texto or "timed out" in texto or "connection refused" in texto:
+        primeira = (
+            "1. **O projeto do Supabase hibernou.** No plano gratuito ele pausa "
+            "sozinho depois de alguns dias sem uso. Abra o projeto em "
+            "[supabase.com/dashboard](https://supabase.com/dashboard) e clique em "
+            "**Restore**. Se o painel já diz *Healthy*, não é isto.\n"
+        )
+        if not destino.get("pelo_pooler"):
+            primeira += (
+                "2. **A conexão direta não é alcançável.** O endereço "
+                "`db.<projeto>.supabase.co` responde só em IPv6, e a máquina do "
+                "Streamlit é IPv4. Troque pela string do **Connection pooling** "
+                "(host com `pooler.supabase.com`, porta 6543, usuário "
+                "`postgres.<ref>`).\n"
+            )
+        return primeira + "3. **O Supabase está com problema** ([status.supabase.com](https://status.supabase.com))."
+    return (
         "1. **O projeto do Supabase hibernou.** No plano gratuito ele pausa sozinho "
         "depois de alguns dias sem uso. Entre em [supabase.com/dashboard]"
-        "(https://supabase.com/dashboard), abra o projeto e clique em **Restore** "
-        "— leva um ou dois minutos. Depois volte aqui e recarregue a página.\n"
+        "(https://supabase.com/dashboard), abra o projeto e clique em **Restore**.\n"
         "2. **A senha do banco mudou** e o segredo `DATABASE_URL` deste app ficou "
         "para trás (Settings › Secrets).\n"
         "3. **O Supabase está com problema.** Dá para conferir em "
         "[status.supabase.com](https://status.supabase.com)."
     )
-    with st.expander("Detalhe técnico do erro"):
-        st.code(f"{type(erro).__name__}: {erro}"[:1500], language="text")
 
 
 def main() -> None:

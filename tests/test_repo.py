@@ -479,3 +479,64 @@ def test_despesa_sem_dono_declarado_e_sempre_do_casal(engine):
         "ALMOÇO ANDRÉ": "André",         # a descrição diz
         "PENSAO ALIMENTICIA": "André",   # a categoria é dele
     }
+
+
+# ---------------------------------------------------------------------------
+# a conexão com o Postgres: qual driver, e o que a tela de erro diz
+# ---------------------------------------------------------------------------
+def test_a_url_nomeia_o_driver_que_esta_instalado(monkeypatch):
+    """Sem nomear o driver, quem escolhe é o SQLAlchemy — e o padrão dele
+    mudou de versão para versão. Um deploy que só reinstalou dependências
+    passou a procurar o psycopg 3 num app que declara o psycopg2, e o banco
+    ficou inalcançável com o banco no ar e o segredo correto."""
+    from core import db as banco
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@host.pooler.supabase.com:6543/postgres")
+    monkeypatch.setattr(banco, "driver_de_postgres", lambda: "psycopg2")
+    assert banco.url_do_banco().startswith("postgresql+psycopg2://")
+
+    monkeypatch.setattr(banco, "driver_de_postgres", lambda: "psycopg")
+    assert banco.url_do_banco().startswith("postgresql+psycopg://")
+
+    # sem driver nenhum instalado, a URL fica como veio: o erro do SQLAlchemy
+    # dizendo qual módulo falta é mais útil do que um palpite nosso
+    monkeypatch.setattr(banco, "driver_de_postgres", lambda: None)
+    assert banco.url_do_banco().startswith("postgresql://")
+
+
+def test_a_tela_de_erro_diz_com_quem_tentou_falar(monkeypatch):
+    """"O banco não responde" sem dizer qual banco não permite descobrir que o
+    app está falando com outro projeto."""
+    from core import db as banco
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://postgres.abc123:senha@aws-0.pooler.supabase.com:6543/postgres")
+    destino = banco.destino_da_conexao()
+
+    assert destino["host"] == "aws-0.pooler.supabase.com"
+    assert destino["porta"] == 6543
+    assert destino["usuario"] == "postgres.abc123"
+    assert destino["pelo_pooler"] is True
+    assert destino["projeto"] == "abc123"
+    assert "senha" not in str(destino), "a senha nunca aparece na tela"
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://postgres:senha@db.abc123.supabase.co:5432/postgres")
+    direto = banco.destino_da_conexao()
+    assert direto["pelo_pooler"] is False, "conexão direta responde só em IPv6"
+
+
+def test_as_causas_provaveis_saem_do_erro():
+    """Listar sempre as mesmas três fazia começar pela errada — e a primeira,
+    hibernação, é a que o painel do Supabase desmente num relance."""
+    from app import _causas
+
+    pooler = {"tipo": "postgres", "host": "aws-0.pooler.supabase.com", "pelo_pooler": True}
+    direto = {"tipo": "postgres", "host": "db.abc.supabase.co", "pelo_pooler": False}
+
+    assert "usuário do pooler" in _causas(Exception("Tenant or user not found"), pooler)
+    assert "senha do banco não confere" in _causas(
+        Exception("password authentication failed for user"), pooler)
+    assert "não existe mais" in _causas(
+        Exception("could not translate host name"), pooler)
+    assert "hibernou" in _causas(Exception("connection timed out"), pooler)
+    assert "IPv6" in _causas(Exception("connection timed out"), direto)
+    assert "IPv6" not in _causas(Exception("connection timed out"), pooler)
