@@ -1081,3 +1081,54 @@ def test_a_cadeia_da_subida_e_a_que_o_semeador_roda(engine):
     cadeia = seed._cadeia_de_varreduras(repo)
     assert [nome for nome, _ in cadeia] == [f.__name__ for _, f in cadeia]
     assert "aplicar_fim_da_carga_inicial" in [nome for nome, _ in cadeia]
+
+
+def test_classificar_um_tira_da_fila_os_iguais(engine):
+    """Oito cobranças do mesmo lugar na fila. Classificar a primeira deixava
+    as outras sete ali, e quem estava classificando concluía — com razão — que
+    o app não acatava o que ele dizia. A memória passa a valer já."""
+    from core import classify
+
+    corrente = _conta(engine, "Banco teste", "corrente")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 7 + i % 3, 5 + i), descricao=f"COND EDIF BOA VISTA {6850 + i}",
+             valor_centavos=-18_000 - i)
+        for i in range(8)
+    ])
+    with engine.connect() as conn:
+        fila = repo.fila_pendentes(conn)
+        moradia = conn.execute(sa.select(db.categorias.c.id).where(
+            db.categorias.c.nome == "Moradia")).scalar_one()
+    assert len(fila) == 8
+
+    feito = repo.reclassificar(engine, fila[0]["id"], categoria_id=moradia,
+                               subcategoria_id=None, pessoa="Casal", usuario="André")
+
+    assert feito["virou_regra"] is True
+    assert feito["na_fila"] == 7, "as outras sete saíram no mesmo gesto"
+    with engine.connect() as conn:
+        assert repo.fila_pendentes(conn) == []
+        em_moradia = conn.execute(sa.select(sa.func.count()).select_from(db.transacoes)
+                                  .where(db.transacoes.c.categoria_id == moradia)).scalar_one()
+    assert em_moradia == 8
+
+
+def test_o_que_nao_vira_memoria_nao_arrasta_ninguem(engine):
+    """"PIX QR CODE DINAMICO" não identifica estabelecimento nenhum: a
+    classificação vale para aquela linha e para mais ninguém."""
+    corrente = _conta(engine, "Banco teste", "corrente")
+    _importar(engine, corrente, [
+        dict(data=date(2026, 8, 5), descricao="PIX QR CODE DINAMICO", valor_centavos=-5_000),
+        dict(data=date(2026, 8, 6), descricao="PIX QR CODE DINAMICO", valor_centavos=-7_000),
+    ])
+    with engine.connect() as conn:
+        fila = repo.fila_pendentes(conn)
+        moradia = conn.execute(sa.select(db.categorias.c.id).where(
+            db.categorias.c.nome == "Moradia")).scalar_one()
+
+    feito = repo.reclassificar(engine, fila[0]["id"], categoria_id=moradia,
+                               subcategoria_id=None, pessoa="Casal", usuario="André")
+
+    assert feito == {"virou_regra": False, "na_fila": 0}
+    with engine.connect() as conn:
+        assert len(repo.fila_pendentes(conn)) == 1, "a outra continua para ser olhada"

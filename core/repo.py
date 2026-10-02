@@ -754,13 +754,22 @@ def reclassificar(
     pessoa: str | None,
     usuario: str,
     criar_regra: bool = True,
-) -> bool:
-    """Classifica um lancamento. Devolve se a correcao virou memoria.
+    aplicar_na_fila: bool = True,
+) -> dict:
+    """Classifica um lancamento. Devolve o que a correcao alcancou.
 
     Nem toda correcao pode virar regra: "PIX QR CODE DINAMICO" nao identifica
     estabelecimento nenhum, e guardar essa chave faria todo Pix por QR herdar
     esta classificacao. Quem chama usa o retorno para nao prometer na tela um
     aprendizado que nao aconteceu.
+
+    E quando vira memoria, ela vale JA — nas outras pendencias iguais, no mesmo
+    gesto. Antes valia so para a proxima importacao: quem classificava a
+    primeira das oito contas de luz da fila via as outras sete continuarem ali,
+    e com razao concluia que o app nao estava acatando o que ele dizia. O botao
+    "reaplicar regras" fazia isso, mas ninguem tem de saber que ele existe.
+
+    Devolve {"virou_regra": bool, "na_fila": int}.
     """
     with engine.begin() as conn:
         linha = conn.execute(
@@ -795,10 +804,16 @@ def reclassificar(
             sa.update(db.transacoes).where(db.transacoes.c.id == transacao_id).values(**valores)
         )
         if not (criar_regra and linha):
-            return False
-        return classify.aprender(
+            return {"virou_regra": False, "na_fila": 0}
+        virou_regra = classify.aprender(
             conn, linha.descricao, categoria_id, subcategoria_id, usuario, pessoa
         )
+        na_fila = 0
+        if virou_regra and aplicar_na_fila:
+            # a memoria recem-criada passa pela fila inteira, na mesma
+            # transacao: ou as duas coisas valem, ou nenhuma
+            na_fila = classify.reclassificar_pendentes(conn)
+        return {"virou_regra": virou_regra, "na_fila": na_fila}
 
 
 CONTA_MANUAL = "Lançamento manual"

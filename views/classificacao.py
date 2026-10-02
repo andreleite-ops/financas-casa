@@ -121,7 +121,7 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                     st.warning("Escolha uma categoria antes de salvar.")
                     return
                 try:
-                    virou_regra = repo.reclassificar(
+                    feito = repo.reclassificar(
                         engine, item["id"], categoria_id=destino[0], subcategoria_id=destino[1],
                         pessoa=pessoa, usuario=usuario["nome"], criar_regra=True,
                     )
@@ -131,15 +131,25 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
                     # caminho chegar aqui
                     st.error(str(recusa))
                     return
-                st.session_state["msg_classificacao"] = (
-                    f"Salvo. O sistema vai reconhecer "
-                    f"“{sem_marcacao(item['descricao'][:40])}” sozinho "
-                    "na próxima importação."
-                    if virou_regra else
-                    "Salvo — só este lançamento. A descrição diz o meio de pagamento "
-                    "(PIX, TED, débito automático) e não o estabelecimento: guardá-la "
-                    "como regra faria todo lançamento parecido herdar esta classificação."
-                )
+                if not feito["virou_regra"]:
+                    recado = (
+                        "Salvo — só este lançamento. A descrição diz o meio de pagamento "
+                        "(PIX, TED, débito automático) e não o estabelecimento: guardá-la "
+                        "como regra faria todo lançamento parecido herdar esta classificação."
+                    )
+                elif feito["na_fila"] > 1:
+                    recado = (
+                        f"Salvo, e mais {feito['na_fila'] - 1} lançamento(s) que estavam na "
+                        f"fila saíram junto: “{sem_marcacao(item['descricao'][:40])}” agora é "
+                        "memória, aqui e nas próximas importações."
+                    )
+                else:
+                    recado = (
+                        f"Salvo. O sistema vai reconhecer "
+                        f"“{sem_marcacao(item['descricao'][:40])}” sozinho "
+                        "na próxima importação."
+                    )
+                st.session_state["msg_classificacao"] = recado
                 st.rerun()
 
 
