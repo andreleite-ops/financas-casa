@@ -13,6 +13,8 @@ próprio extrato imprime, e o saldo antes e depois.
 
 from __future__ import annotations
 
+from datetime import date
+
 import sqlalchemy as sa
 
 from core import db, repo
@@ -180,3 +182,66 @@ def test_nome_da_conta_irma_leva_a_agencia():
 
     conta = {"nome": "Itaú C/C", "tipo": "corrente", "titular": "Rô"}
     assert upload.nome_para_agencia(conta, "0660") == "Itaú C/C ag. 0660"
+
+
+# ---------------------------------------------------------------------------
+# o extrato "mês completo" do aplicativo: outro layout do mesmo banco
+# ---------------------------------------------------------------------------
+EXTRATO_DO_APP = """FULANA DE TAL CPF: 000.000.000-00 agência: 8839 conta: 20252-3
+saldo em conta Limite da Conta utilizado Limite da Conta disponível
+R$ 804,41 R$ 0,00 R$ 5.000,00
+extrato conta corrente
+lançamentos
+período de visualização: mês completo - 01/09/2026 a 30/09/2026 emitido em: 02/10/2026 11:41
+data lançamentos valor (R$) saldo (R$)
+31/08/2026 SALDO ANTERIOR -2.235,05
+02/09/2026 SALDO TOTAL DISPONIVEL DIA -2.251,19
+02/09/2026 IOF -16,14
+08/09/2026 PIX TRANSF APARECI07/09 500,00
+08/09/2026 DA CLARO S.A. 15849 -375,02
+15/09/2026 TAR PACOTE ITAU AGO/26 -16,10
+22/09/2026 PIX TRANSF CAMILA 22/09 1.120,00
+29/09/2026 SALDO TOTAL DISPONIVEL DIA 165,99
+"""
+
+
+def test_le_o_extrato_do_aplicativo_com_data_cheia_e_sinal_na_frente():
+    """O mesmo banco, outro layout: data com ano e o traço de débito ANTES do
+    número. O leitor não reconhecia linha nenhuma, e a tela dizia "não
+    encontrei nenhum lançamento" sobre um arquivo cheio deles."""
+    lancamentos, _ = it.extrair_linhas(EXTRATO_DO_APP)
+
+    assert [l.descricao for l in lancamentos] == [
+        "IOF", "PIX TRANSF APARECI", "DA CLARO S.A. 15849",
+        "TAR PACOTE ITAU AGO/26", "PIX TRANSF CAMILA",
+    ], "as linhas de saldo do dia não são lançamento"
+    assert [l.valor_centavos for l in lancamentos] == [
+        -1_614, 50_000, -37_502, -1_610, 112_000,
+    ]
+    assert lancamentos[0].data == date(2026, 9, 2)
+    assert lancamentos[-1].data == date(2026, 9, 22)
+
+
+def test_o_cabecalho_do_aplicativo_tambem_diz_de_que_conta_e():
+    """Sem reconhecer este cabeçalho, a conferência de conta ficava cega
+    justamente no arquivo novo: dava para enviar o extrato de uma conta na
+    outra sem um aviso sequer."""
+    ident = it.identificacao(EXTRATO_DO_APP)
+
+    assert ident == {"agencia": "8839", "conta": "20252-3", "competencia": "2026-09"}
+    assert it.conta_bate(ident, "8839") is True
+    assert it.conta_bate(ident, "0660") is False
+
+
+def test_o_layout_antigo_continua_lido():
+    """A régua de sempre: o extrato mensal em PDF, com o traço no fim."""
+    antigo = """extrato mensal ag 8839 cc 20252-3 ago 2026
+saldo anterior 1.439,31-
+03/08 PIX TRANSF FULANO03/08 840,00
+04/08 PAGTO CONTA 320,50-
+saldo em c/c 2.235,05-
+"""
+    lancamentos, _ = it.extrair_linhas(antigo)
+    assert [(l.descricao, l.valor_centavos) for l in lancamentos] == [
+        ("PIX TRANSF FULANO", 84_000), ("PAGTO CONTA", -32_050),
+    ]

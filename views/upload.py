@@ -427,7 +427,7 @@ def _aba_enviar(engine, usuario: dict) -> None:
             help="Muitos bancos protegem o extrato. Costuma ser o CPF, a data de "
                  "nascimento ou os primeiros dígitos do documento.",
         ) or None
-        _diagnostico_pdf(engine, conteudo, senha, competencia, conta)
+        _diagnostico_pdf(engine, conteudo, senha, competencia, conta, parser)
 
     if st.button("Processar arquivo", type="primary"):
         try:
@@ -504,7 +504,8 @@ def _pdf_e_desta_conta(engine, conta, texto: str | None, *, bloquear: bool) -> b
         return not bloquear
     st.info(
         f"Este extrato é da agência **{ident['agencia']}**, conta **{ident['conta']}** "
-        f"({ident['competencia']}). A conta **{conta['nome']}** ainda não tem agência no "
+        + (f" ({ident['competencia']})" if ident.get("competencia") else "")
+        + f". A conta **{conta['nome']}** ainda não tem agência no "
         "cadastro, então não dá para saber se é ela mesma.",
         icon="🏦",
     )
@@ -590,7 +591,8 @@ def _conferencia_do_extrato(parser, texto, lancamentos) -> list[str]:
     ]
 
 
-def _diagnostico_pdf(engine, conteudo: bytes, senha, competencia, conta) -> None:
+def _diagnostico_pdf(engine, conteudo: bytes, senha, competencia, conta,
+                     parser: str) -> None:
     """Mostra o que o leitor entendeu do PDF antes de gravar qualquer coisa.
 
     Um leitor que devolve zero lançamentos e mais nada não deixa ninguém
@@ -616,13 +618,29 @@ def _diagnostico_pdf(engine, conteudo: bytes, senha, competencia, conta) -> None
     # no menu, não depois de gravar
     _pdf_e_desta_conta(engine, conta, _texto_se_pdf("x.pdf", conteudo, senha), bloquear=False)
 
-    lidos = len(diag["lancamentos"])
+    # a contagem da prévia tem de sair do MESMO leitor que vai gravar. O
+    # diagnóstico genérico serve para mostrar o que ficou de fora, mas contar
+    # por ele dizia "reconheci 62 lançamentos" e, no clique seguinte, "não
+    # encontrei nenhum lançamento no arquivo" — sobre o mesmo PDF
+    try:
+        do_leitor = instituicoes.ler_arquivo(
+            parser, conteudo, "previa.pdf", competencia=competencia,
+            tipo_conta=conta["tipo"], senha=senha,
+        )
+    except ErroDeLeitura:
+        do_leitor = []
+    lidos = len(do_leitor)
     if lidos:
         st.success(f"Reconheci **{lidos} lançamentos** em {diag['linhas_no_pdf']} linhas de texto.")
     else:
         st.error(
-            f"**Nenhum lançamento reconhecido** em {diag['linhas_no_pdf']} linhas. "
-            "O layout deste banco ainda não é conhecido.",
+            f"**Nenhum lançamento reconhecido** em {diag['linhas_no_pdf']} linhas "
+            f"pelo leitor **{parser}**, o desta conta. "
+            + ("O leitor genérico achou "
+               f"{len(diag['lancamentos'])} linhas parecidas com lançamento, então o PDF "
+               "tem texto: é o layout deste banco que mudou."
+               if diag["lancamentos"] else
+               "O layout deste banco ainda não é conhecido."),
             icon="🔍",
         )
 

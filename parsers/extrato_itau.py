@@ -41,11 +41,18 @@ _VALOR = re.compile(rf"({_MOEDA})\s*(-?)")
 # descrição com número decimal dentro ("COMPRA 12,50 UN") fazia o leitor pegar
 # o 12,50 como valor do lançamento — e o sinal junto, o que trocava o lado.
 # Aqui casam o valor e, quando existe, o saldo corrido logo depois dele.
+# O sinal de débito aparece dos dois lados conforme o extrato: o mensal em PDF
+# escreve "1.439,31-", com o traço no fim, e o "mês completo" do aplicativo
+# escreve "-16,14", com o traço na frente. Ler só um dos dois fazia o segundo
+# extrato não devolver lançamento nenhum — o leitor não reconhecia a linha, e a
+# tela dizia "não encontrei nenhum lançamento" sobre um arquivo cheio deles.
 _VALORES_NO_FIM = re.compile(
-    rf"(?P<v1>{_MOEDA})\s*(?P<s1>-?)(?:\s+(?P<v2>{_MOEDA})\s*(?P<s2>-?))?\s*$"
+    rf"(?P<n1>-?)(?P<v1>{_MOEDA})\s*(?P<s1>-?)"
+    rf"(?:\s+(?P<n2>-?)(?P<v2>{_MOEDA})\s*(?P<s2>-?))?\s*$"
 )
 
-_DATA_INICIO = re.compile(r"^(\d{2}/\d{2})\s+(.*)$")
+# a data vem "03/08" no extrato mensal e "03/08/2026" no do aplicativo
+_DATA_INICIO = re.compile(r"^(\d{2}/\d{2}(?:/\d{2,4})?)\s+(.*)$")
 
 # A coluna de legendas do PDF ("A = agendamento", "P = poupança automática",
 # "Para demais siglas, consulte as Notas") se mistura à coluna da
@@ -98,8 +105,13 @@ _RENDIMENTO = re.compile(r"REND\s*PAGO", re.IGNORECASE)
 # busca em vez de casar do começo: a segunda coluna do PDF se mistura à
 # primeira, e a linha chega como "P = poupança automática SALDO APLIC AUT MAIS
 # 319,04" — o ruído está lá, só não está no início.
+# "SALDO TOTAL DISPONIVEL DIA" é a linha de saldo do extrato do aplicativo:
+# ela tem data, descrição e valor, e entraria como lançamento — somando o
+# saldo de cada dia ao mês. O acento vem corrompido em alguns PDFs, então a
+# regra para em "SALDO TOTAL".
 _RUIDO = re.compile(
-    r"(SALDO ANTERIOR|SALDO EM |SALDO FINAL|SALDO DO DIA|TOTALIZADOR|SUBTOTAL)",
+    r"(SALDO ANTERIOR|SALDO EM |SALDO FINAL|SALDO DO DIA|SALDO TOTAL"
+    r"|TOTALIZADOR|SUBTOTAL)",
     re.IGNORECASE,
 )
 
@@ -148,6 +160,29 @@ _CABECALHO = re.compile(
 )
 
 
+# O mesmo banco escreve o cabeçalho de dois jeitos. O extrato mensal em PDF diz
+# "extrato mensal ag 8839 cc 20252-3 set 2026"; o "mês completo" do aplicativo
+# escreve o nome do titular e, na mesma linha, "agência: 8839 conta: 20252-3",
+# com o período logo abaixo. Sem a segunda forma, a conferência de conta ficava
+# cega justamente no arquivo novo: dava para enviar o extrato de uma conta na
+# outra sem um aviso sequer.
+_CABECALHO_APP = re.compile(
+    r"ag[eê]ncia:?\s*(?P<agencia>\d{3,5})\s+conta:?\s*(?P<conta>\d[\d.\-]{2,})",
+    re.IGNORECASE,
+)
+_PERIODO_APP = re.compile(
+    r"(?P<d1>\d{2})/(?P<m1>\d{2})/(?P<a1>\d{4})\s+a\s+\d{2}/(?P<m2>\d{2})/(?P<a2>\d{4})"
+)
+
+
+def _competencia_do_periodo(texto: str) -> str | None:
+    """O mês do extrato do aplicativo, lido da linha de período."""
+    achado = _PERIODO_APP.search(texto)
+    if not achado:
+        return None
+    return f"{achado.group('a1')}-{achado.group('m1')}"
+
+
 def identificacao(texto: str) -> dict | None:
     """De que conta e de que mês é este extrato, pelo próprio cabeçalho.
 
@@ -158,12 +193,19 @@ def identificacao(texto: str) -> dict | None:
     gravar.
     """
     achado = _CABECALHO.search(texto)
-    if not achado:
+    if achado:
+        return {
+            "agencia": achado.group("agencia"),
+            "conta": achado.group("conta"),
+            "competencia": f"{achado.group('ano')}-{_MESES[achado.group('mes').lower()]:02d}",
+        }
+    pelo_app = _CABECALHO_APP.search(texto)
+    if not pelo_app:
         return None
     return {
-        "agencia": achado.group("agencia"),
-        "conta": achado.group("conta"),
-        "competencia": f"{achado.group('ano')}-{_MESES[achado.group('mes').lower()]:02d}",
+        "agencia": pelo_app.group("agencia"),
+        "conta": pelo_app.group("conta"),
+        "competencia": _competencia_do_periodo(texto),
     }
 
 
@@ -297,8 +339,9 @@ def extrair_linhas(
         except (ValueError, ArithmeticError):
             ignoradas.append(crua)
             continue
-        # o traço no fim do número é o que diz débito; sem ele, é crédito
-        valor = -centavos if no_fim.group("s1") == "-" else centavos
+        # o traço diz débito, venha ele antes ou depois do número
+        e_debito = "-" in (no_fim.group("n1"), no_fim.group("s1"))
+        valor = -centavos if e_debito else centavos
 
         lancamentos.append(
             Lancamento(
