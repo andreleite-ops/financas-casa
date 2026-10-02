@@ -175,3 +175,31 @@ def test_duplicata_provavel_uploads_diferentes(engine):
     provaveis = [p for p in fila if p["tipo"] == "provavel"]
     assert len(provaveis) == 1
     assert "dia" in provaveis[0]["motivo"]
+
+
+def test_manter_em_lote_devolve_todas_as_exatas(engine):
+    """O avesso do "excluir as exatas", e faltava: a fatura repete a parcela
+    com a data da compra original todo mês, e doze linhas dessas são doze
+    cobranças de verdade. Resolver uma a uma eram doze cliques."""
+    conta_id = _conta_id(engine)
+    for arquivo in ("set.xlsx", "out.xlsx"):
+        repo.importar(
+            engine, conta_id=conta_id, lancamentos=_lote_basico(), arquivo=arquivo,
+            usuario="André", usar_ia=False,
+        )
+    with engine.connect() as conn:
+        pendentes = dedup.pendentes(conn)
+    exatas = [p for p in pendentes if p["tipo"] == "exata"]
+    assert exatas, "o cenário precisa de duplicidades exatas"
+
+    with engine.begin() as conn:
+        resolvidas = dedup.resolver_em_lote(conn, "exata", "manter", "André")
+
+    assert resolvidas == len(exatas)
+    with engine.connect() as conn:
+        assert [p for p in dedup.pendentes(conn) if p["tipo"] == "exata"] == []
+        inativas = conn.execute(
+            sa.select(sa.func.count()).select_from(db.transacoes)
+            .where(db.transacoes.c.ativo == sa.false())
+        ).scalar_one()
+    assert inativas == 0, "mantidas voltam a contar"

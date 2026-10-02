@@ -996,18 +996,34 @@ def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:
         f"As {len(provaveis)} **prováveis** continuam contando: são só suspeitas, e tirá-las "
         "sozinho faria o total do mês ficar menor que o do arquivo sem nada explicar."
     )
-    b1, b2, _ = st.columns([1.5, 1.5, 1])
+    if recado := st.session_state.pop("msg_duplicidades", None):
+        st.success(recado, icon="✅")
+    b1, b2, b3 = st.columns([1.5, 1.5, 1.4])
     if exatas and b1.button(f"Excluir as {len(exatas)} duplicatas exatas", type="primary",
                             width="stretch"):
         with engine.begin() as conn:
             total = dedup.resolver_em_lote(conn, "exata", "excluir", usuario["nome"])
-        st.success(f"{total} duplicata(s) excluída(s).")
+        st.session_state["msg_duplicidades"] = f"{total} duplicata(s) excluída(s)."
+        st.rerun()
+    # o avesso do botão acima, e faltava: a fatura de cartão repete a parcela
+    # com a data da compra original em todo mês, e doze linhas dessas são doze
+    # cobranças de verdade. Resolver uma a uma eram doze cliques
+    if exatas and b3.button(f"Manter as {len(exatas)} exatas", width="stretch",
+                            help="Use quando forem cobranças distintas que só se parecem — "
+                                 "parcelas da mesma compra, por exemplo. Elas voltam a contar."):
+        with engine.begin() as conn:
+            total = dedup.resolver_em_lote(conn, "exata", "manter", usuario["nome"])
+        st.session_state["msg_duplicidades"] = (
+            f"{total} lançamento(s) mantido(s): voltaram a contar nos relatórios."
+        )
         st.rerun()
     if provaveis and b2.button(f"Confirmar que as {len(provaveis)} prováveis são gastos distintos",
                                width="stretch"):
         with engine.begin() as conn:
             total = dedup.resolver_em_lote(conn, "provavel", "manter", usuario["nome"])
-        st.success(f"{total} lançamento(s) confirmados. Eles já contavam; agora saem da fila.")
+        st.session_state["msg_duplicidades"] = (
+            f"{total} lançamento(s) confirmados. Eles já contavam; agora saem da fila."
+        )
         st.rerun()
 
     if provaveis:
@@ -1031,13 +1047,24 @@ def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:
                 unsafe_allow_html=True,
             )
             b1, b2 = c2.columns(2)
+            # a decisão precisa dizer que aconteceu: a linha some da lista, e
+            # uma lista com onze itens parece igual a uma com doze
             if b1.button("Excluir", key=f"del{linha['dup_id']}", width="stretch"):
                 with engine.begin() as conn:
                     dedup.resolver(conn, linha["dup_id"], "excluir", usuario["nome"])
+                st.session_state["msg_duplicidades"] = (
+                    f"Excluído: {linha['nova_data']:%d/%m/%Y} "
+                    f"{sem_marcacao(linha['nova_descricao'][:40])}."
+                )
                 st.rerun()
             if b2.button("Manter", key=f"keep{linha['dup_id']}", width="stretch"):
                 with engine.begin() as conn:
                     dedup.resolver(conn, linha["dup_id"], "manter", usuario["nome"])
+                st.session_state["msg_duplicidades"] = (
+                    f"Mantido e voltou a contar: {linha['nova_data']:%d/%m/%Y} "
+                    f"{sem_marcacao(linha['nova_descricao'][:40])} "
+                    f"({fmt_brl(linha['nova_valor'])})."
+                )
                 st.rerun()
 
     if len(fila) > 60:
