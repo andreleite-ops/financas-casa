@@ -8,7 +8,7 @@ caminho generico ja da conta de ler os arquivos.
 
 from __future__ import annotations
 
-from .base import Lancamento, ajustar_ano_fatura
+from .base import ErroDeLeitura, Lancamento, ajustar_ano_fatura
 from . import pdf as leitor_pdf
 from . import extrato_bradesco as leitor_bradesco
 from . import extrato_itau as leitor_itau, fatura_nubank as leitor_nubank, tabular
@@ -149,6 +149,61 @@ ROTULOS = {
 }
 
 
+# quem sabe conferir o que foi lido contra o saldo impresso no proprio extrato
+ARBITROS = {"itau": leitor_itau, "bradesco": leitor_bradesco}
+
+
+def _fecha_pelo_saldo(modulo, texto: str, lancamentos: list[Lancamento]) -> bool | None:
+    """saldo inicial + entradas - saidas da o saldo final? None = nao da para saber."""
+    if modulo is None or not hasattr(modulo, "saldos_declarados"):
+        return None
+    saldos = modulo.saldos_declarados(texto)
+    if not saldos or not lancamentos:
+        return None
+    entradas = sum(l.valor_centavos for l in lancamentos if l.valor_centavos > 0)
+    saidas = -sum(l.valor_centavos for l in lancamentos if l.valor_centavos < 0)
+    return saldos[0] + entradas - saidas == saldos[1]
+
+
+def _leitura_de_emergencia(parser: str, conteudo: bytes, nome: str,
+                           competencia: str | None, kw: dict) -> list[Lancamento]:
+    """Quando o leitor do banco nao reconhece o arquivo, o leitor de todos tenta.
+
+    E o saldo do proprio extrato arbitra. O leitor generico acerta a data e o
+    valor de quase qualquer layout, mas erra o SENTIDO quando o banco marca so
+    o debito e deixa o credito limpo: todo PIX recebido viraria gasto. Entao
+    ele le das duas maneiras e fica com a que fecha com o saldo impresso.
+
+    Nenhuma fechando, nao importa nada: numero com o sinal trocado e pior do
+    que numero nenhum — some como gasto no mes e ninguem procura o que nao
+    sabe que existe. Sem saldo para conferir (fatura de cartao, por exemplo),
+    vale a leitura padrao, que e o que havia antes de existir leitor do banco.
+    """
+    senha = kw.get("senha")
+    try:
+        texto = leitor_pdf.texto_do_pdf(conteudo, senha=senha)
+    except ErroDeLeitura:
+        texto = ""
+    tentativas = []
+    for convencao in ("despesa", "receita"):
+        try:
+            lidos = generico(conteudo, nome, competencia=competencia,
+                             sem_sinal=convencao, **kw)
+        except (ErroDeLeitura, TypeError):
+            continue
+        tentativas.append(lidos)
+    if not tentativas:
+        return []
+    arbitro = ARBITROS.get(parser)
+    conferidas = [(lidos, _fecha_pelo_saldo(arbitro, texto, lidos)) for lidos in tentativas]
+    for lidos, fecha in conferidas:
+        if fecha:
+            return lidos
+    if any(fecha is False for _, fecha in conferidas):
+        return []
+    return tentativas[0]
+
+
 def ler_arquivo(
     parser: str,
     conteudo: bytes,
@@ -170,6 +225,14 @@ def ler_arquivo(
     leitor = LEITORES.get(parser or "generico", generico)
     kw.setdefault("tudo_despesa", tipo_conta == "cartao")
     lancamentos = leitor(conteudo, nome_arquivo, competencia=competencia, **kw)
+    # O leitor do banco conhece o layout que ele já viu. Quando o banco muda o
+    # formato — e eles mudam, sem avisar —, o leitor específico não reconhece
+    # nada e o arquivo inteiro vira "não encontrei nenhum lançamento", com o
+    # PDF cheio deles na tela. O leitor genérico não sabe das manhas daquele
+    # banco, mas sabe a forma de uma linha de extrato, e salva o dia: é melhor
+    # importar com o leitor de todos do que não importar.
+    if not lancamentos and leitor is not generico:
+        lancamentos = _leitura_de_emergencia(parser, conteudo, nome_arquivo, competencia, kw)
     if tipo_conta == "cartao" and competencia:
         lancamentos = ajustar_ano_fatura(lancamentos, competencia)
     elif competencia:

@@ -57,11 +57,18 @@ ESTORNOS = re.compile(
     r"PAGAMENTO RECEBIDO|SALDO ANTERIOR|PAGAMENTO DE FATURA|CASHBACK|REEMBOLSO)\b"
 )
 
-# linhas de cabecalho/rodape que casam o padrao mas nao sao lancamento
+# linhas de cabecalho/rodape que casam o padrao mas nao sao lancamento.
+# "SALDO TOTAL DISPONIVEL DIA" e a linha de saldo do extrato do Itau pelo
+# aplicativo: tem data, descricao e valor, e entraria como lancamento —
+# somando ao mes o saldo de cada dia.
 RUIDO = re.compile(
-    r"\b(TOTAL DA FATURA|TOTAL A PAGAR|SALDO ANTERIOR|LIMITE|VENCIMENTO|SUBTOTAL|"
-    r"TOTAL DE COMPRAS|SALDO DO DIA|SALDO EM|SALDO ATUAL|TOTAL GERAL|VALOR TOTAL|"
-    r"PROXIMA FATURA|MELHOR DIA)\b"
+    # "LIMITE" sozinho jogava fora "JUROS LIMITE DA CONTA", que é cobrança de
+    # verdade — o extrato deixava de fechar por R$ 152,69 e ninguém sabia por
+    # quê. O que é cabeçalho são os limites do cartão, por extenso.
+    r"\b(TOTAL DA FATURA|TOTAL A PAGAR|SALDO ANTERIOR|LIMITE DE CREDITO|"
+    r"LIMITE DISPONIVEL|LIMITE TOTAL|LIMITE UTILIZADO|VENCIMENTO|SUBTOTAL|"
+    r"TOTAL DE COMPRAS|SALDO DO DIA|SALDO EM|SALDO ATUAL|SALDO TOTAL|SALDO DISPONIVEL|"
+    r"TOTAL GERAL|VALOR TOTAL|PROXIMA FATURA|MELHOR DIA)\b"
 )
 
 
@@ -95,8 +102,17 @@ def extrair_linhas(
     ano_referencia: int | None = None,
     tudo_despesa: bool = True,
     origem: str = "extrato",
+    sem_sinal: str = "despesa",
 ) -> tuple[list[Lancamento], list[str]]:
-    """Reconhece os lancamentos no texto ja extraido do PDF."""
+    """Reconhece os lancamentos no texto ja extraido do PDF.
+
+    `sem_sinal` decide o que fazer com a linha que nao traz marca D/C, nem
+    sinal impresso, nem palavra que entregue o sentido. Num extrato ha banco
+    que so marca o debito e deixa o credito limpo — ali "sem sinal" e entrada,
+    e supor saida transformava cada PIX recebido em gasto. Quem sabe qual e o
+    caso e quem tem o saldo do extrato na mao para conferir (instituicoes.py);
+    aqui so existe a chave.
+    """
     ano_ref = ano_referencia or (int(competencia[:4]) if competencia else date.today().year)
     lancamentos: list[Lancamento] = []
     ignoradas: list[str] = []
@@ -140,10 +156,12 @@ def extrair_linhas(
         elif tudo_despesa:
             # fatura de cartão: tudo é gasto, menos estorno e pagamento
             valor = centavos if ESTORNOS.search(limpa) else -centavos
+        elif CREDITOS.search(limpa):
+            valor = centavos
         else:
             # extrato de conta: os dois sentidos existem e o arquivo não disse
-            # qual é. O texto da linha é o que sobra para decidir.
-            valor = centavos if CREDITOS.search(limpa) else -centavos
+            # qual é. Sobra a convenção, e ela é do arquivo, não nossa.
+            valor = centavos if sem_sinal == "receita" else -centavos
 
         lancamentos.append(
             Lancamento(

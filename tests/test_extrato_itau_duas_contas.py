@@ -201,7 +201,7 @@ data lançamentos valor (R$) saldo (R$)
 08/09/2026 DA CLARO S.A. 15849 -375,02
 15/09/2026 TAR PACOTE ITAU AGO/26 -16,10
 22/09/2026 PIX TRANSF CAMILA 22/09 1.120,00
-29/09/2026 SALDO TOTAL DISPONIVEL DIA 165,99
+29/09/2026 SALDO TOTAL DISPONIVEL DIA -1.022,31
 """
 
 
@@ -244,4 +244,84 @@ saldo em c/c 2.235,05-
     lancamentos, _ = it.extrair_linhas(antigo)
     assert [(l.descricao, l.valor_centavos) for l in lancamentos] == [
         ("PIX TRANSF FULANO", 84_000), ("PAGTO CONTA", -32_050),
+    ]
+
+
+def test_o_saldo_fecha_tambem_no_extrato_do_aplicativo():
+    """A régua que vale: saldo anterior + entradas − saídas = saldo final. No
+    extrato do aplicativo não há quadro de resumo, e sem ensinar onde estão os
+    saldos o arquivo entraria sem conferência nenhuma — que é como R$ 2.240,00
+    de pacientes sumiram de um mês uma vez, sem nada acusar."""
+    lancamentos, _ = it.extrair_linhas(EXTRATO_DO_APP)
+
+    assert it.saldos_declarados(EXTRATO_DO_APP) == (-223_505, -102_231)
+
+    conferencia = it.conferir(EXTRATO_DO_APP, lancamentos)
+    assert conferencia["saldo_fecha"] is True
+    assert conferencia["confere"] is True
+    assert conferencia["entradas"] == 162_000
+    assert conferencia["saidas"] == 40_726
+
+
+def test_uma_linha_perdida_derruba_a_conferencia_do_aplicativo():
+    """A régua só serve se acusar: tirando um lançamento, o saldo não fecha."""
+    lancamentos, _ = it.extrair_linhas(EXTRATO_DO_APP)
+
+    conferencia = it.conferir(EXTRATO_DO_APP, lancamentos[:-1])
+
+    assert conferencia["saldo_fecha"] is False
+    assert conferencia["confere"] is False
+
+
+# ---------------------------------------------------------------------------
+# o leitor de emergência: quando o banco muda o layout de novo
+# ---------------------------------------------------------------------------
+def test_quando_o_leitor_do_banco_nao_reconhece_o_de_todos_assume(monkeypatch):
+    """Banco muda formato sem avisar. O leitor genérico acerta data e valor de
+    quase qualquer layout — e o saldo impresso no próprio extrato decide qual
+    convenção de sinal está certa, porque ele erra o SENTIDO quando o banco
+    marca só o débito."""
+    from parsers import instituicoes
+
+    pdf_falso = EXTRATO_DO_APP.encode()
+    monkeypatch.setitem(instituicoes.LEITORES, "itau", lambda *a, **k: [])
+    monkeypatch.setattr(instituicoes.leitor_pdf, "texto_do_pdf",
+                        lambda conteudo, senha=None: conteudo.decode())
+
+    lidos = instituicoes.ler_arquivo("itau", pdf_falso, "e.pdf", tipo_conta="corrente")
+
+    assert len(lidos) == 5
+    entradas = sum(l.valor_centavos for l in lidos if l.valor_centavos > 0)
+    saidas = -sum(l.valor_centavos for l in lidos if l.valor_centavos < 0)
+    assert (entradas, saidas) == (162_000, 40_726), "o sentido saiu certo"
+    assert -223_505 + entradas - saidas == -102_231, "fecha com o saldo impresso"
+
+
+def test_sem_fechar_o_saldo_a_emergencia_nao_importa_nada(monkeypatch):
+    """Número com o sinal trocado é pior que número nenhum: some como gasto no
+    mês e ninguém procura o que não sabe que existe."""
+    from parsers import instituicoes
+
+    # o mesmo extrato, com o saldo final adulterado: nenhuma convenção fecha
+    torto = EXTRATO_DO_APP.replace("-1.022,31", "-9.999,99").encode()
+    monkeypatch.setitem(instituicoes.LEITORES, "itau", lambda *a, **k: [])
+    monkeypatch.setattr(instituicoes.leitor_pdf, "texto_do_pdf",
+                        lambda conteudo, senha=None: conteudo.decode())
+
+    assert instituicoes.ler_arquivo("itau", torto, "e.pdf", tipo_conta="corrente") == []
+
+
+def test_juros_do_limite_da_conta_e_cobranca_e_nao_cabecalho():
+    """"LIMITE" sozinho jogava fora "JUROS LIMITE DA CONTA" — e o extrato
+    deixava de fechar por aquele valor, sem nada dizer por quê."""
+    from parsers import pdf as generico
+
+    lidos, _ = generico.extrair_linhas(
+        "10/09/2026 JUROS LIMITE DA CONTA -152,69\n"
+        "limite de credito 5.000,00\n",
+        tudo_despesa=False,
+    )
+
+    assert [(l.descricao, l.valor_centavos) for l in lidos] == [
+        ("JUROS LIMITE DA CONTA", -15_269),
     ]

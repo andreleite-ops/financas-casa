@@ -239,6 +239,36 @@ _SALDOS = re.compile(
 )
 
 
+# No extrato do aplicativo não há quadro de resumo: o saldo anterior é a
+# primeira linha da movimentação e o saldo do dia aparece a cada dia com
+# movimento. O último deles é o saldo final — e com os dois a régua do saldo
+# funciona neste layout também. Sem ela, o arquivo novo entraria sem nenhuma
+# conferência, que é como R$ 2.240,00 de pacientes sumiram de um mês uma vez.
+_SALDO_ANTERIOR_APP = re.compile(
+    rf"SALDO ANTERIOR\s+(?P<sinal>-?)(?P<valor>{_MOEDA})", re.IGNORECASE
+)
+_SALDO_DO_DIA_APP = re.compile(
+    rf"SALDO TOTAL[^\n]*?(?P<sinal>-?)(?P<valor>{_MOEDA})", re.IGNORECASE
+)
+
+
+def _com_sinal(achado) -> int:
+    valor = para_centavos(achado.group("valor"))
+    return -valor if achado.group("sinal") == "-" else valor
+
+
+def _saldos_do_aplicativo(texto: str) -> tuple[int, int] | None:
+    """(saldo anterior, último saldo do dia) no extrato do aplicativo."""
+    anterior = _SALDO_ANTERIOR_APP.search(texto)
+    do_dia = list(_SALDO_DO_DIA_APP.finditer(texto))
+    if not anterior or not do_dia:
+        return None
+    try:
+        return _com_sinal(anterior), _com_sinal(do_dia[-1])
+    except (ValueError, ArithmeticError):
+        return None
+
+
 def saldos_declarados(texto: str) -> tuple[int, int] | None:
     """(saldo anterior, saldo final) em centavos, do quadro do cabeçalho.
 
@@ -249,7 +279,7 @@ def saldos_declarados(texto: str) -> tuple[int, int] | None:
     """
     achado = _SALDOS.search(texto)
     if not achado:
-        return None
+        return _saldos_do_aplicativo(texto)
     try:
         anterior = para_centavos(achado.group(1)) * (-1 if achado.group(2) == "-" else 1)
         final = para_centavos(achado.group(3)) * (-1 if achado.group(4) == "-" else 1)
