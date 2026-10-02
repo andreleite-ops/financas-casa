@@ -27,12 +27,15 @@ def _reais(centavos: int) -> str:
     return fmt_brl(centavos).replace("$", r"\$")
 
 
-PAPEIS = ["data", "competencia", "descricao", "valor", "entrada", "saida", "categoria", "subcategoria",
+PAPEIS = ["data", "competencia", "descricao", "valor", "entrada", "saida", "categoria", "subcategoria", "parcela",
           "pessoa", "tipo"]
 ROTULOS_PAPEL = {
     "data": "Data (obrigatória)", "competencia": "Mês de referência", "descricao": "Descrição", "valor": "Valor único",
     "entrada": "Entrada / crédito", "saida": "Saída / débito",
     "categoria": "Categoria (se a planilha já tiver)", "subcategoria": "Subcategoria",
+    # sem a parcela na descrição, a parcela 6 de 10 é idêntica à 5 de 10 — mesma
+    # data de compra, mesmo valor, mesmo lugar — e entra como duplicata exata
+    "parcela": "Parcela (ex.: 3 de 10)",
     "pessoa": "Pessoa", "tipo": "Tipo (D/C)",
 }
 

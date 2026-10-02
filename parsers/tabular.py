@@ -46,6 +46,13 @@ SINONIMOS = {
     # lancamento — o INSS pago em 10/02 pode ser competencia de janeiro
     "competencia": ["mes ano", "mesano", "competencia", "mes referencia",
                     "referencia", "mes de referencia", "mes"],
+    # qual parcela e esta. A fatura do cartao imprime a compra parcelada com a
+    # data da compra ORIGINAL em toda fatura ate acabar: mesma data, mesmo
+    # valor, mesmo estabelecimento, mes apos mes. Sem a parcela na descricao,
+    # a parcela 6 de 10 e identica a 5 de 10 e entra como duplicata exata —
+    # some do relatorio, e o mes perde uma despesa real.
+    "parcela": ["parcela", "parcelas", "parcelamento", "installment", "nparcela",
+                "numero da parcela"],
 }
 
 
@@ -480,6 +487,31 @@ def _sinal_da_linha(linha, mapa, centavos: int) -> int:
     return centavos
 
 
+# "3 de 10", "3/10", "03 de 10": a coluna de parcela escrita como cada banco
+# escreve. O que não é parcela ("-", "à vista", "única") fica de fora.
+_PARCELA_NA_COLUNA = re.compile(r"(?<!\d)(\d{1,2})\s*(?:de|/)\s*(\d{1,2})(?!\d)", re.IGNORECASE)
+
+
+def _com_a_parcela(descricao: str, linha, mapa: dict) -> str:
+    """Acrescenta "Parcela 6/10" à descrição quando o arquivo diz qual é.
+
+    É o que distingue uma parcela da seguinte. Sem isso, a fatura de outubro
+    trazia doze linhas idênticas às de setembro — mesma data de compra, mesmo
+    valor, mesmo lugar — e cada uma era marcada como duplicata exata da
+    anterior. São doze cobranças de verdade, uma em cada fatura.
+    """
+    if not mapa.get("parcela"):
+        return descricao
+    bruto = str(linha.get(mapa["parcela"], "") or "").strip()
+    achado = _PARCELA_NA_COLUNA.search(bruto)
+    if not achado:
+        return descricao
+    atual, total = int(achado.group(1)), int(achado.group(2))
+    if total <= 1:
+        return descricao
+    return f"{descricao} - Parcela {atual}/{total}"
+
+
 def extrair(
     df: pd.DataFrame,
     mapa: dict[str, str | None],
@@ -547,6 +579,7 @@ def extrair(
         if not descricao:
             descricao = "SEM DESCRICAO"
             avisos.append(f"linha {pos + 2}: sem descricao")
+        descricao = _com_a_parcela(descricao, linha, mapa)
 
         natureza = _natureza_da_linha(linha, mapa)
         if inverter_sinal:

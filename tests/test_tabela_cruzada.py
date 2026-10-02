@@ -124,3 +124,55 @@ def test_matriz_de_despesas_fecha_com_o_card_do_topo(engine, conn):
     assert analytics.SEM_CATEGORIA in categorias                  # o pendente aparece
     assert analytics.CATEGORIA_TRANSFERENCIA not in categorias    # a transferência não
     assert "Trabalho" not in categorias                           # receita nunca entrou
+
+
+# ---------------------------------------------------------------------------
+# parcela: a mesma compra aparece em toda fatura até acabar
+# ---------------------------------------------------------------------------
+def test_a_parcela_entra_na_descricao_e_separa_uma_da_outra():
+    """A fatura do cartão imprime a compra parcelada com a data da compra
+    ORIGINAL, mês após mês: mesma data, mesmo valor, mesmo estabelecimento. Sem
+    a parcela na descrição, a de outubro era "duplicata exata" da de setembro —
+    sumia do relatório, e o mês perdia uma despesa de verdade."""
+    import pandas as pd
+
+    from parsers import tabular
+
+    setembro = pd.DataFrame({
+        "Data": ["07/04/2026"], "Estabelecimento": ["EINSTEIN MORUMBI"],
+        "Valor": ["576,40"], "Parcela": ["5 de 10"],
+    })
+    outubro = setembro.copy()
+    outubro["Parcela"] = ["6 de 10"]
+
+    mapa = tabular.sugerir_mapeamento(setembro.columns, setembro)
+    assert mapa["parcela"] == "Parcela"
+
+    um, _ = tabular.extrair(setembro, mapa, competencia="2026-09")
+    dois, _ = tabular.extrair(outubro, mapa, competencia="2026-10")
+
+    assert um[0].descricao == "EINSTEIN MORUMBI - Parcela 5/10"
+    assert dois[0].descricao == "EINSTEIN MORUMBI - Parcela 6/10"
+    assert um[0].descricao != dois[0].descricao, "não são a mesma cobrança"
+    # e a memória de classificação continua sendo a mesma loja
+    from core.texto import chave_estabelecimento
+    assert chave_estabelecimento(um[0].descricao) == chave_estabelecimento(dois[0].descricao)
+
+
+def test_compra_a_vista_nao_ganha_rotulo_de_parcela():
+    """O que a coluna traz como "-", "única" ou "1 de 1" não é parcelamento."""
+    import pandas as pd
+
+    from parsers import tabular
+
+    df = pd.DataFrame({
+        "Data": ["02/08/2026", "03/08/2026", "04/08/2026"],
+        "Estabelecimento": ["PADARIA", "MERCADO", "FARMACIA"],
+        "Valor": ["21,89", "105,30", "70,29"],
+        "Parcela": ["-", "única", "1 de 1"],
+    })
+    mapa = tabular.sugerir_mapeamento(df.columns, df)
+
+    lidos, _ = tabular.extrair(df, mapa, competencia="2026-08")
+
+    assert [l.descricao for l in lidos] == ["PADARIA", "MERCADO", "FARMACIA"]
