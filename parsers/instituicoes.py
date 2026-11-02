@@ -130,6 +130,39 @@ def generico(conteudo: bytes, nome: str = "", **kw) -> list[Lancamento]:
     return _ler_tabular_ou_pdf(conteudo, nome, tudo_despesa=kw.pop("tudo_despesa", False), **kw)
 
 
+def generico_arbitrado(conteudo: bytes, nome: str = "", *, competencia=None,
+                       **kw) -> list[Lancamento]:
+    """O leitor de todos, com o saldo do extrato decidindo o sentido do valor.
+
+    Num extrato de conta corrente ha banco que marca so o debito e deixa o
+    credito limpo. Lendo "sem sinal = saida", todo PIX recebido vira gasto:
+    num extrato real isso deu entradas de R$ 0,41 no lugar de R$ 10.718,41.
+    O arquivo nao diz a convencao, mas o saldo impresso denuncia a errada.
+    """
+    tentativas = []
+    for convencao in ("despesa", "receita"):
+        try:
+            tentativas.append(generico(conteudo, nome, competencia=competencia,
+                                       sem_sinal=convencao, **kw))
+        except (ErroDeLeitura, TypeError):
+            continue
+    if not tentativas:
+        return []
+    try:
+        texto = leitor_pdf.texto_do_pdf(conteudo, senha=kw.get("senha"))
+    except ErroDeLeitura:
+        texto = ""
+    conferidas = [(lidos, _fecha_pelo_saldo(texto, lidos)) for lidos in tentativas]
+    for lidos, fecha in conferidas:
+        if fecha:
+            return lidos
+    # nenhuma fecha: o arquivo tem saldo e a leitura nao bate com ele. Entregar
+    # assim mesmo seria entregar numero errado
+    if any(fecha is False for _, fecha in conferidas):
+        return []
+    return tentativas[0]
+
+
 LEITORES = {
     "nubank": nubank,
     "xp": xp,
@@ -149,16 +182,26 @@ ROTULOS = {
 }
 
 
-# quem sabe conferir o que foi lido contra o saldo impresso no proprio extrato
-ARBITROS = {"itau": leitor_itau, "bradesco": leitor_bradesco}
+def _fecha_pelo_saldo(texto: str, lancamentos: list[Lancamento]) -> bool | None:
+    """O que foi lido bate com o saldo impresso? None = nao da para saber.
 
+    Duas reguas, da mais fina para a mais grossa. A fina e o saldo de cada
+    dia, que o extrato imprime linha a linha: ela pega ate dois erros de
+    sinal oposto, que no total do mes se anulam. A grossa e o mes inteiro,
+    para o extrato que so imprime saldo inicial e final.
 
-def _fecha_pelo_saldo(modulo, texto: str, lancamentos: list[Lancamento]) -> bool | None:
-    """saldo inicial + entradas - saidas da o saldo final? None = nao da para saber."""
-    if modulo is None or not hasattr(modulo, "saldos_declarados"):
+    Os padroes sao de texto, nao de banco — "SALDO ANTERIOR" e "SALDO
+    DISPONIVEL" sao como qualquer extrato brasileiro escreve —, e por isso a
+    regua serve tambem ao leitor generico, que nao sabe de que banco e o
+    arquivo que esta lendo.
+    """
+    if not texto or not lancamentos:
         return None
-    saldos = modulo.saldos_declarados(texto)
-    if not saldos or not lancamentos:
+    dia_a_dia = leitor_itau.conferir_dia_a_dia(texto, lancamentos)
+    if dia_a_dia is not None:
+        return dia_a_dia["dia"] is None
+    saldos = leitor_itau.saldos_declarados(texto)
+    if not saldos:
         return None
     entradas = sum(l.valor_centavos for l in lancamentos if l.valor_centavos > 0)
     saidas = -sum(l.valor_centavos for l in lancamentos if l.valor_centavos < 0)
@@ -194,8 +237,7 @@ def _leitura_de_emergencia(parser: str, conteudo: bytes, nome: str,
         tentativas.append(lidos)
     if not tentativas:
         return []
-    arbitro = ARBITROS.get(parser)
-    conferidas = [(lidos, _fecha_pelo_saldo(arbitro, texto, lidos)) for lidos in tentativas]
+    conferidas = [(lidos, _fecha_pelo_saldo(texto, lidos)) for lidos in tentativas]
     for lidos, fecha in conferidas:
         if fecha:
             return lidos
@@ -224,6 +266,11 @@ def ler_arquivo(
     """
     leitor = LEITORES.get(parser or "generico", generico)
     kw.setdefault("tudo_despesa", tipo_conta == "cartao")
+    # conta sem leitor proprio, extrato de conta corrente em PDF: o sentido do
+    # valor sai do saldo impresso, nao de um palpite
+    if (leitor is generico and tipo_conta == "corrente"
+            and not _e_planilha(nome_arquivo)):
+        leitor = generico_arbitrado
     lancamentos = leitor(conteudo, nome_arquivo, competencia=competencia, **kw)
     # O leitor do banco conhece o layout que ele já viu. Quando o banco muda o
     # formato — e eles mudam, sem avisar —, o leitor específico não reconhece

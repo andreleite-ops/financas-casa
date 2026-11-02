@@ -78,3 +78,50 @@ def test_parcela_de_ignora_fracao_invalida():
 
 def test_sem_acento_utilitario():
     assert sem_acento("São Paulo — Ação") == "Sao Paulo — Acao"
+
+
+# --------------------------------------------------------------------------
+# o que vai para a tela: markdown e HTML sao duas feridas diferentes
+# --------------------------------------------------------------------------
+def test_sem_marcacao_protege_markdown_e_html():
+    """"PCART*TAB*SAO PAULO" aparecia com TAB em italico, e um pagador
+    chamado "A<B LTDA" fazia o navegador engolir o resto do cartao."""
+    from core.texto import sem_marcacao
+
+    assert sem_marcacao("PCART*TAB*SP") == r"PCART\*TAB\*SP"
+    assert sem_marcacao("A<B LTDA") == "A&lt;B LTDA"
+    assert sem_marcacao("CASA & CIA") == "CASA &amp; CIA"
+    # o cifrao e o pior: um par deles vira formula e a tela come o meio
+    assert sem_marcacao("R$ 10 a R$ 20") == r"R\$ 10 a R\$ 20"
+
+
+def test_sem_marcacao_escapa_o_e_comercial_antes_do_resto():
+    """Escapar na ordem errada transforma "&" em "&amp;amp;" na tela."""
+    from core.texto import sem_marcacao
+
+    assert sem_marcacao("A & <B>") == "A &amp; &lt;B&gt;"
+
+
+def test_so_html_nao_mete_contrabarra_em_html_de_bloco():
+    """Dentro de uma <table> o Streamlit desliga o markdown: ali a contrabarra
+    que protegeria o asterisco apareceria na tela como contrabarra mesmo."""
+    from core.texto import so_html
+
+    assert so_html("PCART*TAB*SP") == "PCART*TAB*SP"
+    assert so_html("A<B & C") == "A&lt;B &amp; C"
+
+
+def test_so_html_fecha_a_porta_do_atributo():
+    """"Casa d'Alimentacao" dentro de title='...' fechava o atributo no
+    apostrofo, e o resto do nome virava atributo do elemento."""
+    from core.texto import so_html
+
+    assert so_html("Casa d'Alimentacao") == "Casa d&#39;Alimentacao"
+    assert so_html('Bar "do Ze"') == "Bar &quot;do Ze&quot;"
+
+
+def test_nenhum_dos_dois_quebra_com_vazio():
+    from core.texto import sem_marcacao, so_html
+
+    assert sem_marcacao(None) == ""
+    assert so_html(None) == ""

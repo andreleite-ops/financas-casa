@@ -116,7 +116,7 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                     f"{item['competencia']} &nbsp; {selo_pessoa(item['pessoa'])} &nbsp; "
                     f"{sem_marcacao(item['descricao'])} — "
                     f"**{fmt_brl_md(abs(item['valor_centavos']))}** "
-                    f"<span class='nota'>({destino})</span>"
+                    f"<span class='nota'>({sem_marcacao(destino)})</span>"
                 )
                 linha.markdown(
                     f"<span class='nota'><s>{texto}</s> · já veio no extrato</span>"

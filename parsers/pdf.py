@@ -57,25 +57,37 @@ ESTORNOS = re.compile(
     r"PAGAMENTO RECEBIDO|SALDO ANTERIOR|PAGAMENTO DE FATURA|CASHBACK|REEMBOLSO)\b"
 )
 
-# linhas de cabecalho/rodape que casam o padrao mas nao sao lancamento.
-# "SALDO TOTAL DISPONIVEL DIA" e a linha de saldo do extrato do Itau pelo
-# aplicativo: tem data, descricao e valor, e entraria como lancamento —
-# somando ao mes o saldo de cada dia.
+# O rodape do extrato e um quadro de saldos e limites, e cada linha dele tem
+# descricao e valor: "(+) LIMITE DA CONTA TOTAL 3.000,00", "saldo disponivel
+# sem investimentos automaticos 1,00". Isto e o quadro — nunca a cobranca.
+#
+# A diferenca entre os dois e uma palavra: "LIMITE DA CONTA UTILIZADO" e
+# quadro, "JUROS LIMITE DA CONTA" e juro de verdade. Por isso cada forma do
+# quadro traz o sufixo que a identifica, e por isso esta regra vive fora da
+# alternancia com \b no fim: UTILIZAD, DISPON e CONTRATAD sao palavras
+# cortadas de proposito (UTILIZADO/UTILIZADA, DISPONIVEL/DISPONÍVEL), e um
+# \b depois delas nunca casa — a rede existia e nao pegava nada.
+_LIMITE = r"LIMITE (?:DA CONTA|DO CHEQUE ESPECIAL)\s+(?:TOTAL|UTILIZAD|DISPON|CONTRATAD)"
+QUADRO = re.compile(
+    rf"{_LIMITE}|SALDO DISPONIVEL|SALDO TOTAL DISPONIVEL|QUANTIDADE DE DIAS",
+    re.IGNORECASE,
+)
+
+# linhas de cabecalho/rodape que casam o padrao mas nao sao lancamento
 RUIDO = re.compile(
     # "LIMITE" sozinho jogava fora "JUROS LIMITE DA CONTA", que é cobrança de
     # verdade — o extrato deixava de fechar por R$ 152,69 e ninguém sabia por
     # quê. O que é cabeçalho são os limites do cartão, por extenso.
     r"\b(TOTAL DA FATURA|TOTAL A PAGAR|SALDO ANTERIOR|LIMITE DE CREDITO|"
     r"LIMITE DISPONIVEL|LIMITE TOTAL|LIMITE UTILIZADO|VENCIMENTO|SUBTOTAL|"
-    r"TOTAL DE COMPRAS|SALDO DO DIA|SALDO EM|SALDO ATUAL|SALDO TOTAL|SALDO DISPONIVEL|"
-    # o quadro de limites do rodape do extrato: cada linha dele tem descricao
-    # e valor e passaria por lancamento
-    # só o texto do quadro: "JUROS LIMITE DA CONTA 85,53-" é cobrança de
-    # verdade e não pode cair aqui
-    r"LIMITE DA CONTA (TOTAL|UTILIZAD|DISPON|CONTRATAD)|LIMITE DO CHEQUE ESPECIAL|"
-    r"SALDO DISPONIVEL|QUANTIDADE DE DIAS|"
+    r"TOTAL DE COMPRAS|SALDO DO DIA|SALDO EM|SALDO ATUAL|SALDO TOTAL|"
     r"TOTAL GERAL|VALOR TOTAL|PROXIMA FATURA|MELHOR DIA)\b"
 )
+
+
+def e_quadro(linha_sem_acento: str) -> bool:
+    """Esta linha e do quadro de saldos e limites, e nao um lancamento?"""
+    return bool(QUADRO.search(linha_sem_acento) or RUIDO.search(linha_sem_acento))
 
 
 def texto_do_pdf(conteudo: bytes, senha: str | None = None) -> str:
@@ -131,7 +143,7 @@ def extrair_linhas(
         m = LINHA_LANCAMENTO.match(crua)
         if not m:
             continue
-        if RUIDO.search(limpa):
+        if e_quadro(limpa):
             ignoradas.append(crua)
             continue
 

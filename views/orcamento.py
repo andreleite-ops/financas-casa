@@ -8,6 +8,7 @@ import streamlit as st
 
 from core import repo
 from core.money import fmt_brl
+from core.texto import sem_marcacao
 from ui import dados
 from ui.tema import ACENTO, CRITICO
 
@@ -227,7 +228,7 @@ def render(engine, usuario: dict) -> None:
                 {"meta": 0, "realizado": 0, "uso": None, "meta_e_piso": False},
             )
             colunas = st.columns(larguras)
-            colunas[0].markdown(categoria["nome"])
+            colunas[0].markdown(sem_marcacao(categoria["nome"]))
             novos[categoria["id"]] = colunas[1].number_input(
                 categoria["nome"], min_value=0.0, max_value=100.0, step=0.5,
                 value=float(st.session_state.get(

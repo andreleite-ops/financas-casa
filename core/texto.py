@@ -135,6 +135,29 @@ def parcela_de(descricao: str) -> tuple[int, int] | None:
 _MARCACAO = "*_`~[]$"
 
 
+def so_html(texto: str) -> str:
+    """Texto pronto para entrar em HTML de bloco, conteudo ou atributo.
+
+    Duas feridas diferentes. Uma: um pagador chamado "A<B LTDA" fazia o
+    navegador engolir o resto do cartao como se fosse tag aberta. Outra:
+    "Casa d'Alimentacao" dentro de title='...' fecha o atributo no apostrofo e
+    o resto do nome vira atributo do elemento — grafia corriqueira em
+    portugues.
+
+    Aqui NAO se escapa markdown de proposito. Dentro de HTML de bloco (uma
+    <table>, uma <div>) o Streamlit desliga o markdown, e a contrabarra que
+    protegeria o asterisco apareceria na tela como contrabarra mesmo.
+    """
+    return (
+        (texto or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("'", "&#39;")
+        .replace('"', "&quot;")
+    )
+
+
 def sem_marcacao(texto: str) -> str:
     """Descricao de extrato pronta para entrar num recado da tela.
 
@@ -142,5 +165,9 @@ def sem_marcacao(texto: str) -> str:
     asteriscos do estabelecimento sao marcacao de markdown, e a tela comia
     parte do nome justamente na hora de dizer o que foi salvo. Cifrao entra na
     lista pelo mesmo motivo — um par deles vira formula.
+
+    Escapa tambem < > &, porque quase toda tela que mostra descricao mistura
+    markdown com um pouco de HTML em linha (<br>, <span class='nota'>). Para
+    HTML de bloco, onde markdown nao vale, use `so_html`.
     """
-    return "".join("\\" + c if c in _MARCACAO else c for c in texto)
+    return "".join("\\" + c if c in _MARCACAO else c for c in so_html(texto))

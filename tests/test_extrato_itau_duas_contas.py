@@ -13,6 +13,7 @@ próprio extrato imprime, e o saldo antes e depois.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import date
 
 import sqlalchemy as sa
@@ -187,7 +188,7 @@ def test_nome_da_conta_irma_leva_a_agencia():
 # ---------------------------------------------------------------------------
 # o extrato "mês completo" do aplicativo: outro layout do mesmo banco
 # ---------------------------------------------------------------------------
-EXTRATO_DO_APP = """FULANA DE TAL CPF: 000.000.000-00 agência: 8839 conta: 20252-3
+EXTRATO_DO_APP = """FULANA DE TAL CPF: 000.000.000-00 agência: 8839 conta: 56789-0
 saldo em conta Limite da Conta utilizado Limite da Conta disponível
 R$ 804,41 R$ 0,00 R$ 5.000,00
 extrato conta corrente
@@ -228,14 +229,14 @@ def test_o_cabecalho_do_aplicativo_tambem_diz_de_que_conta_e():
     outra sem um aviso sequer."""
     ident = it.identificacao(EXTRATO_DO_APP)
 
-    assert ident == {"agencia": "8839", "conta": "20252-3", "competencia": "2026-09"}
+    assert ident == {"agencia": "8839", "conta": "56789-0", "competencia": "2026-09"}
     assert it.conta_bate(ident, "8839") is True
     assert it.conta_bate(ident, "0660") is False
 
 
 def test_o_layout_antigo_continua_lido():
     """A régua de sempre: o extrato mensal em PDF, com o traço no fim."""
-    antigo = """extrato mensal ag 8839 cc 20252-3 ago 2026
+    antigo = """extrato mensal ag 8839 cc 56789-0 ago 2026
 saldo anterior 1.439,31-
 03/08 PIX TRANSF FULANO03/08 840,00
 04/08 PAGTO CONTA 320,50-
@@ -330,7 +331,7 @@ def test_juros_do_limite_da_conta_e_cobranca_e_nao_cabecalho():
 # ---------------------------------------------------------------------------
 # o quadro de saldos e limites do rodapé não é lançamento
 # ---------------------------------------------------------------------------
-RODAPE_DE_LIMITES = """FULANA DE TAL CPF: 000.000.000-00 agência: 0660 conta: 43333-5
+RODAPE_DE_LIMITES = """FULANA DE TAL CPF: 000.000.000-00 agência: 0660 conta: 11111-1
 extrato conta corrente
 lançamentos
 período de visualização: mês completo - 01/10/2026 a 31/10/2026 emitido em: 02/11/2026 08:04
@@ -407,3 +408,121 @@ def test_valor_zero_nao_e_lancamento():
         "01/10/2026 PADARIA -20,00\n"
     )
     assert [l.descricao for l in lancamentos] == ["PADARIA"]
+
+
+# ---------------------------------------------------------------------------
+# a régua fina: o saldo de CADA dia, e não só o líquido do mês
+# ---------------------------------------------------------------------------
+DIA_A_DIA = """FULANA DE TAL agência: 0660 conta: 11111-1
+extrato conta corrente
+período de visualização: mês completo - 01/10/2026 a 31/10/2026
+data lançamentos valor (R$) saldo (R$)
+30/09/2026 SALDO ANTERIOR 1.000,00
+01/10/2026 PIX TRANSF PACIENTE01/10 500,00
+01/10/2026 SALDO TOTAL DISPONIVEL DIA 1.500,00
+05/10/2026 ALUGUEL -500,00
+05/10/2026 SALDO TOTAL DISPONIVEL DIA 1.000,00
+"""
+
+
+def test_o_saldo_do_dia_pega_o_sinal_trocado_que_o_mes_esconde():
+    """Trocar o sinal de uma entrada e de uma saída do mesmo valor não muda
+    nada no mês: entradas, saídas e líquido ficam iguais, e a conferência
+    mensal diz "fechou". Só o saldo de cada dia acusa — e diz qual dia.
+
+    Não é hipótese: num extrato de verdade desta casa, inverter o sinal de um
+    par passava pelas duas réguas antigas sem um aviso sequer."""
+    lancamentos, _ = it.extrair_linhas(DIA_A_DIA)
+    assert it.conferir(DIA_A_DIA, lancamentos)["saldo_fecha"] is True
+
+    trocados = [
+        dataclasses.replace(lan, valor_centavos=-lan.valor_centavos)
+        for lan in lancamentos
+    ]
+    # o mês não muda de jeito nenhum
+    assert sum(l.valor_centavos for l in trocados) == sum(
+        l.valor_centavos for l in lancamentos
+    )
+
+    torto = it.conferir(DIA_A_DIA, trocados)
+    assert torto["saldo_fecha"] is False
+    assert torto["dia_torto"] == date(2026, 10, 1)
+    assert torto["diferenca_do_dia"] == 100_000
+
+
+def test_o_dia_sem_saldo_impresso_entra_no_proximo_marco():
+    """O extrato imprime saldo só em dia com movimento — e às vezes nem isso.
+    Somando apenas o que tem a data do marco, todo lançamento de dia sem
+    saldo impresso ficava de fora e a régua acusava um erro que não existia:
+    foi assim que o extrato de setembro da Rô, que estava certo, apareceu
+    como "não fecha"."""
+    texto = DIA_A_DIA + (
+        "08/10/2026 MERCADO -200,00\n"
+        "12/10/2026 PIX TRANSF PACIENTE12/10 300,00\n"
+        "12/10/2026 SALDO TOTAL DISPONIVEL DIA 1.100,00\n"
+    )
+    lancamentos, _ = it.extrair_linhas(texto)
+
+    # o dia 08/10 não tem saldo impresso: ele conta no marco do dia 12
+    assert len(it.pontos_de_controle(texto)) == 3
+    assert it.conferir_dia_a_dia(texto, lancamentos)["dia"] is None
+    assert it.conferir(texto, lancamentos)["saldo_fecha"] is True
+
+
+def test_um_marco_so_nao_e_regua_de_dia():
+    """Com um único saldo impresso não há caminhada: a conferência do mês
+    inteiro é a que vale, e inventar um veredito aqui seria pior que calar."""
+    texto = DIA_A_DIA.replace(
+        "05/10/2026 SALDO TOTAL DISPONIVEL DIA 1.000,00\n", ""
+    )
+    lancamentos, _ = it.extrair_linhas(texto)
+
+    assert it.conferir_dia_a_dia(texto, lancamentos) is None
+
+
+def test_juros_do_cheque_especial_tambem_e_cobranca():
+    """O mesmo erro da "LIMITE DA CONTA" mora na conta vizinha: o Itaú escreve
+    "LIMITE DO CHEQUE ESPECIAL" nos dois papéis — na linha de juros que é
+    gasto de verdade e no quadro do rodapé que não é lançamento nenhum."""
+    from parsers import pdf as generico
+
+    lidos, ignoradas = generico.extrair_linhas(
+        "10/09/2026 JUROS LIMITE DO CHEQUE ESPECIAL -120,00\n"
+        "10/09/2026 ENCARGOS LIMITE DO CHEQUE ESPECIAL -31,00\n"
+        "10/09/2026 LIMITE DO CHEQUE ESPECIAL DISPONIVEL 3.000,00\n",
+        tudo_despesa=False,
+    )
+
+    assert [(l.descricao, l.valor_centavos) for l in lidos] == [
+        ("JUROS LIMITE DO CHEQUE ESPECIAL", -12_000),
+        ("ENCARGOS LIMITE DO CHEQUE ESPECIAL", -3_100),
+    ], "as duas primeiras são cobrança; a terceira é o quadro do rodapé"
+    assert any("DISPONIVEL" in l for l in ignoradas)
+
+
+def test_os_dois_leitores_usam_a_mesma_regra_de_quadro():
+    """Era uma regra em cada arquivo, e a do genérico conhecia só metade das
+    palavras. Uma regra só, no leitor de PDF, usada pelos dois — senão a
+    próxima correção conserta um leitor e deixa o outro aberto."""
+    from parsers import pdf as generico
+
+    quadro = [
+        "(+) LIMITE DA CONTA TOTAL 3.000,00",
+        "(-) LIMITE DA CONTA UTILIZADO 0,00",
+        "(=) LIMITE DA CONTA DISPONIVEL 3.000,00",
+        "LIMITE DA CONTA CONTRATADO R$ 3.000,00",
+        "(=) LIMITE DO CHEQUE ESPECIAL DISPONIVEL 3.000,00",
+        "SALDO DISPONIVEL SEM INVESTIMENTOS AUTOMATICOS 1,00",
+        "QUANTIDADE DE DIAS UTILIZADOS (ATE 01/11) 0 dias",
+    ]
+    gasto = [
+        "JUROS LIMITE DA CONTA 85,53-",
+        "JUROS LIMITE DO CHEQUE ESPECIAL 120,00-",
+        "ENCARGOS LIMITE DO CHEQUE ESPECIAL 31,00-",
+    ]
+
+    assert all(generico.e_quadro(linha) for linha in quadro)
+    assert not any(generico.e_quadro(linha) for linha in gasto)
+    # e o leitor do Itaú chega à mesma conclusão pelo mesmo caminho
+    assert all(it._e_ruido(linha) for linha in quadro)
+    assert not any(it._e_ruido(linha) for linha in gasto)

@@ -69,7 +69,7 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
         cabecalho.markdown(
             f"**{item['data']:%d/%m/%Y}**<br>{sem_marcacao(item['descricao'])}<br>"
             + (f"<span class='pill p-neutro'>{sem_marcacao(rotulo)}</span><br>" if rotulo else "")
-            + f"<span class='nota'>{item.get('conta', '')} · "
+            + f"<span class='nota'>{sem_marcacao(item.get('conta', ''))} · "
             f"{'entrada' if natureza == 'receita' else 'saída'} de "
             f"{fmt_brl_md(abs(item['valor_centavos']))}"
             + (f"<br>{sugestao}" if sugestao else "")
@@ -190,7 +190,7 @@ def _aba_de_para(engine, usuario: dict, plano, rotulos, traduzidos) -> None:
                 destino = traducao["categoria"] + (
                     f" › {traducao['subcategoria']}" if traducao["subcategoria"] else ""
                 )
-                linha.markdown(f"**{rotulo}** → {destino}")
+                linha.markdown(f"**{sem_marcacao(rotulo)}** → {sem_marcacao(destino)}")
                 if botao.button("Desfazer", key=f"dp_del_{rotulo}"):
                     devolvidos = repo.apagar_de_para(engine, rotulo)
                     st.session_state["msg_classificacao"] = (
@@ -212,9 +212,9 @@ def _aba_de_para(engine, usuario: dict, plano, rotulos, traduzidos) -> None:
         with st.container(border=True):
             esquerda, direita = st.columns([1.4, 2.6])
             esquerda.markdown(
-                f"<span class='pill p-alerta'>{rotulo}</span><br>"
+                f"<span class='pill p-alerta'>{sem_marcacao(rotulo)}</span><br>"
                 f"<span class='nota'>{item['quantidade']} lançamentos · "
-                f"{fmt_brl(abs(item['total']))}</span>",
+                f"{fmt_brl_md(abs(item['total']))}</span>",
                 unsafe_allow_html=True,
             )
             with direita:

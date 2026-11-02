@@ -9,7 +9,7 @@ import streamlit as st
 
 from core import dedup, db, reconcile, repo
 from core.money import fmt_brl, fmt_brl_md
-from core.texto import sem_marcacao
+from core.texto import sem_marcacao, so_html
 from parsers import extrato_bradesco, extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
 from views import manual
@@ -571,26 +571,42 @@ def _conferencia_do_extrato(parser, texto, lancamentos) -> list[str]:
     except Exception:                      # a conferência é um extra, nunca o obstáculo
         return []
 
+    # dizer que não deu para conferir é diferente de ficar calado: calado
+    # parece "conferido e certo", e foi justamente em extrato sem total
+    # impresso que as dez linhas do quadro de limites entraram sem ninguém ver
     if conferencia.get("confere") is None:
-        return []
+        return ["este extrato não imprime total nem saldo que eu saiba ler, então **não "
+                "houve conferência** — os valores vieram só do que eu li. Vale uma "
+                "olhada nas linhas antes de classificar."]
     if conferencia["confere"]:
-        saldo = " O saldo também fecha." if conferencia.get("saldo_fecha") else ""
+        saldo = " O saldo também fecha, dia a dia." if conferencia.get("saldo_fecha") else ""
         st.success(
             "Confere com o total impresso no extrato: entradas "
-            f"{fmt_brl(conferencia['entradas'])}, saídas {fmt_brl(conferencia['saidas'])}."
+            f"{fmt_brl_md(conferencia['entradas'])}, "
+            f"saídas {fmt_brl_md(conferencia['saidas'])}."
             + saldo,
             icon="✅",
         )
         return []
+    # o dia que não fecha vem primeiro, mesmo quando o mês tem total impresso:
+    # o total pode bater com um dia torto dentro, e aí a mensagem dos totais
+    # ficaria repetindo o mesmo número dos dois lados. Sem o dia, a única saída
+    # era conferir o mês inteiro linha por linha
+    if conferencia.get("dia_torto"):
+        return ["o saldo impresso no extrato não fecha a partir de "
+                f"**{conferencia['dia_torto']:%d/%m}** — diferença de "
+                f"{fmt_brl_md(abs(conferencia.get('diferenca_do_dia') or 0))}. "
+                "Alguma linha desse dia ficou de fora, entrou duas vezes ou "
+                "entrou com o sinal trocado. Confira antes de classificar."]
     if "entradas_declaradas" not in conferencia:
         return ["o saldo do extrato não fecha com o que foi lido — alguma linha ficou de "
                 "fora ou entrou duas vezes. Confira antes de classificar."]
     return [
         "o lido não bate com o total impresso no extrato — entradas "
-        f"{fmt_brl(conferencia['entradas'])} contra "
-        f"{fmt_brl(conferencia['entradas_declaradas'])}, saídas "
-        f"{fmt_brl(conferencia['saidas'])} contra "
-        f"{fmt_brl(conferencia['saidas_declaradas'])}. Confira antes de classificar."
+        f"{fmt_brl_md(conferencia['entradas'])} contra "
+        f"{fmt_brl_md(conferencia['entradas_declaradas'])}, saídas "
+        f"{fmt_brl_md(conferencia['saidas'])} contra "
+        f"{fmt_brl_md(conferencia['saidas_declaradas'])}. Confira antes de classificar."
     ]
 
 
@@ -873,8 +889,8 @@ def _aba_mapa(engine) -> None:
         tipo = "cartão" if conta["tipo"] == "cartao" else "conta corrente"
         marca = "" if conta["ativa"] else " (inativa)"
         linhas.append(
-            f"<tr><td class='conta'><span class='nome'>{conta['nome']}{marca}</span>"
-            f"<span class='tipo'>{tipo} · {conta['titular']}</span></td>"
+            f"<tr><td class='conta'><span class='nome'>{so_html(conta['nome'])}{marca}</span>"
+            f"<span class='tipo'>{tipo} · {so_html(conta['titular'])}</span></td>"
             + "".join(celulas) + "</tr>"
         )
 
@@ -1042,9 +1058,9 @@ def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:
                 f"<span class='pill p-alerta'>{marca}</span> "
                 f"**{linha['nova_data']:%d/%m/%Y} · "
                 f"{sem_marcacao(linha['nova_descricao'])}**<br>"
-                f"<span class='nota'>{linha['conta']} · "
+                f"<span class='nota'>{sem_marcacao(linha['conta'])} · "
                 f"{fmt_brl_md(linha['nova_valor'])} · "
-                f"{linha['motivo']}<br>já existe como #{linha['velha_id']} "
+                f"{sem_marcacao(linha['motivo'])}<br>já existe como #{linha['velha_id']} "
                 f"({linha['velha_data']:%d/%m/%Y})</span>",
                 unsafe_allow_html=True,
             )
@@ -1119,11 +1135,13 @@ def _aba_critica(engine, usuario: dict) -> None:
             partes = item.get("extratos") or [extrato]
             if len(partes) > 1:
                 lado_extrato = " + ".join(
-                    f"{p['data']:%d/%m} {fmt_brl(p['valor_centavos'])}" for p in partes
+                    f"{p['data']:%d/%m} {fmt_brl_md(p['valor_centavos'])}" for p in partes
                 ) + f" (soma de {len(partes)} lançamentos do extrato)"
             else:
-                lado_extrato = (f"{extrato['data']:%d/%m} · {fmt_brl(extrato['valor_centavos'])} "
-                                f"(diferença de {fmt_brl(abs(item['diferenca']))})")
+                lado_extrato = (
+                    f"{extrato['data']:%d/%m} · {fmt_brl_md(extrato['valor_centavos'])} "
+                    f"(diferença de {fmt_brl_md(abs(item['diferenca']))})"
+                )
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1.1])
                 c1.markdown(
@@ -1266,9 +1284,9 @@ def _aba_contas(engine) -> None:
             c1, c2 = st.columns([3.2, 1])
             marca = "" if conta["ativa"] else " <span class='pill p-alerta'>inativa</span>"
             c1.markdown(
-                f"**{conta['nome']}**{marca}<br><span class='nota'>"
+                f"**{sem_marcacao(conta['nome'])}**{marca}<br><span class='nota'>"
                 f"{'Cartão de crédito' if conta['tipo'] == 'cartao' else 'Conta corrente'} · "
-                f"{conta['instituicao']} · leitor: "
+                f"{sem_marcacao(conta['instituicao'])} · leitor: "
                 f"{instituicoes.ROTULOS.get(conta['parser'], conta['parser'])}</span> "
                 f"{selo_pessoa(conta['titular'])}",
                 unsafe_allow_html=True,

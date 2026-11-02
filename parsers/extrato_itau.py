@@ -121,13 +121,11 @@ _RENDIMENTO = re.compile(r"REND\s*PAGO", re.IGNORECASE)
 # "JUROS DO LIMITE DA CONTA R$ 0,00", "saldo disponivel sem investimentos
 # automaticos 1,00". A regra da data cheia ja as deixa de fora; estas palavras
 # sao a segunda rede, e valem em qualquer layout que o banco invente depois.
+# o que e quadro de saldos/limites vem de um lugar so, compartilhado com o
+# leitor generico: duas listas parecidas divergem, e divergiram — a do
+# generico tinha um \b no fim que impedia tres das quatro formas de casar
 _RUIDO = re.compile(
     r"(SALDO ANTERIOR|SALDO EM |SALDO FINAL|SALDO DO DIA|SALDO TOTAL"
-    # só o texto do QUADRO, nunca a cobrança: "JUROS LIMITE DA CONTA 85,53-"
-    # é juro de verdade, e "LIMITE DA CONTA" solto na lista o derrubava —
-    # o mesmo erro que a palavra "LIMITE" já tinha cometido uma vez
-    r"|SALDO DISPON[IÍ]VEL|LIMITE DA CONTA (TOTAL|UTILIZAD|DISPON|CONTRATAD)"
-    r"|LIMITE DO CHEQUE ESPECIAL|QUANTIDADE DE DIAS"
     r"|TOTALIZADOR|SUBTOTAL)",
     re.IGNORECASE,
 )
@@ -140,12 +138,14 @@ _RESUMO = re.compile(r"(^TOTAL\b|%$)", re.IGNORECASE)
 
 
 def _e_ruido(descricao: str) -> bool:
+    from .pdf import e_quadro
+
     limpa = sem_acento(descricao).upper().strip()
     if _APLICACAO.search(limpa) and not _RENDIMENTO.search(limpa):
         return True
     if _RESUMO.search(limpa):
         return True
-    return bool(_RUIDO.search(limpa))
+    return bool(_RUIDO.search(limpa)) or e_quadro(limpa)
 
 _TOTAIS = re.compile(
     r"total\s*entradas.*?total\s*sa[ií]das.*?R\$\s*([\d.,]+)\s*R\$\s*([\d.,]+)",
@@ -178,8 +178,8 @@ _CABECALHO = re.compile(
 
 
 # O mesmo banco escreve o cabeçalho de dois jeitos. O extrato mensal em PDF diz
-# "extrato mensal ag 8839 cc 20252-3 set 2026"; o "mês completo" do aplicativo
-# escreve o nome do titular e, na mesma linha, "agência: 8839 conta: 20252-3",
+# "extrato mensal ag 8839 cc 56789-0 set 2026"; o "mês completo" do aplicativo
+# escreve o nome do titular e, na mesma linha, "agência: 8839 conta: 56789-0",
 # com o período logo abaixo. Sem a segunda forma, a conferência de conta ficava
 # cega justamente no arquivo novo: dava para enviar o extrato de uma conta na
 # outra sem um aviso sequer.
@@ -416,6 +416,71 @@ def extrair_linhas(
     return lancamentos, ignoradas
 
 
+# "DISPON" e so o comeco de proposito: o acento do PDF chega corrompido em
+# alguns arquivos ("DISPONÃVEL"), e exigir a palavra inteira fazia a regua
+# nao encontrar marco nenhum — passando por "confere" sem conferir nada
+_PONTO_DE_CONTROLE = re.compile(
+    rf"^(?P<dia>\d{{2}}/\d{{2}}/\d{{2,4}})\s+SALDO (?:TOTAL )?DISPON[^\n]*?"
+    rf"(?P<sinal>-?)(?P<valor>{_MOEDA})\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def pontos_de_controle(texto: str) -> list[tuple[date, int]]:
+    """Os saldos que o extrato imprime ao fim de cada dia com movimento.
+
+    Sao vinte reguas em vez de uma. Conferir so o saldo final testa o
+    LIQUIDO do mes: perder uma entrada e uma saida do mesmo valor nao muda o
+    liquido, e a conferencia diz que fechou. Dia a dia, os dois erros
+    aparecem — e o primeiro dia que nao fecha aponta onde olhar.
+    """
+    saldos: list[tuple[date, int]] = []
+    for achado in _PONTO_DE_CONTROLE.finditer(texto):
+        try:
+            dia = ler_data(achado.group("dia"))
+            valor = para_centavos(achado.group("valor"))
+        except (ErroDeLeitura, ValueError, ArithmeticError):
+            continue
+        saldos.append((dia, -valor if achado.group("sinal") == "-" else valor))
+    return saldos
+
+
+def conferir_dia_a_dia(texto: str, lancamentos: list[Lancamento]) -> dict | None:
+    """Caminha o saldo dia a dia. Devolve o primeiro dia que nao fecha.
+
+    None quando o extrato nao imprime saldo diario (o mensal nao imprime) —
+    ai vale a conferencia do mes inteiro, que e a que sempre existiu.
+    """
+    marcos = pontos_de_controle(texto)
+    anterior = _SALDO_ANTERIOR_APP.search(texto)
+    if len(marcos) < 2 or not anterior:
+        return None
+    try:
+        saldo = _com_sinal(anterior)
+    except (ValueError, ArithmeticError):
+        return None
+    # um valor por dia, na ordem do calendario. O extrato imprime o saldo uma
+    # vez por dia com movimento; se imprimir duas, vale o ultimo
+    impressos: dict[date, int] = dict(marcos)
+    emordem = sorted(lancamentos, key=lambda lan: lan.data)
+    proximo = 0
+    for dia in sorted(impressos):
+        # tudo que aconteceu ATE o dia do marco entra nele. Somar so o proprio
+        # dia perderia o que caiu em dia sem saldo impresso — e o extrato do
+        # aplicativo imprime saldo em uns dias e nao em outros
+        while proximo < len(emordem) and emordem[proximo].data <= dia:
+            saldo += emordem[proximo].valor_centavos
+            proximo += 1
+        impresso = impressos[dia]
+        if saldo != impresso:
+            return {"dia": dia, "lido": saldo, "impresso": impresso,
+                    "diferenca": impresso - saldo}
+        # o saldo impresso manda: assim um dia torto nao contamina os
+        # seguintes, e cada trecho e julgado pelo que aconteceu nele
+        saldo = impresso
+    return {"dia": None, "lido": saldo, "impresso": saldo, "diferenca": 0}
+
+
 def conferir(texto: str, lancamentos: list[Lancamento]) -> dict:
     """Compara o lido com o total impresso no próprio extrato."""
     declarado = totais_declarados(texto)
@@ -426,9 +491,18 @@ def conferir(texto: str, lancamentos: list[Lancamento]) -> dict:
     saldo_fecha = None
     if saldos is not None:
         saldo_fecha = saldos[0] + entradas - saidas == saldos[1]
+    # a terceira, e mais fina: o saldo de CADA dia. O mês inteiro confere um
+    # líquido, e dois erros de sinal oposto se anulam nele
+    dia_a_dia = conferir_dia_a_dia(texto, lancamentos)
+    if dia_a_dia is not None:
+        fecha_todo_dia = dia_a_dia["dia"] is None
+        saldo_fecha = bool(saldo_fecha) and fecha_todo_dia if saldo_fecha is not None \
+            else fecha_todo_dia
+    primeiro_dia_torto = (dia_a_dia or {}).get("dia")
     if declarado is None:
         return {"confere": saldo_fecha, "entradas": entradas, "saidas": saidas,
-                "saldo_fecha": saldo_fecha}
+                "saldo_fecha": saldo_fecha, "dia_torto": primeiro_dia_torto,
+                "diferenca_do_dia": (dia_a_dia or {}).get("diferenca")}
     return {
         "confere": (entradas, saidas) == declarado and saldo_fecha is not False,
         "entradas": entradas,
@@ -436,6 +510,11 @@ def conferir(texto: str, lancamentos: list[Lancamento]) -> dict:
         "entradas_declaradas": declarado[0],
         "saidas_declaradas": declarado[1],
         "saldo_fecha": saldo_fecha,
+        # vai junto mesmo quando o mes tem total impresso: o total pode bater e
+        # um dia nao fechar (uma entrada e uma saida trocadas de dia), e dizer
+        # "entradas X contra X" nesse caso nao ajuda ninguem a achar a linha
+        "dia_torto": primeiro_dia_torto,
+        "diferenca_do_dia": (dia_a_dia or {}).get("diferenca"),
     }
 
 

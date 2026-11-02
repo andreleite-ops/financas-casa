@@ -5,18 +5,20 @@ from __future__ import annotations
 import streamlit as st
 
 from core import repo
+from core.texto import sem_marcacao
 from ui import dados
 
 
 def _bloco(engine, categoria: dict, uso: dict) -> None:
     with st.container(border=True):
         titulo = categoria["nome"] if categoria["ativa"] else f"{categoria['nome']} (inativa)"
-        st.markdown(f"**{titulo}**")
+        st.markdown(f"**{sem_marcacao(titulo)}**")
         subs = [s for s in categoria["subcategorias"] if s["ativa"]]
         if subs:
             st.markdown(
                 " ".join(
-                    f"<span class='pill p-neutro'>{s['nome']}</span>" for s in subs
+                    f"<span class='pill p-neutro'>{sem_marcacao(s['nome'])}</span>"
+                    for s in subs
                 ),
                 unsafe_allow_html=True,
             )

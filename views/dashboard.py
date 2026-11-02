@@ -9,6 +9,7 @@ import streamlit as st
 
 from core import analytics, db, reconcile, repo
 from core.money import fmt_brl, fmt_brl_md, fmt_mil
+from core.texto import so_html
 from ui import dados, graficos
 from ui.tema import BOM, CRITICO, SERIE_DESPESA, SERIE_POUPANCA
 
@@ -55,7 +56,7 @@ def _barra_categoria(item: dict, teto: int) -> str:
         barras = f"<div class='bar' style='width:{min(largura, 100):.1f}%;background:{cor}'></div>"
 
     return (
-        f"<div class='cb'><div class='lbl'>{nome}{legenda}</div>"
+        f"<div class='cb'><div class='lbl'>{so_html(nome)}{legenda}</div>"
         f"<div class='track'>{barras}{tick}</div>"
         f"<div class='val'>{fmt_brl(realizado)}</div></div>"
     )
@@ -175,7 +176,8 @@ def _matriz_mes_a_mes(matriz: dict, ano: int) -> str:
             )
         anterior = fmt_mil(linha["ano_anterior"]) if linha["ano_anterior"] else "—"
         corpo.append(
-            f"<tr><td class='cat' title='{linha['categoria']}'>{linha['categoria']}</td>"
+            f"<tr><td class='cat' title='{so_html(linha['categoria'])}'>"
+            f"{so_html(linha['categoria'])}</td>"
             + "".join(celulas)
             + f"<td class='fecha'>{fmt_mil(linha['acumulado'])}</td>"
             + f"<td>{fmt_mil(linha['media'])}</td><td>{anterior}</td></tr>"
@@ -518,7 +520,7 @@ def render(engine, usuario: dict) -> None:
         st.markdown(
             f"<p class='nota' style='color:{CRITICO};margin-top:-1rem'>"
             f"{len(estouradas)} categoria(s) acima da meta neste mês: "
-            + ", ".join(o["categoria"] for o in estouradas)
+            + ", ".join(so_html(o["categoria"]) for o in estouradas)
             + "</p>",
             unsafe_allow_html=True,
         )
