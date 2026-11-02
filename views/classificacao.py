@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from core import classify, db, repo
-from core.money import fmt_brl
+from core.money import fmt_brl, fmt_brl_md
 from core.texto import sem_marcacao
 from ui import dados, destinos
 
@@ -63,12 +63,15 @@ def _editor(engine, usuario, item, plano, prefixo: str, sugestao: str = "") -> N
         # o rótulo da origem é a melhor pista do que a linha é: a pensão vinha
         # como "CONTRIBUIÇÃO MENSAL", e sem mostrá-lo a descrição fica sozinha
         rotulo = item.get("classificacao_origem")
+        # descrição e valor passam pelo escape: a linha "LIMITE DA CONTA
+        # CONTRATADO R$" tem um cifrão, o valor ao lado tem outro, e o par
+        # vira fórmula — a conta e o valor sumiam e as tags apareciam cruas
         cabecalho.markdown(
-            f"**{item['data']:%d/%m/%Y}**<br>{item['descricao']}<br>"
-            + (f"<span class='pill p-neutro'>{rotulo}</span><br>" if rotulo else "")
+            f"**{item['data']:%d/%m/%Y}**<br>{sem_marcacao(item['descricao'])}<br>"
+            + (f"<span class='pill p-neutro'>{sem_marcacao(rotulo)}</span><br>" if rotulo else "")
             + f"<span class='nota'>{item.get('conta', '')} · "
             f"{'entrada' if natureza == 'receita' else 'saída'} de "
-            f"{fmt_brl(abs(item['valor_centavos']))}"
+            f"{fmt_brl_md(abs(item['valor_centavos']))}"
             + (f"<br>{sugestao}" if sugestao else "")
             + "</span>",
             unsafe_allow_html=True,

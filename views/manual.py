@@ -13,7 +13,8 @@ from datetime import date
 import streamlit as st
 
 from core import db, repo
-from core.money import fmt_brl
+from core.money import fmt_brl, fmt_brl_md
+from core.texto import sem_marcacao
 from ui import dados, destinos
 from ui.tema import selo_pessoa
 
@@ -113,7 +114,8 @@ def formulario(engine, usuario: dict, ano: int, natureza: str) -> None:
                 veio = not item.get("ativo", True)
                 texto = (
                     f"{item['competencia']} &nbsp; {selo_pessoa(item['pessoa'])} &nbsp; "
-                    f"{item['descricao']} — **{fmt_brl(abs(item['valor_centavos']))}** "
+                    f"{sem_marcacao(item['descricao'])} — "
+                    f"**{fmt_brl_md(abs(item['valor_centavos']))}** "
                     f"<span class='nota'>({destino})</span>"
                 )
                 linha.markdown(

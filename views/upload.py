@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from core import dedup, db, reconcile, repo
-from core.money import fmt_brl
+from core.money import fmt_brl, fmt_brl_md
 from core.texto import sem_marcacao
 from parsers import extrato_bradesco, extrato_itau, instituicoes, pdf, tabular
 from parsers import pdf as leitor_pdf
@@ -1040,8 +1040,10 @@ def _aba_duplicidades(engine, usuario: dict, fila: list[dict]) -> None:
             c1, c2 = st.columns([3, 1.1])
             c1.markdown(
                 f"<span class='pill p-alerta'>{marca}</span> "
-                f"**{linha['nova_data']:%d/%m/%Y} · {linha['nova_descricao']}**<br>"
-                f"<span class='nota'>{linha['conta']} · {fmt_brl(linha['nova_valor'])} · "
+                f"**{linha['nova_data']:%d/%m/%Y} · "
+                f"{sem_marcacao(linha['nova_descricao'])}**<br>"
+                f"<span class='nota'>{linha['conta']} · "
+                f"{fmt_brl_md(linha['nova_valor'])} · "
                 f"{linha['motivo']}<br>já existe como #{linha['velha_id']} "
                 f"({linha['velha_data']:%d/%m/%Y})</span>",
                 unsafe_allow_html=True,
@@ -1125,9 +1127,9 @@ def _aba_critica(engine, usuario: dict) -> None:
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1.1])
                 c1.markdown(
-                    f"**{planilha['descricao']}**<br>"
+                    f"**{sem_marcacao(planilha['descricao'])}**<br>"
                     f"<span class='nota'>Planilha: {planilha['data']:%d/%m} · "
-                    f"{fmt_brl(planilha['valor_centavos'])} &nbsp;|&nbsp; "
+                    f"{fmt_brl_md(planilha['valor_centavos'])} &nbsp;|&nbsp; "
                     f"Extrato: {lado_extrato}</span>",
                     unsafe_allow_html=True,
                 )

@@ -101,8 +101,13 @@ def test_soma_de_centavos_e_exata_com_valores_tipo_um_terco():
 
 def test_float_puro_pode_derivar_mas_centavos_nao():
     valores = [0.10, 0.20] * 10_000
-    total_float = sum(valores)
-    # a soma ingenua em float normalmente nao fecha em 3000.00 exatos
-    assert total_float != 3000.0
+    # a soma vai somando, como uma planilha soma uma coluna. `sum()` não serve
+    # de prova aqui: do Python 3.12 em diante ele compensa o erro e devolve
+    # 3000.0 exato — o teste passava por causa da versão, não do argumento
+    total_float = 0.0
+    for valor in valores:
+        total_float += valor
+    assert total_float != 3000.0, "float acumulado deriva"
+
     total_centavos = sum(para_centavos(v) for v in valores)
-    assert total_centavos == 300_000
+    assert total_centavos == 300_000, "centavos inteiros fecham em qualquer versão"

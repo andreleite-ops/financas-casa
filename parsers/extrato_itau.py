@@ -53,6 +53,13 @@ _VALORES_NO_FIM = re.compile(
 
 # a data vem "03/08" no extrato mensal e "03/08/2026" no do aplicativo
 _DATA_INICIO = re.compile(r"^(\d{2}/\d{2}(?:/\d{2,4})?)\s+(.*)$")
+# e essa diferenca decide uma regra inteira. No extrato mensal a data aparece
+# so na primeira linha do dia, e as seguintes herdam a data corrente. No do
+# aplicativo TODA linha de lancamento traz a data cheia — e herdar a data ali
+# e o que fazia o bloco de limites do rodape ("LIMITE DA CONTA TOTAL",
+# "JUROS DO LIMITE DA CONTA R$ 0,00", "saldo disponivel sem investimentos
+# automaticos") entrar como lancamento do ultimo dia do mes, com valor e tudo.
+_DATA_CHEIA = re.compile(r"^\d{2}/\d{2}/\d{2,4}\s")
 
 # A coluna de legendas do PDF ("A = agendamento", "P = poupança automática",
 # "Para demais siglas, consulte as Notas") se mistura à coluna da
@@ -109,8 +116,18 @@ _RENDIMENTO = re.compile(r"REND\s*PAGO", re.IGNORECASE)
 # ela tem data, descrição e valor, e entraria como lançamento — somando o
 # saldo de cada dia ao mês. O acento vem corrompido em alguns PDFs, então a
 # regra para em "SALDO TOTAL".
+# O rodape do extrato do aplicativo e um quadro de saldos e limites, e cada
+# linha dele tem descricao e valor: "(+) LIMITE DA CONTA TOTAL 3.000,00",
+# "JUROS DO LIMITE DA CONTA R$ 0,00", "saldo disponivel sem investimentos
+# automaticos 1,00". A regra da data cheia ja as deixa de fora; estas palavras
+# sao a segunda rede, e valem em qualquer layout que o banco invente depois.
 _RUIDO = re.compile(
     r"(SALDO ANTERIOR|SALDO EM |SALDO FINAL|SALDO DO DIA|SALDO TOTAL"
+    # só o texto do QUADRO, nunca a cobrança: "JUROS LIMITE DA CONTA 85,53-"
+    # é juro de verdade, e "LIMITE DA CONTA" solto na lista o derrubava —
+    # o mesmo erro que a palavra "LIMITE" já tinha cometido uma vez
+    r"|SALDO DISPON[IÍ]VEL|LIMITE DA CONTA (TOTAL|UTILIZAD|DISPON|CONTRATAD)"
+    r"|LIMITE DO CHEQUE ESPECIAL|QUANTIDADE DE DIAS"
     r"|TOTALIZADOR|SUBTOTAL)",
     re.IGNORECASE,
 )
@@ -245,10 +262,12 @@ _SALDOS = re.compile(
 # funciona neste layout também. Sem ela, o arquivo novo entraria sem nenhuma
 # conferência, que é como R$ 2.240,00 de pacientes sumiram de um mês uma vez.
 _SALDO_ANTERIOR_APP = re.compile(
-    rf"SALDO ANTERIOR\s+(?P<sinal>-?)(?P<valor>{_MOEDA})", re.IGNORECASE
+    rf"SALDO ANTERIOR\s+(?P<sinal>-?)(?P<valor>{_MOEDA})\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 _SALDO_DO_DIA_APP = re.compile(
-    rf"SALDO TOTAL[^\n]*?(?P<sinal>-?)(?P<valor>{_MOEDA})", re.IGNORECASE
+    rf"^\d{{2}}/\d{{2}}/\d{{2,4}}\s+SALDO TOTAL[^\n]*?(?P<sinal>-?)(?P<valor>{_MOEDA})\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -337,12 +356,19 @@ def extrair_linhas(
     lancamentos: list[Lancamento] = []
     ignoradas: list[str] = []
     dia_corrente: date | None = None
+    # o arquivo diz qual dos dois layouts e: basta uma linha com data cheia
+    cada_linha_tem_data = any(_DATA_CHEIA.match(_sem_legenda(l)) for l in linhas[inicio:fim])
 
     for crua in linhas[inicio:fim]:
         # a data só aparece na primeira linha de cada dia; as seguintes são
         # do mesmo dia, sem data no início
         resto = _sem_legenda(crua)
         no_inicio = _DATA_INICIO.match(resto)
+        if cada_linha_tem_data and not no_inicio:
+            # neste layout, linha sem data nao e lancamento: e cabecalho,
+            # rodape ou quadro de limites
+            ignoradas.append(crua)
+            continue
         if no_inicio:
             resto = no_inicio.group(2)
             try:
@@ -367,6 +393,11 @@ def extrair_linhas(
         try:
             centavos = para_centavos(no_fim.group("v1"))
         except (ValueError, ArithmeticError):
+            ignoradas.append(crua)
+            continue
+        # valor zero nao e lancamento: e linha de quadro ("JUROS DO EXCESSO
+        # R$ 0,00"). Dinheiro que nao andou nao tem o que contar
+        if centavos == 0:
             ignoradas.append(crua)
             continue
         # o traço diz débito, venha ele antes ou depois do número

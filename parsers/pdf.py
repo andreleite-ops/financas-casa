@@ -68,6 +68,12 @@ RUIDO = re.compile(
     r"\b(TOTAL DA FATURA|TOTAL A PAGAR|SALDO ANTERIOR|LIMITE DE CREDITO|"
     r"LIMITE DISPONIVEL|LIMITE TOTAL|LIMITE UTILIZADO|VENCIMENTO|SUBTOTAL|"
     r"TOTAL DE COMPRAS|SALDO DO DIA|SALDO EM|SALDO ATUAL|SALDO TOTAL|SALDO DISPONIVEL|"
+    # o quadro de limites do rodape do extrato: cada linha dele tem descricao
+    # e valor e passaria por lancamento
+    # só o texto do quadro: "JUROS LIMITE DA CONTA 85,53-" é cobrança de
+    # verdade e não pode cair aqui
+    r"LIMITE DA CONTA (TOTAL|UTILIZAD|DISPON|CONTRATAD)|LIMITE DO CHEQUE ESPECIAL|"
+    r"SALDO DISPONIVEL|QUANTIDADE DE DIAS|"
     r"TOTAL GERAL|VALOR TOTAL|PROXIMA FATURA|MELHOR DIA)\b"
 )
 

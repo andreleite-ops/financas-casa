@@ -325,3 +325,85 @@ def test_juros_do_limite_da_conta_e_cobranca_e_nao_cabecalho():
     assert [(l.descricao, l.valor_centavos) for l in lidos] == [
         ("JUROS LIMITE DA CONTA", -15_269),
     ]
+
+
+# ---------------------------------------------------------------------------
+# o quadro de saldos e limites do rodapé não é lançamento
+# ---------------------------------------------------------------------------
+RODAPE_DE_LIMITES = """FULANA DE TAL CPF: 000.000.000-00 agência: 0660 conta: 43333-5
+extrato conta corrente
+lançamentos
+período de visualização: mês completo - 01/10/2026 a 31/10/2026 emitido em: 02/11/2026 08:04
+data lançamentos valor (R$) saldo (R$)
+30/09/2026 SALDO ANTERIOR 3.265,41
+01/10/2026 PIX TRANSF FULANA01/10 440,00
+30/10/2026 JUROS LIMITE DA CONTA -85,53
+30/10/2026 SALDO TOTAL DISPONIVEL DIA 3.619,88
+saldo e limites
+(+) LIMITE DA CONTA TOTAL 3.000,00
+(-) LIMITE DA CONTA UTILIZADO 0,00
+(=) LIMITE DA CONTA DISPONÍVEL 3.000,00
+saldo disponível sem investimentos automáticos 1,00
+(+) saldo em aplicação automática - aplic aut mais 1.394,06
+(+) rendimentos de aplicações automáticas 0,01
+(=) saldo total disponível 1.395,07
+limites
+Limite da Conta
+detalhamento valor
+QUANTIDADE DE DIAS UTILIZADOS (ATÉ 01/11) 0 dias
+LIMITE DA CONTA CONTRATADO R$ 3.000,00
+JUROS DO LIMITE DA CONTA R$ 0,00
+JUROS DO EXCESSO R$ 0,00
+IOF R$ 0,00
+"""
+
+
+def test_o_quadro_de_limites_do_rodape_nao_vira_lancamento():
+    """O rodapé do extrato do aplicativo é um quadro de saldos e limites, e
+    cada linha dele tem descrição e valor. Sem data própria, elas herdavam a
+    data do último dia e entravam como lançamento: R$ 3.000,00 de "limite
+    total" viraram entrada, e o dono as encontrou na fila de classificação."""
+    lancamentos, ignoradas = it.extrair_linhas(RODAPE_DE_LIMITES)
+
+    assert [(l.descricao, l.valor_centavos) for l in lancamentos] == [
+        ("PIX TRANSF FULANA", 44_000),
+        ("JUROS LIMITE DA CONTA", -8_553),
+    ], "só as duas linhas com data e dinheiro de verdade"
+    assert any("LIMITE DA CONTA TOTAL" in l for l in ignoradas)
+
+
+def test_no_layout_do_aplicativo_linha_sem_data_nao_e_lancamento():
+    """É a regra que fecha a porta: naquele extrato toda linha de lançamento
+    traz a data cheia, então herdar a data da linha anterior nunca é certo."""
+    lancamentos, _ = it.extrair_linhas(
+        "data lançamentos valor (R$) saldo (R$)\n"
+        "30/09/2026 SALDO ANTERIOR 100,00\n"
+        "01/10/2026 PADARIA -20,00\n"
+        "LINHA SOLTA DE RODAPE 999,00\n"
+    )
+    assert [(l.descricao, l.valor_centavos) for l in lancamentos] == [("PADARIA", -2_000)]
+
+
+def test_no_extrato_mensal_a_data_continua_sendo_herdada():
+    """E no outro layout a herança continua: lá a data só aparece na primeira
+    linha de cada dia, e exigir data em cada linha jogaria fora o mês inteiro."""
+    lancamentos, _ = it.extrair_linhas(
+        "saldo anterior 1.439,31-\n"
+        "03/08 PIX TRANSF FULANO03/08 840,00\n"
+        "MERCADO DO BAIRRO 120,50-\n"
+        "saldo em c/c 2.158,81\n"
+    )
+    assert [(l.descricao, l.valor_centavos) for l in lancamentos] == [
+        ("PIX TRANSF FULANO", 84_000), ("MERCADO DO BAIRRO", -12_050),
+    ]
+
+
+def test_valor_zero_nao_e_lancamento():
+    """"JUROS DO EXCESSO R$ 0,00" é linha de quadro: dinheiro que não andou."""
+    lancamentos, _ = it.extrair_linhas(
+        "data lançamentos valor (R$)\n"
+        "30/09/2026 SALDO ANTERIOR 100,00\n"
+        "01/10/2026 TARIFA ZERADA 0,00\n"
+        "01/10/2026 PADARIA -20,00\n"
+    )
+    assert [l.descricao for l in lancamentos] == ["PADARIA"]
